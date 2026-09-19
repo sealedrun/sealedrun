@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sealedrun.com/schema/0.1/common.json",
+  "title": "SealedRun common definitions",
+  "$defs": {
+    "specVersion": { "type": "string", "const": "0.1" },
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+    },
+    "hex": { "type": "string", "pattern": "^[0-9a-f]+$" },
+    "digestHex": { "type": "string", "pattern": "^([0-9a-f]{64}|[0-9a-f]{96})$" },
+    "base64url": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$" },
+    "hashAlg": { "type": "string", "enum": ["sha-256", "sha-384"] },
+    "sigAlg": { "type": "string", "enum": ["ed25519", "ml-dsa-65", "es256", "ml-dsa-87"] },
+    "keySet": {
+      "type": "object",
+      "description": "Map of sig_alg to base64url public key. Must contain exactly one classical and one post-quantum algorithm.",
+      "propertyNames": { "$ref": "#/$defs/sigAlg" },
+      "additionalProperties": { "$ref": "#/$defs/base64url" },
+      "minProperties": 2,
+      "maxProperties": 2,
+      "oneOf": [
+        { "required": ["ed25519", "ml-dsa-65"] },
+        { "required": ["es256", "ml-dsa-65"] },
+        { "required": ["ed25519", "ml-dsa-87"] }
+      ]
+    },
+    "signatures": {
+      "type": "object",
+      "description": "Map of sig_alg to base64url signature over the domain-separated hash.",
+      "propertyNames": { "$ref": "#/$defs/sigAlg" },
+      "additionalProperties": { "$ref": "#/$defs/base64url" },
+      "minProperties": 2,
+      "maxProperties": 2,
+      "oneOf": [
+        { "required": ["ed25519", "ml-dsa-65"] },
+        { "required": ["es256", "ml-dsa-65"] },
+        { "required": ["ed25519", "ml-dsa-87"] }
+      ]
+    },
+    "principalId": { "type": "string", "minLength": 1 },
+    "kid": { "$ref": "#/$defs/base64url" },
+    "extensions": {
+      "type": "object",
+      "propertyNames": { "pattern": "^[a-z0-9]+(\\.[a-z0-9_-]+)+$" },
+      "additionalProperties": { "type": "object" }
+    }
+  }
+}

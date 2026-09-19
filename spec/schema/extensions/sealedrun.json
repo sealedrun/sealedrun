@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sealedrun.com/schema/0.1/extensions/sealedrun.json",
+  "title": "Registered sealedrun.* extensions",
+  "description": "Schemas for the extension objects registered in SPEC.md section 9. Applied per key of record.extensions.",
+  "$defs": {
+    "sealedrun.delegation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["delegation_id", "hash"],
+      "properties": {
+        "delegation_id": { "$ref": "../common.json#/$defs/uuid" },
+        "hash": { "$ref": "../common.json#/$defs/digestHex" }
+      }
+    },
+    "sealedrun.tombstone": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["record_id", "fields", "reason"],
+      "properties": {
+        "record_id": { "$ref": "../common.json#/$defs/uuid" },
+        "fields": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["request", "response"] },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "reason": { "type": "string", "minLength": 1 },
+        "legal_basis": { "type": "string" }
+      }
+    },
+    "sealedrun.anchor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "anchored_hash", "anchored_seq", "receipt", "witness"],
+      "properties": {
+        "type": { "type": "string", "enum": ["rekor", "rfc3161", "scitt", "other"] },
+        "anchored_hash": { "$ref": "../common.json#/$defs/digestHex" },
+        "anchored_seq": { "type": "integer", "minimum": 0 },
+        "receipt": { "type": "object" },
+        "witness": { "type": "string", "minLength": 1 }
+      }
+    },
+    "sealedrun.labels": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["source"],
+        "properties": {
+          "source": { "type": "string", "enum": ["classifier", "regex", "source", "manual"] },
+          "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+          "model": { "type": "string" }
+        }
+      }
+    },
+    "sealedrun.llm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model"],
+      "properties": {
+        "model": { "type": "string", "minLength": 1 },
+        "provider": { "type": "string" },
+        "stream": { "type": "boolean" },
+        "input_tokens": { "type": "integer", "minimum": 0 },
+        "output_tokens": { "type": "integer", "minimum": 0 },
+        "finish_reason": { "type": "string" },
+        "tool_calls_requested": { "type": "array", "items": { "type": "string" } },
+        "temperature": { "type": "number" }
+      }
+    },
+    "sealedrun.mcp": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["server", "transport", "method"],
+      "properties": {
+        "server": { "type": "string", "minLength": 1 },
+        "transport": { "type": "string", "enum": ["stdio", "http"] },
+        "method": { "type": "string", "minLength": 1 },
+        "tool": { "type": "string" },
+        "request_id": { "type": ["string", "integer"] },
+        "is_error": { "type": "boolean" }
+      }
+    },
+    "sealedrun.otel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trace_id", "span_id"],
+      "properties": {
+        "trace_id": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+        "span_id": { "type": "string", "pattern": "^[0-9a-f]{16}$" }
+      }
+    },
+    "sealedrun.imported": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_format"],
+      "properties": {
+        "source_format": { "type": "string", "enum": ["otel", "aat", "sep-3004", "other"] },
+        "imported_at": { "$ref": "../common.json#/$defs/timestamp" }
+      }
+    }
+  }
+}

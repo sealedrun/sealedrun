@@ -1,0 +1,9 @@
+node_modules
+dist
+out
+.next
+pnpm-lock.yaml
+LICENSE
+LICENSE-SPEC
+spec/vectors
+.venv

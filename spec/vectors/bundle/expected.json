@@ -1,0 +1,21 @@
+{
+  "no-payloads.zip": {
+    "check": "payload",
+    "ok": false,
+    "seq": 1
+  },
+  "tampered-payload.zip": {
+    "check": "bundle",
+    "ok": false
+  },
+  "tampered-record.zip": {
+    "check": "bundle",
+    "ok": false
+  },
+  "valid.zip": {
+    "complete": true,
+    "ok": true,
+    "records": 9,
+    "runs": 1
+  }
+}

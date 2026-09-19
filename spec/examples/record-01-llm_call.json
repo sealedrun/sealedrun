@@ -1,0 +1,61 @@
+{
+  "actor": {
+    "id": "H342ugmg0Ea-GvTpUDeqxqFKsgeirlcywX047EFubuU",
+    "type": "agent"
+  },
+  "agent_id": "H342ugmg0Ea-GvTpUDeqxqFKsgeirlcywX047EFubuU",
+  "data_labels": ["pii"],
+  "extensions": {
+    "sealedrun.labels": {
+      "pii": {
+        "confidence": 1,
+        "source": "regex"
+      }
+    },
+    "sealedrun.llm": {
+      "finish_reason": "tool_calls",
+      "input_tokens": 41,
+      "model": "gpt-4.1",
+      "output_tokens": 12,
+      "provider": "openai",
+      "stream": false,
+      "tool_calls_requested": ["read_file"]
+    }
+  },
+  "hash": "413aea3b3b6f79d6c67f7c07d1fbb46bc797f8242b001f1a9bf4e71fbf9d48c3",
+  "hash_alg": "sha-256",
+  "kind": "llm_call",
+  "occurred_at": "2026-09-16T12:00:02.000Z",
+  "outcome": "success",
+  "payload": {
+    "request_hash": "NE7Pa20znmfVURQkSpZ0rJeNoY0Pg1xXL5G5kZq6RXI",
+    "request_media_type": "application/json",
+    "request_size": 106,
+    "response_hash": "n6zrlnqzR23iJU3RGI_0RJiFw8Va196NqWza-Nitdq0",
+    "response_media_type": "application/json",
+    "response_size": 95,
+    "storage": "bundle"
+  },
+  "policy": {
+    "decision": "allow",
+    "reason": "no rule matched labels [pii] for cloud target",
+    "rule_id": "default/allow"
+  },
+  "prev_hash": "18d39e849b52694684f84e1c3157a832fa3cbb6f58b4528ac3adabbbdcfe2b24",
+  "principal_id": "qJtRVbgIsIjNNo6VuDr6nQ50Wj3rwEAAuR2e385pby8",
+  "record_id": "0192b3c4-5d6e-7f80-9a1b-000000000002",
+  "run_id": "0192b3c4-5d6e-7f80-9a1b-0000000000a0",
+  "seq": 1,
+  "signatures": {
+    "ed25519": "OuNSRjfVC23r9hWyT0ArprwswwPVQyfUNKmYuSA1KbdsbqGd6mDkCGuwI_Ux9ZD1U2mjlAHz6jXgzJgDnrNIBw",
+    "ml-dsa-65": "2Wj625Be2wZ_n_qUX1WqDBIEEokhOpyTxxeGdbMRq5Z9ut7i5yhfpwEn3iNyhvr1F2s6Qu2SYcjWD0y0jWLpXH9ouInbLRveIjFZ6WIgi02BYHNg0Ds6F5JmnFocUuXEN6FofjKEWMC3DXRZJvwbbr3d6uYLOTEQlZlC7oMuv7bHmVLdgrrXbYmgTGS3k7pCjGtJd_M8AczqxlxQ9ibchaZts4xyOEJ8biE2cHzNMkl9n_ImVnAegFcXmi4MYP73WO5nfeuHPBLEz_-ZzVqZVB0qXQYvMaUeaHuZkO0e0FHfBsoxRsuegzelr9qw-JxEX-gSKrOMGtoVILQJdEW2Xvc_DAQBF8R08cXlwVQrcJCCS0bmHFZmEwHopxIWWwa11XxtPOQdaQRRuvykIVn3Z7WhNTjQRmdwWab17nlrGYESq8Ch6aBz5X2oAl61KStdX4qtmDMxkmZZzq8eSX8h2HstWDHjFcUEx5nEU7ALzC8GjOkTlzDA_xuJayLNLeXePlFk9Td4AsYvTCMsc5V0xj1xeDUEwKNO0bV81UJ4Ymtk-93xmqaVdAnUOTwxRJRLU2kp2Es1mxm40wLueo7Rjb2XmVtJ_vDy5pHB5qkIurskJ9LSpkgwp3YRuuS_5NKY0bT4K_BGIJ-_pG9RgshCV_cOmft1JgSC8f9vCe_RkBi_MBxgTYXCNp3YPG-ciOAv1zsrQlusZ87MBg4QT6eCOd2uut2ckmG300J7WansRfFuECyjTDTrjpLIzm13AqSSWYo57WRM7f5Uodx1qO2wdkiMhFNPKlGtdD8NWu2HoGhSOP4SkrGHhmyKSh6V1ItJDU9b7lBURqjpVKWyRxY6SmsDVAmdGtP63rqhHqlS3T8dxDGfzt8dJtUGkRcvUvBOv8TlczrEBK6qkZrPec_r7P-f_udSKFPxNhGiDWka2MXbW4KgrpHvNEds1X4ZClB_npUz0sco8-QfHZ23mWjsx2khgLp5wPgKLmjEW3DYB3B1t7vb5dFR-ah1IKzmvAzgT-kyn94Qop9YElX90FZSfU5rwZCiUhfiJrz5CrlczG_5pStcF_k0oYm5-oXSz-YdZmFJ4-uy1uiPs72pXuZUKbde8PKZSngNsi5Y-ItsqAjq1ac4-dHI_olf9-Ld9LGOapO7YSkTaRZAhpUwn9CGd8Pa5kev9VyeOzU5x1cquh2roO2LebEGexscZFw7OcQY4g5aSo-twnodIqH5IkqyyPL0BkcmvAL76I2hHNZUknKgkFhPQmBt5RFpln9yk4-33hufck0zHqFGKZebIFWHehWMFKEoosP6sT1fuHSzGXm9S8L1sT-b1_x2RdJsnTirr427v4LUe_PZyxgQWFbEaoFw5-NhmpKD6xlNFTlIwnHTuOdo4FRAjG9-OU-oLUYU5DP8NAYM5djVj3SqZxnDR40R-RcQfQUsHW5QHhEipzRqRwTUYOsKHU0cW1fWvWOANA28bpDpZdCkS7Of4Yu5BlEaFDbyf2FKusVrzOdsyI7TbZ3fiem1m6LDrNXW9NLlI3sN7RVWXIyd0e3EknOmenVHzABkHadAmimHuL0qnmzFcu0XSiO6ICaM-PaaaG1h6cSShi3zEMO_tGdN14J9_KEDhuISdsvU9k7Ia8rAuhLmp_Preg70xTd0mHQ3M1uLTw5H8Qs0icMKrehUTp3LBrWxq2dIDQaSBYr56AM1-_e89HvNMGjVAjoguthi76E-UUtHn_l87d-XbOFw6DWTZvLKW374ZC-hpHuOF_6tB6nPI7UiYzW-oSNypnuNWAxUaSg_XwzKV0mIHqY1VaejPPBxc2dstj_a1erUiOvPID3dqpCS31wn85SVs7DSD4yX69zd9AKojGq_P6Q4iM-5VfvTVqZ4Lc7kYZ-A-6sPVlil5Xjx2qM0S3Ne6Nhdf6NNGg1Ja7RTH9t9e9prxxHWowNScxpPjb9zo9ratk-zJeNn7ghORi3WS1TmBY7GTVQMqwxlcVGZ76JgsAymfnUW_sz4ncYrt2EbrTPju8-Mg8bWt23kK36mOyekzV2XEuJRIS9zAgqdP9-fSUcQPzPjMS2K3Q7qUfuEFqA_SO0s2n3KOfJ9BXuEd4IHHpbOEPw957qCdIFy9KL-I6VXMZ6is56TJB0oBcpsEhCtFHejZs6pnIET6J_etaRFIoquIjXQMZMvPsbgbaxzwZ8oVYr6AoxmrZPLpxWOdf1VmB8Y3kM_c3jfCmCh0cuEbHaZMIgnuUu1M1IlgiRL71Eg3Hd87wUlXzbv9Os_t7hL_wRLPQMIjJiyBhmk4CUJehnA69y--cnSTEYhFTupTJX5kFdgO5-wTEju04CI__egLxBqeQmkkmt0e1OGzRjJlRefeU4XGsBcXlXsDeALzDr6IlAMC1KUOTVF2qR1YzHMje1crOgIcx40ZwUpM31RnEOOqk7MWoe7SLTwrRjIqgbyzbLhtcRVTrVw5OYEZ9KfTFgDBEVSktTawcKZR5ljZHCkjcc2HMv5z4O81DmU-MmlBYlz7yP_tZetqS-Lpgt9xHJFt-0Ky-k64rFv5bpM7zwPT9a9sGjcINpaKg13DIwAaV7yw4VdH-pauUTEpuncEaRS6W4GX2EGlk3ZDpVaqkA8h3DMXCB07Cqth3VgGc6DaUNyXCs9om-UreS2kumCMgB5_y7sx76pAJQPwFYUhqbPPbg0KuBVDPUKOOQvQDj7ThI8yfoK4Fp4uUujI6oN8e980kbmikiM0l3eNaUy07GyZ3qQFdD1bd15mjqXZ9_zMnNhC8-4dkWAx9G6TvM1snjjrwUmb6vn-wQ_DZUV_OebxpyyU_j6i0QYgjy2cB9R3iSCbSjer37Uk15intlHPueFcvC-3Uk9W4Jg2c9LvVuVglETn49faRXEWDP1l7oaO0OyA2w-J-CeNY1OS1sMWEv4aLQeOGFij1aWDmPKj30YJsBNEgOAbJrVuNfnOXUU7CqGr5LZVQ2RmQjWZ1VOW0svTeK6pYxnjdP6Y6Sgjb5t9UK8Md8VpnVs7DuvKD2-pW5ZlZBSrtLuBul_IVYeSvgyeYiNIbhq2LP5BwcCFiv-_Adht1anqc3LDEyvTExqrI091KKK721wQnqbLRbLpfT0eta2LIpFZEP_eE9F_zaECVbkgZMLQauVzeOoqZ5_8uXyAowio4r9IDndoqBRNS83JWdzeoa9j-sk3psT2_RiCZRFqOBeyKuUoZjrAKNmyo76r-jjX9HC7_F63LUWMElzZO-PL1yKJtrl4ryPJV1fwFbE3xfrAuqWV3KmZ3VP8CD9QMkN5-tgWLVwDCPrDVQzgSegSSFT1kPHbNJs8O0sb3Rsiexee6--saIs-TKnil6Guiv4Xz2qndz4c4qXopsowikgcWNu4a6rC18NXZkWDiNl1PJ6T18JyUR13w2UN4YMu0q59vjaYgPJao2a8yf8axYRM7HP9dbiF7XtN7TongufcFo7nX0Oekofa1fxyj5nbzKDq9IiUJNzEMsDQgrVHxS2xKpYXODtc2nxvvAwyNvV6FcVrxgVUlQYex4xXz06FrEEhHRigNkCRK27m7Rt-W29QMweT19RUpE9mFTROB3YLw89EGpxkxF_LZZCSW9gf7K5S8Can6XFda2Yz7X9BCLd173Mx_k8MwC_hyGXu80ky2cB9fn0Vg8NgmoRBAmMUETMbjZTt_mqOSm0YfWHLuHSoBhqMfA-wlDaW1dXFCFTkPeOUs4CF0qnNN8XGFLc0RM5ExwOdyPG8-eN8Yeb2UpD2O9wNI7YRGClAXSzRmcXKjdvvOfWK-U40D1sCkmKf8DPR8M6LN5j3TGx2flKVs0opuS_brcnQkLSrAEqFrFaw7foN3t_snkTBb1NjyKYp_LVcScPvLSCv8D49r2YpTPOz6WoL9AjL3ZTZ5Eh6_9ll-XOV9MYrJdqLOyniO42J2Q1tuyYdM-k4TZeQvHNUXw9id9iTP7VxhtUsS4fVmDim5a50tNiquAsDjRhPevhsrQFpjzBYknSq1PB-zGZtUmxFe5YtNO0poq5GY2sf9wyI9hR6hfhjptOulYOnQfGwnbxmLMrHaAbzaMADqiQ9GuHUZwZw2TzsnJq1DBv3zMgGXpycE5OaYRO4PUtC6Dkk5QYruPUhc_cLxF_qLLBrJ5mtNtkBpZkZ3buBJxdwfRgnhLTJZWi5a6Orgx2CYpZh6HfDlCNUYMBEZpevIJ0gnX2HNoHWF8wBc8MlQ7Crb36Xb4MTUuofB-7YvsNz3Rv6QaMxcr3rdDPoTXo0Y8VKwuAUV5yjQYoRE2rYyzkhqbWpJDq-yqIYWWxxhjEBl4a0ssH_pqCb_iGZpUdrGAjho1XgbgiPUlnb7vSDTFFhZHt3eDv_BY_e9DU2vgjam0AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAwoQFBse"
+  },
+  "spec_version": "0.1",
+  "target": {
+    "endpoint": "https://api.openai.com/v1/chat/completions",
+    "location": "cloud",
+    "name": "gpt-4.1",
+    "provider": "openai",
+    "type": "model"
+  }
+}

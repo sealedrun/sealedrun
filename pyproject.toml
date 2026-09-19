@@ -1,0 +1,44 @@
+[project]
+name = "sealedrun-workspace"
+version = "0.0.0"
+requires-python = ">=3.12"
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["packages/sealedrun-py", "services/recorder"]
+
+[tool.uv.sources]
+sealedrun = { workspace = true }
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3",
+  "pytest-cov>=6.0",
+  "ruff>=0.9",
+  "mypy>=1.14",
+  "types-jsonschema>=4.26.0.20260518",
+  "httpx>=0.28.1",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "N", "S", "RUF"]
+ignore = ["S101"]
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/**" = ["S"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["sealedrun", "sealedrun_recorder"]
+mypy_path = "packages/sealedrun-py/src:services/recorder/src"
+
+[tool.pytest.ini_options]
+testpaths = ["packages/sealedrun-py/tests", "services/recorder/tests"]
+addopts = "-q --import-mode=importlib"

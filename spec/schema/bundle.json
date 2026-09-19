@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sealedrun.com/schema/0.1/bundle.json",
+  "title": "SealedRun Bundle Manifest",
+  "description": "manifest.json at the root of an evidence bundle. See SPEC.md section 13.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "spec_version",
+    "bundle_id",
+    "created_at",
+    "exporter",
+    "principal_id",
+    "delegations",
+    "runs",
+    "files",
+    "hash_alg",
+    "hash",
+    "signatures"
+  ],
+  "properties": {
+    "spec_version": { "$ref": "common.json#/$defs/specVersion" },
+    "bundle_id": { "$ref": "common.json#/$defs/uuid" },
+    "created_at": { "$ref": "common.json#/$defs/timestamp" },
+    "exporter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agent_id", "software"],
+      "properties": {
+        "agent_id": { "$ref": "common.json#/$defs/kid" },
+        "software": { "type": "string", "minLength": 1 }
+      }
+    },
+    "principal_id": { "$ref": "common.json#/$defs/principalId" },
+    "delegations": {
+      "type": "array",
+      "items": { "$ref": "common.json#/$defs/uuid" },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "runs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "run_id",
+          "hash_alg",
+          "record_count",
+          "first_seq",
+          "first_hash",
+          "last_hash",
+          "complete"
+        ],
+        "properties": {
+          "run_id": { "$ref": "common.json#/$defs/uuid" },
+          "hash_alg": { "$ref": "common.json#/$defs/hashAlg" },
+          "record_count": { "type": "integer", "minimum": 1 },
+          "first_seq": { "type": "integer", "minimum": 0 },
+          "first_hash": {
+            "$ref": "common.json#/$defs/digestHex",
+            "description": "prev_hash of the first included record; all zeros for a run starting at seq 0"
+          },
+          "last_hash": { "$ref": "common.json#/$defs/digestHex" },
+          "complete": { "type": "boolean" }
+        }
+      }
+    },
+    "files": {
+      "type": "object",
+      "description": "Every archive path except manifest.json mapped to its base64url digest",
+      "propertyNames": { "pattern": "^(delegations|runs|payloads|anchors)/[^\\s]+$" },
+      "additionalProperties": { "$ref": "common.json#/$defs/base64url" }
+    },
+    "hash_alg": { "$ref": "common.json#/$defs/hashAlg" },
+    "hash": { "$ref": "common.json#/$defs/digestHex" },
+    "signatures": { "$ref": "common.json#/$defs/signatures" },
+    "principal_signatures": { "$ref": "common.json#/$defs/signatures" }
+  }
+}

@@ -1,0 +1,6 @@
+packages:
+  - packages/sealedrun-ts
+  - apps/*
+
+onlyBuiltDependencies:
+  - esbuild

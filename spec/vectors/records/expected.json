@@ -1,0 +1,58 @@
+{
+  "valid-run.jsonl": [
+    {
+      "hash": "18d39e849b52694684f84e1c3157a832fa3cbb6f58b4528ac3adabbbdcfe2b24",
+      "kind": "run_start",
+      "prev_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "seq": 0
+    },
+    {
+      "hash": "413aea3b3b6f79d6c67f7c07d1fbb46bc797f8242b001f1a9bf4e71fbf9d48c3",
+      "kind": "llm_call",
+      "prev_hash": "18d39e849b52694684f84e1c3157a832fa3cbb6f58b4528ac3adabbbdcfe2b24",
+      "seq": 1
+    },
+    {
+      "hash": "55d2edfa81e78e44b4b972d5728b59262c866197808630b86b3c9e14ea3dc2cf",
+      "kind": "tool_call",
+      "prev_hash": "413aea3b3b6f79d6c67f7c07d1fbb46bc797f8242b001f1a9bf4e71fbf9d48c3",
+      "seq": 2
+    },
+    {
+      "hash": "e20363304048610a068535dd0f76302bdd17ff804d8bc746934d9f2253e6a472",
+      "kind": "llm_call",
+      "prev_hash": "55d2edfa81e78e44b4b972d5728b59262c866197808630b86b3c9e14ea3dc2cf",
+      "seq": 3
+    },
+    {
+      "hash": "2efb465244f0fcf660094be21dd77c78f342058be51ef8200a71c6615059c833",
+      "kind": "llm_call",
+      "prev_hash": "e20363304048610a068535dd0f76302bdd17ff804d8bc746934d9f2253e6a472",
+      "seq": 4
+    },
+    {
+      "hash": "2e5ad85304c65f0accfac67e02c56eba796476d6e538eec989142845ab7a7651",
+      "kind": "human_approval",
+      "prev_hash": "2efb465244f0fcf660094be21dd77c78f342058be51ef8200a71c6615059c833",
+      "seq": 5
+    },
+    {
+      "hash": "6f18bc92d05b59b1cb7bae7273e95f77d0e71cea2870d03fe1fd1b372da157a7",
+      "kind": "anchor",
+      "prev_hash": "2e5ad85304c65f0accfac67e02c56eba796476d6e538eec989142845ab7a7651",
+      "seq": 6
+    },
+    {
+      "hash": "0cb2ea09b7284b97d57727d36759dfcb4d47099d3b0366251413340af6f322f0",
+      "kind": "tombstone",
+      "prev_hash": "6f18bc92d05b59b1cb7bae7273e95f77d0e71cea2870d03fe1fd1b372da157a7",
+      "seq": 7
+    },
+    {
+      "hash": "7da6bda2ecc0c05eb3efcc08986d06c448a17b0a737641e7d922610dc2560546",
+      "kind": "run_end",
+      "prev_hash": "0cb2ea09b7284b97d57727d36759dfcb4d47099d3b0366251413340af6f322f0",
+      "seq": 8
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+services:
+  sealedrun:
+    image: ghcr.io/sealedrun/sealedrun:latest
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - sealedrun-data:/data
+    environment:
+      SEALEDRUN_DATABASE_URL: ${SEALEDRUN_DATABASE_URL:-}
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:17-alpine
+    profiles: ["postgres"]
+    environment:
+      POSTGRES_USER: sealedrun
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sealedrun}
+      POSTGRES_DB: sealedrun
+    volumes:
+      - sealedrun-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sealedrun"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  sealedrun-data:
+  sealedrun-postgres:

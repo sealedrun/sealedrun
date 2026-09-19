@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sealedrun.com/schema/0.1/delegation.json",
+  "title": "SealedRun Delegation",
+  "description": "Principal authorises an Agent key set for a validity window. See SPEC.md section 6.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "spec_version",
+    "delegation_id",
+    "principal_id",
+    "principal_keys",
+    "agent_id",
+    "agent_keys",
+    "not_before",
+    "not_after",
+    "hash_alg",
+    "hash",
+    "signatures"
+  ],
+  "properties": {
+    "spec_version": { "$ref": "common.json#/$defs/specVersion" },
+    "delegation_id": { "$ref": "common.json#/$defs/uuid" },
+    "principal_id": { "$ref": "common.json#/$defs/principalId" },
+    "principal_keys": { "$ref": "common.json#/$defs/keySet" },
+    "agent_id": { "$ref": "common.json#/$defs/kid" },
+    "agent_keys": { "$ref": "common.json#/$defs/keySet" },
+    "agent_name": { "type": "string" },
+    "scope": { "type": "object" },
+    "not_before": { "$ref": "common.json#/$defs/timestamp" },
+    "not_after": { "$ref": "common.json#/$defs/timestamp" },
+    "hash_alg": { "$ref": "common.json#/$defs/hashAlg" },
+    "hash": { "$ref": "common.json#/$defs/digestHex" },
+    "signatures": { "$ref": "common.json#/$defs/signatures" }
+  }
+}

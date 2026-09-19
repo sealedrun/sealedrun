@@ -1,0 +1,401 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sealedrun.com/schema/0.1/record.json",
+  "title": "SealedRun Record",
+  "description": "One signed step in an agent run. See SPEC.md section 5.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "spec_version",
+    "record_id",
+    "run_id",
+    "seq",
+    "occurred_at",
+    "principal_id",
+    "agent_id",
+    "kind",
+    "actor",
+    "target",
+    "data_labels",
+    "outcome",
+    "hash_alg",
+    "prev_hash",
+    "hash",
+    "signatures"
+  ],
+  "properties": {
+    "spec_version": {
+      "$ref": "common.json#/$defs/specVersion"
+    },
+    "record_id": {
+      "$ref": "common.json#/$defs/uuid"
+    },
+    "run_id": {
+      "$ref": "common.json#/$defs/uuid"
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "occurred_at": {
+      "$ref": "common.json#/$defs/timestamp"
+    },
+    "principal_id": {
+      "$ref": "common.json#/$defs/principalId"
+    },
+    "agent_id": {
+      "$ref": "common.json#/$defs/kid"
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "run_start",
+        "run_end",
+        "llm_call",
+        "tool_call",
+        "memory_read",
+        "memory_write",
+        "policy_decision",
+        "human_approval",
+        "tombstone",
+        "anchor",
+        "note"
+      ]
+    },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "id"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["agent", "human", "system"]
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "target": {
+      "$ref": "#/$defs/target"
+    },
+    "payload": {
+      "$ref": "#/$defs/payload"
+    },
+    "data_labels": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9_-]+(:[a-z0-9_-]+)?$"
+      },
+      "uniqueItems": true
+    },
+    "policy": {
+      "$ref": "#/$defs/policy"
+    },
+    "outcome": {
+      "type": "string",
+      "enum": ["success", "error", "blocked", "pending", "timeout"]
+    },
+    "parent_record_id": {
+      "$ref": "common.json#/$defs/uuid"
+    },
+    "extensions": {
+      "$ref": "common.json#/$defs/extensions"
+    },
+    "hash_alg": {
+      "$ref": "common.json#/$defs/hashAlg"
+    },
+    "prev_hash": {
+      "$ref": "common.json#/$defs/digestHex"
+    },
+    "hash": {
+      "$ref": "common.json#/$defs/digestHex"
+    },
+    "signatures": {
+      "$ref": "common.json#/$defs/signatures"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "seq": {
+            "const": 0
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "kind": {
+            "const": "run_start"
+          },
+          "prev_hash": {
+            "pattern": "^0+$"
+          },
+          "extensions": {
+            "required": ["sealedrun.delegation"]
+          }
+        },
+        "required": ["extensions"]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "run_start"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "seq": {
+            "const": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "tombstone"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "extensions": {
+            "required": ["sealedrun.tombstone"]
+          }
+        },
+        "required": ["extensions"]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "anchor"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "extensions": {
+            "required": ["sealedrun.anchor"]
+          },
+          "target": {
+            "properties": {
+              "type": {
+                "const": "witness"
+              }
+            }
+          }
+        },
+        "required": ["extensions"]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "human_approval"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "actor": {
+            "properties": {
+              "type": {
+                "const": "human"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "policy": {
+            "properties": {
+              "decision": {
+                "const": "block"
+              }
+            }
+          }
+        },
+        "required": ["policy"]
+      },
+      "then": {
+        "properties": {
+          "outcome": {
+            "const": "blocked"
+          }
+        },
+        "required": ["payload"]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "policy": {
+            "properties": {
+              "decision": {
+                "const": "redirect"
+              }
+            }
+          }
+        },
+        "required": ["policy"]
+      },
+      "then": {
+        "properties": {
+          "policy": {
+            "required": ["original_target"]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "hash_alg": {
+            "const": "sha-256"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "prev_hash": {
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "hash": {
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "prev_hash": {
+            "pattern": "^[0-9a-f]{96}$"
+          },
+          "hash": {
+            "pattern": "^[0-9a-f]{96}$"
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "name"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["model", "tool", "memory", "human", "witness", "none"]
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "endpoint": {
+          "type": "string",
+          "minLength": 1
+        },
+        "location": {
+          "type": "string",
+          "enum": ["local", "cloud", "unknown"]
+        },
+        "provider": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["storage"],
+      "properties": {
+        "request_hash": {
+          "$ref": "common.json#/$defs/base64url"
+        },
+        "request_size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "request_media_type": {
+          "type": "string"
+        },
+        "response_hash": {
+          "$ref": "common.json#/$defs/base64url"
+        },
+        "response_size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "response_media_type": {
+          "type": "string"
+        },
+        "storage": {
+          "type": "string",
+          "enum": ["inline", "bundle", "external", "deleted", "none"]
+        },
+        "encryption": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["alg", "kid"],
+          "properties": {
+            "alg": {
+              "type": "string",
+              "minLength": 1
+            },
+            "kid": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      },
+      "dependentRequired": {
+        "request_hash": ["request_size"],
+        "response_hash": ["response_size"]
+      }
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rule_id", "decision", "reason"],
+      "properties": {
+        "rule_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "decision": {
+          "type": "string",
+          "enum": ["allow", "block", "redirect", "require_approval", "allow_with_note"]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "redirected_to": {
+          "$ref": "#/$defs/target"
+        },
+        "original_target": {
+          "$ref": "#/$defs/target"
+        },
+        "note": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

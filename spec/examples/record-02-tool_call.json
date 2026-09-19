@@ -1,0 +1,59 @@
+{
+  "actor": {
+    "id": "H342ugmg0Ea-GvTpUDeqxqFKsgeirlcywX047EFubuU",
+    "type": "agent"
+  },
+  "agent_id": "H342ugmg0Ea-GvTpUDeqxqFKsgeirlcywX047EFubuU",
+  "data_labels": ["legal", "nda"],
+  "extensions": {
+    "sealedrun.labels": {
+      "legal": {
+        "confidence": 0.91,
+        "model": "sealedrun-sens-v1",
+        "source": "classifier"
+      },
+      "nda": {
+        "confidence": 0.97,
+        "model": "sealedrun-sens-v1",
+        "source": "classifier"
+      }
+    },
+    "sealedrun.mcp": {
+      "is_error": false,
+      "method": "tools/call",
+      "request_id": 7,
+      "server": "filesystem",
+      "tool": "read_file",
+      "transport": "stdio"
+    }
+  },
+  "hash": "55d2edfa81e78e44b4b972d5728b59262c866197808630b86b3c9e14ea3dc2cf",
+  "hash_alg": "sha-256",
+  "kind": "tool_call",
+  "occurred_at": "2026-09-16T12:00:03.000Z",
+  "outcome": "success",
+  "parent_record_id": "0192b3c4-5d6e-7f80-9a1b-000000000002",
+  "payload": {
+    "request_hash": "tzkNu7TAkYjO0GgxHQm7kHiLKuzk_KKERAttOaarNKA",
+    "request_size": 67,
+    "response_hash": "Jm6tzdPGE57XeprZfJhxH5wsgsTf-czFs0fwo4ywM6E",
+    "response_size": 67,
+    "storage": "bundle"
+  },
+  "prev_hash": "413aea3b3b6f79d6c67f7c07d1fbb46bc797f8242b001f1a9bf4e71fbf9d48c3",
+  "principal_id": "qJtRVbgIsIjNNo6VuDr6nQ50Wj3rwEAAuR2e385pby8",
+  "record_id": "0192b3c4-5d6e-7f80-9a1b-000000000003",
+  "run_id": "0192b3c4-5d6e-7f80-9a1b-0000000000a0",
+  "seq": 2,
+  "signatures": {
+    "ed25519": "x5GzUvbCmX8WqjuwE-WMrhZty_frOr1evNF31uyDXQKITZfMKJqF49raxQsos3fp0E6cVOrVbOGubJuU_utZAA",
+    "ml-dsa-65": "ZbBtGQKHxSbzZkC3u1-OX6dGjDKsvWImEn3iaCvVig_gZx8YAy7D3LVaMkciIa7EBbXvgvIZ8vfcm8L3xHRchoacB9P4aWuJd5Yn_fEduzoxOiCFIgoZ2RSViS65Xs5O-EOeQ7wWaTK8JXffVuOjrKtE_oXgkPAfSvbdwGxqYPTPAQVOgE-gQj2TS2VHj02S-KdegOigTnLEDl8ZkqoIRMNYKOnW26MeR5cUDeE6-dz5MHcDkPsH6Bb7HszDWM7ebHPdezxvZDQ0XhueO4vQT1Z3Tr5QLuAmVcbhbZgQT30xbgRxGfPqZDOQjGa_AJCJZhJur16WhOYA6mmHRMYpLv0RBV8n8hOriT15U3GpWVEaaWegfJnFD3d6PY9KmBEn1Q8BAsQ7BcwKAbefw9PU7PI_6VNpWq26-8xunptTDyK8qdVVZlF5rfDHID-bzwtUV0ZuDXYMNJsBXBNSxDeuW6znodl6MofAAdrtEYasdFcNexdP3MHGT9ZAMSSbTyyCld4aMBlcrVrXnOaU4slEjA3zYavJSEYFtDYjgDWg6wPXnASoFjSG6pktCXykMFTY9rMxz0OhWXsohTS0WeY6OGeRIegwIhlGzTmP2hyLaB-6gOIbdehfrccmmIWNhFul6p-0GWdPux9NTgTJeEQRZIfOVulDZucOQXZj_M2JERbuyor94LFNlZIqgYrtwyMaqWdm3vezvu0fhg0LDm5BBa385_C7iBFTzVQbEwu1PtRW1szFt3YMIm4yVD_03cbmduxF6CU8du-K-eawakJc7BU0NIaSh2-D24LFZzdYDdpA7GxPBTyWD4pyUHM6_EAc7_Tv7QVnMaFqi053imNUr9d3JMjEweb3HjbJcTlHZ6b83TFUvCy3vYLFmNATn0aDXRYaCL99f3xU1Hw3YOd8IEfYdbP1_yKFeH9pSpjmarnWStzckMF289Pf4-ptoty769ritlguwB6ZewqU9B8Sqhi7i_0PxZz6FN4xCF4Sdvegn_VJZ7ijGc0aNCcwtO2UjRg49-TFup3h5ZGbwx8TslW9KiDhr8NkiRc61uHuJDXu0ritSBSLl0bBpvLbYXCPURI6UWkk7LHtOqpwMsepsRCivbeaiMTmGKtxDtmlkgWDKcLzhtRcV5GbeUV5kEWjpHI5KfKYOD2oeFjpAYrLkJep7_gIUJTqaMKq9sf_Th_hJlu2yEPBOqEJYRw0zvYAnDtXy_MOngxd93HLXG9_z0TwPBYPQ06zhBVfzXdwFa0DeIanX8JWgTbJZ-ZqFQgF62cyBNs_RQvshgSwQ9Jkm0ujzKqX4AY-t30_T23kFElRP0FfTyIgIM8vMEU8RUNxgjMnpcqffJbmRb_K-6l_cm0QVyf9i5P5tUjliWFp8akAsvyrH0FPer3ctKiQevpmsNnC2-i9nm0uD1pk8AlDKpjgba5mMhM3zxKPhepKLuEEYDzoVCZ8fNTGUXGqnk1lRtNUvaPdPMuvy8r07UC2HjbtBGsiELx8H2kE8aU7-BDMwP7KapgaykZwo6j6tapErp_JoOkKR1AF3UZK-PFMrXXDDhAT4FH88aljtShruUNClPCVTlV2Xrk_fECH7PeYjSH9vNP0905WWhmLeR_sUUkY2Mrg8gQEIKFHzKiEiqOneG-DrmuCN9Bl_8llZPOB06yhH80KoTTAPP_3HhrI_XgFMkPTPlVRSkMq0X4Jh_UujPymulY2EXKBt8hn_Xi6JDXpq9ibhjay3xW_kjUvhYSrDkY7SmdgDniWnd_ih1KvzNGpVJrNI5qnGEUfXaKAQluO6plJSGrNm5oHSLpcuRBdouIQsn2Zs-_5O6Vr2JYZshy69K80aJ3hcLZUXe9tSxUyH-TC7zPhy9u7Tgz5Km-Aw2A8zUQaCtfWbKj13tW1uxYixeJqKX4GJO3uUTHKAKUqCTacXqEhu2sAxQ6uC5oBcBdLGcayZPuodADq-sIP9RWjipzXEF8CFekLNPhfsHnw9W7DyEKTb6ILt-kXEEvPEWiLpQHDN0WLxv8B3qurQhqxFHeB-5H5ELecSOIPgqfGoW1M1Vx0rnAelq3jPqZ_QtwnAkWgrwjTQ1g7CuDa1bc9oCgs-D_EbzOn9GtX1jbzQjoyh9ZbsmOaLuyjvXpRnzwcUwlv9pYeQYh9ByH2LlxJxnGkeG36LbEFwm7ZXKw_2UJAtusA0EiInTMK0q0nXaSn4Izk2rBkEU3zjzk-2CBguV1m9f1F2jwK2y2FT_rDPJ0iet2-czTZ7PWAGNvDOy_BDrLUOJKOfArYtSxdPIRnhBQePEGWMFpvPlWu5VkbuXv9s9SCQil5nnZDpumxTmtPd18JQvE7clt3RmHA5i_GveAZSPqtDRdQHoyNX0CM15raw_-ksZPuJvMRst1qR-5RX4CQMpHvCc24IqI5jZBYhDL7oWGP-bYUkmT5QoOjTshnCt-qK0P1DT1y8ZmFDBFzvjUWSGSpj0TIhZM0g1NBZUCeZdQYYPZ1WcP0xSY6rUMhdG8B-8-pBHZvuEQXQadX2aQOaiKn2g-Z2hOrJjvYvqoVFFxnvU8mZ470tyZCzGlhRT-0MRXPfcZRpRbwWSmXmoI5p82fCrR1Tn1eXv9hAVx91zNY4xb4-s-_T9kEQFQ_rEDSaVTyRLBjRaObFhv8wAWrmSlzQIx91sCsEo6XHgdweDvYoEG33hsFhuTtIdXl3EIqpN7HneK9dalGnJsnRpozTY2XEtKP9PiWgLUpX4uhGB6kJ8nujbLLlAoPkAigmI4mIOZHwtFwh-WCOgvcP0jghJEknBz2GkJalFSJoqYlW60ngo9ACwik1D9Bhjqqiiep9-EujiJkG8UwCSl0U3fsoRGu3NL1e0Jn3NJaNVW5dWB9O23zONc2ibcVB7truoR7G3m_4zMxXta81L50zhelDETOjqtf9KCSCHl9btxi6Md3s-BZ0hC-shznpIxsDr5V47HJbgns4uf_UIrnLLeGrv72vXb36TQnQ_jUkUZtnjTkBAl44cnIU3qa7URk1fZvwBDSiE04jPAmhGKFfOh-0Pr0rnSUT_6RHCF_6f6CH3Ch4ujy15W8Ev1tHJweOOZhgmWHYRkqcsE8Lnh6Mwe9DlWp-naTSRuS77ASIzqIHdERpShhvrt1EOY0iUKmvE4vgqxjfayVtU6nPjXO264edQ3gHobB2bL4f3YmrVzxmMqWL9j66Gom0jCezt8hVkYK1JTgzf1F-Jv9hMc27UUSFnjB3EVOUQgaqzmWAnJ20wnwD6gfTUwCkvhoNpYVl9F-K_vNxJmUzDxzGxIYpcDDrsYbkAjSaoE-x8eMK30qWbXitB-BTYRe8jPuxbxsCp2BT2HQ5vl5stKyldjGpWA87rMeCG4_yPHn-fY4fEbgTkpWBrxr6h1uPjRfosQ5ct8rVgZqpAqKkqA9Dkm62H1UaKZtmw2QUoxooxAhLg2UAcsu1o9COdRm-Nq2pEnY_E2_V6y-kc5aV-3JMX3LmaOleo2G5fXHCaNGhmxkG_4-s2GyDvQLXWC3dMD2N0RdWClhuremLNHh6SHO5A8YzGomHOQ0rOOq1LxppUaIjoxYZriZaeNKUHxUAodlbjSaW_FFJrHk00gobN8xBI-qOFnm1RROtr4pnYSyBwTIk-i7H56AmSTpZQXcZqyMcKZTr-SqX8PaVHd-h7OVpGd0rWVn0OYVJr8uorALSxRTp03vtjDP4qEla--3O2B6dLLjNWEsAk21i9KjMLZHpzMs5oxEmx-IV07wdgMCcLR7paJZFd-4v376wpmm90mKdDU5jbtoJkAnVVyuuFMMc9tpYMUBb8Mv0M1FDBGTsEnx14zYn0zlq-q6_zY1UEEhHFfurbsgymHJozq9ILEHDktE_HoZALK-PjhFtTbvX_FM6ZCKQGvv3vV9jp6Gi8xRJYWfN7JDtq3ZaTaoEqaYQQ0NG4mOrCPlk7r--EJT8kI5GGP0Z3X_dm4uuF5OsgAcQzXZrULJg3fVelD0ryZeQddT8IbtOnb3JV2QKVXjJDIHDwrbHQaGEtykoKJAnsTZmXlBRYH0Bc8Utmw7smnSisCrQbJRhBphdC9ywmER2Mwyms3IuS7QtJ0iWBpfT6v_XJE1O5z4tD544p9Iu8aoyHRfCrSow69tvOerSeNSj87RiZ2ZedNIlak9XfVPhx_qGB6jSmwEYfG4VTxe_8nNOSZ_1vk8-Pfd2OtCigtu2hV9xRaO2ZOk8e_2I6aUMABO2fF_lhmggAq4g52gN8Vu_ZNGme0m2VFM9x05SerY0tkJhs5uPVqvryKUFt_eK9_SYeIm-S0cxHBulPOVTZuY1a4alQGn5Ude2j9KDwcJMVBXgKu16R5Gf5SoruboABIgSYffHTGms77J19rk5fUeL5bO1tvn8VdjbajI_QAAAAAAAAAACBAWISkv"
+  },
+  "spec_version": "0.1",
+  "target": {
+    "location": "local",
+    "name": "filesystem/read_file",
+    "provider": "mcp:filesystem",
+    "type": "tool"
+  }
+}

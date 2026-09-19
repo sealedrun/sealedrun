@@ -1,0 +1,300 @@
+:root {
+  --bg: #0b0e14;
+  --panel: #121722;
+  --border: #232b3a;
+  --text: #e6e9ef;
+  --muted: #8b95a7;
+  --accent: #5cc8ff;
+  --ok: #3ddc97;
+  --warn: #ffb454;
+  --bad: #ff6b6b;
+  --local: #3ddc97;
+  --cloud: #ffb454;
+  --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font:
+    14px/1.5 system-ui,
+    -apple-system,
+    "Segoe UI",
+    sans-serif;
+}
+
+a {
+  color: var(--accent);
+}
+
+code,
+.mono {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.layout {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 24px 16px 64px;
+}
+
+.header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.header h1 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.header span {
+  color: var(--muted);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 16px;
+}
+
+@media (max-width: 900px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.panel h2 {
+  margin: 0 0 12px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.dropzone {
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 24px 16px;
+  text-align: center;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.dropzone.active {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.dropzone input {
+  display: none;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.list li {
+  padding: 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.list li:hover,
+.list li.selected {
+  background: rgba(92, 200, 255, 0.08);
+}
+
+.status {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  border: 1px solid currentColor;
+}
+
+.status.ok {
+  color: var(--ok);
+}
+
+.status.bad {
+  color: var(--bad);
+}
+
+.status.warn {
+  color: var(--warn);
+}
+
+.summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.summary div {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 12px;
+}
+
+.summary b {
+  display: block;
+  font-size: 18px;
+}
+
+.summary span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.feed {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.step {
+  display: grid;
+  grid-template-columns: 48px 1fr;
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  cursor: pointer;
+}
+
+.step.open {
+  border-color: var(--accent);
+}
+
+.step .seq {
+  color: var(--muted);
+  font-family: var(--mono);
+}
+
+.step .line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.step .kind {
+  font-weight: 600;
+}
+
+.step .arrow {
+  color: var(--muted);
+}
+
+.tag {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.tag.local {
+  color: var(--local);
+  border-color: var(--local);
+}
+
+.tag.cloud {
+  color: var(--cloud);
+  border-color: var(--cloud);
+}
+
+.tag.label {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.tag.blocked,
+.tag.error {
+  color: var(--bad);
+  border-color: var(--bad);
+}
+
+.tag.redirect,
+.tag.require_approval {
+  color: var(--warn);
+  border-color: var(--warn);
+}
+
+.step .why {
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+.detail {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.detail dl {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  gap: 4px 12px;
+  margin: 0;
+}
+
+.detail dt {
+  color: var(--muted);
+}
+
+.detail dd {
+  margin: 0;
+  word-break: break-all;
+}
+
+.detail pre {
+  margin: 8px 0 0;
+  padding: 8px;
+  background: var(--bg);
+  border-radius: 6px;
+  overflow: auto;
+  max-height: 320px;
+}
+
+.error {
+  color: var(--bad);
+  margin-top: 8px;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+button {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+  font: inherit;
+}

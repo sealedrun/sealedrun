@@ -1,0 +1,39 @@
+{
+  "bad-anchor.jsonl": {
+    "check": "anchor",
+    "seq": 3
+  },
+  "broken-prev-hash.jsonl": {
+    "check": "chain",
+    "seq": 4
+  },
+  "expired-delegation.jsonl": {
+    "check": "delegation",
+    "delegation": "expired-delegation.delegation.json",
+    "seq": 3
+  },
+  "gap-in-seq.jsonl": {
+    "check": "seq",
+    "seq": 3
+  },
+  "record-after-run-end.jsonl": {
+    "check": "run_end",
+    "seq": 9
+  },
+  "reordered.jsonl": {
+    "check": "seq",
+    "seq": 2
+  },
+  "resigned-by-other-key.jsonl": {
+    "check": "signature",
+    "seq": 1
+  },
+  "resigned-with-agent-key.jsonl": {
+    "check": "chain",
+    "seq": 2
+  },
+  "tampered-field.jsonl": {
+    "check": "hash",
+    "seq": 1
+  }
+}
