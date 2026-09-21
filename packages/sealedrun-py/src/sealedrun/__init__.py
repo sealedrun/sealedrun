@@ -1,3 +1,8 @@
+"""Tamper-evident, hybrid-signed hash-chain records of AI agent steps.
+
+Reference implementation of SPEC.md: writing runs, delegations, bundles and their verification.
+"""
+
 from sealedrun.bundle import Bundle, BundleReport, read_bundle, verify_bundle, write_bundle
 from sealedrun.canonical import canonicalize
 from sealedrun.delegation import covers, create_delegation, verify_delegation
@@ -7,7 +12,7 @@ from sealedrun.keys import PROFILES, KeySet, PrivateKeySet
 from sealedrun.records import RunWriter, payload_ref
 from sealedrun.verify import RunReport, verify_run
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 __all__ = [
     "PROFILES",

@@ -16,6 +16,14 @@
     "check": "seq",
     "seq": 3
   },
+  "malformed-anchor-extension.jsonl": {
+    "check": "schema",
+    "seq": 3
+  },
+  "receipt-digest-mismatch.jsonl": {
+    "check": "anchor",
+    "seq": 3
+  },
   "record-after-run-end.jsonl": {
     "check": "run_end",
     "seq": 9

@@ -1,5 +1,6 @@
 import io
 import json
+import time
 import zipfile
 from typing import Any
 
@@ -107,3 +108,66 @@ def test_manifest_flags_must_match(bundle_bytes: bytes) -> None:
     with pytest.raises(VerificationError) as info:
         verify_bundle(bundle)
     assert info.value.check == "manifest"
+
+
+def _bomb(size: int) -> bytes:
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("manifest.json", b"{}")
+        zf.writestr("payloads/zeros", b"\0" * size)
+    return out.getvalue()
+
+
+def test_entry_size_limit() -> None:
+    with pytest.raises(VerificationError, match="entry exceeds"):
+        read_bundle(_bomb(2_000_000), max_entry_bytes=1_000_000)
+
+
+def test_total_size_limit() -> None:
+    with pytest.raises(VerificationError, match="uncompressed size"):
+        read_bundle(_bomb(2_000_000), max_total_bytes=1_000_000)
+
+
+def test_manifest_size_limit() -> None:
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("manifest.json", b" " * (4 * 1024 * 1024 + 1))
+    with pytest.raises(VerificationError, match="entry exceeds"):
+        read_bundle(out.getvalue())
+
+
+def test_unsortable_array_fails_fast(bundle_bytes: bytes) -> None:
+    with zipfile.ZipFile(io.BytesIO(bundle_bytes)) as zf:
+        manifest = json.loads(zf.read("manifest.json"))
+    manifest["delegations"] = [{"a": i} for i in range(4000)]
+    started = time.perf_counter()
+    with pytest.raises(VerificationError) as info:
+        read_bundle(_rewrite(bundle_bytes, "manifest.json", json.dumps(manifest).encode()))
+    assert info.value.check == "schema"
+    assert time.perf_counter() - started < 2
+
+
+def test_limits_do_not_affect_valid_bundle(bundle_bytes: bytes) -> None:
+    assert read_bundle(bundle_bytes, max_entry_bytes=1_000_000).manifest["bundle_id"]
+
+
+def test_malformed_archive_has_generic_message(bundle_bytes: bytes) -> None:
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w") as zf:
+        zf.writestr("manifest.json", b"{not json")
+    with pytest.raises(VerificationError, match="malformed archive"):
+        read_bundle(out.getvalue())
+
+
+def test_manifest_principal_must_match_delegations(
+    bundle_bytes: bytes, agent: PrivateKeySet
+) -> None:
+    from sealedrun.signing import DOMAIN_MANIFEST, seal
+
+    manifest = dict(read_bundle(bundle_bytes).manifest)
+    manifest.pop("principal_signatures")
+    manifest["principal_id"] = PrivateKeySet.generate().public.kid
+    manifest = seal(manifest, DOMAIN_MANIFEST, agent)
+    tampered = _rewrite(bundle_bytes, "manifest.json", json.dumps(manifest).encode())
+    with pytest.raises(VerificationError, match="principal differs"):
+        verify_bundle(read_bundle(tampered))

@@ -7,23 +7,29 @@ License: CC-BY-4.0. Companion to `SPEC.md`.
 - **Operator**: runs the recorder and holds the Agent keys. Usually the same organisation as the
   Principal.
 - **Principal**: the accountable party whose keys sign delegations.
-- **Verifier**: auditor, insurer, counterparty, regulator. Has the bundle and public keys.
-  Does not trust the operator.
+- **Verifier**: auditor, insurer, counterparty, regulator. Has the bundle and, from a source other
+  than the bundle, the `principal_id` of each Principal it trusts. Does not trust the operator.
 - **Witness**: an external log (Sigstore Rekor, RFC 3161 timestamp authority, SCITT) the operator
   does not control.
 
 ## What a valid bundle proves
 
-| Claim                                                                                            | Mechanism                                                  |
-| ------------------------------------------------------------------------------------------------ | ---------------------------------------------------------- |
-| These records were produced in this order and none was inserted, removed or reordered later      | Hash chain over JCS bytes with `seq` and `prev_hash`       |
-| Each record was signed by the key set identified by `agent_id`                                   | Hybrid Ed25519 + ML-DSA-65 signatures over the record hash |
-| That agent was authorised by the Principal for the time window of the run                        | Delegation signed by Principal keys, bound in `run_start`  |
-| The request and response bodies, if present, are the ones the agent saw                          | Payload digests inside the signed record                   |
-| A body that is now missing existed with this digest and was removed at this time for this reason | `tombstone` record                                         |
-| The chain head existed no later than the witness time                                            | `anchor` record with a witness receipt                     |
-| A labelled item went to this endpoint under this policy rule                                     | `data_labels`, `target`, `policy` inside the signed record |
-| The bundle files were not altered after export                                                   | Manifest `files` digests and exporter signature            |
+| Claim                                                                                                                                              | Mechanism                                                  |
+| -------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| These records were produced in this order and none was inserted, removed or reordered later                                                        | Hash chain over JCS bytes with `seq` and `prev_hash`       |
+| Each record was signed by the key set identified by `agent_id`                                                                                     | Hybrid Ed25519 + ML-DSA-65 signatures over the record hash |
+| That agent was authorised by the Principal for the time window of the run                                                                          | Delegation signed by Principal keys, bound in `run_start`  |
+| The request and response bodies, if present, are the ones the agent saw                                                                            | Payload digests inside the signed record                   |
+| A body that is now missing existed with this digest and was removed at this time for this reason                                                   | `tombstone` record                                         |
+| The chain head existed no later than the witness time, once the receipt has been re-checked against the witness (the 0.1 verifiers do not do this) | `anchor` record with a witness receipt                     |
+| A labelled item went to this endpoint under this policy rule                                                                                       | `data_labels`, `target`, `policy` inside the signed record |
+| The bundle files were not altered after export                                                                                                     | Manifest `files` digests and exporter signature            |
+
+Every row above is relative to the Principal named in the bundle. The keys inside a bundle are
+not a root of trust: anyone can create a Principal and produce a bundle that is consistent end to
+end. A bundle says who signed it only after the verifier has compared its `principal_id` with an
+identifier obtained out of band (`SPEC.md` 13.2, step 2). Without that comparison a verifier has
+shown integrity, not origin, and its report says so.
 
 ## What it does not prove
 
@@ -42,22 +48,24 @@ License: CC-BY-4.0. Companion to `SPEC.md`.
 
 ## Attacks and how they are handled
 
-| Attack                                                          | Detected by                                                    | Notes                                                                 |
-| --------------------------------------------------------------- | -------------------------------------------------------------- | --------------------------------------------------------------------- |
-| Edit a field in a stored record                                 | Hash recomputation fails                                       |                                                                       |
-| Delete a record from the middle of a run                        | `seq` gap or `prev_hash` mismatch                              |                                                                       |
-| Truncate the tail of a run                                      | Missing `run_end`; last anchored hash absent from the run      | Only detectable with anchors or a later bundle that continues the run |
-| Insert a back-dated record                                      | `prev_hash` linkage fails for every later record               |                                                                       |
-| Replace a payload body                                          | Payload digest mismatch                                        |                                                                       |
-| Forge a record with a different key                             | Signature verification fails; `agent_id` not in any delegation |                                                                       |
-| Operator re-signs the whole run with the real Agent key         | Anchored hashes no longer appear in the run                    | This is why anchors are part of the MVP, not an option                |
-| Operator rewrites the run **and** all anchors                   | Witness log entries cannot be removed by the operator          | Verifier must query the witness or hold a copy of the receipts        |
-| Replay a Delegation or Manifest signature as a Record signature | Domain separation in the signing input                         |                                                                       |
-| Present an old, valid bundle as current                         | `created_at`, `complete` flag, anchor times                    | Verifier compares against the latest anchor known to them             |
-| Record steps under an expired or future delegation              | `occurred_at` outside `[not_before, not_after]`                |                                                                       |
-| Quantum adversary forges Ed25519 signatures                     | ML-DSA-65 signature still required                             | Hybrid profile                                                        |
-| Implementation bug in the ML-DSA library                        | Ed25519 signature still required                               | Hybrid profile                                                        |
-| Verifier and operator disagree on canonical bytes               | RFC 8785 and the test vectors                                  | Conformance is byte-for-byte                                          |
+| Attack                                                          | Detected by                                                        | Notes                                                                                                                                                   |
+| --------------------------------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Edit a field in a stored record                                 | Hash recomputation fails                                           |                                                                                                                                                         |
+| Delete a record from the middle of a run                        | `seq` gap or `prev_hash` mismatch                                  |                                                                                                                                                         |
+| Truncate the tail of a run                                      | Missing `run_end`; last anchored hash absent from the run          | Only detectable with anchors or a later bundle that continues the run                                                                                   |
+| Insert a back-dated record                                      | `prev_hash` linkage fails for every later record                   |                                                                                                                                                         |
+| Replace a payload body                                          | Payload digest mismatch                                            |                                                                                                                                                         |
+| Forge a record with a different key                             | Signature verification fails; `agent_id` not in any delegation     |                                                                                                                                                         |
+| Operator re-signs the whole run with the real Agent key         | Anchored hashes no longer appear in the run                        | This is why anchors are part of the MVP, not an option                                                                                                  |
+| Operator rewrites the run **and** all anchors                   | Witness log entries cannot be removed by the operator              | Not checked by the 0.1 verifiers: they bind `receipt.digest` to the chain but do not verify the witness proof. The relying party must query the witness |
+| Replay a Delegation or Manifest signature as a Record signature | Domain separation in the signing input                             |                                                                                                                                                         |
+| Present an old, valid bundle as current                         | `created_at`, `complete` flag, anchor times                        | Verifier compares against the latest anchor known to them                                                                                               |
+| Mint a new Principal and sign a whole bundle with it            | `principal_id` is not in the verifier's trusted set: check `trust` | Verifier must hold the trusted `principal_id` out of band; else the report says "not authenticated"                                                     |
+| Claim a DID as `principal_id` while signing with unrelated keys | Verifier rejects every `did:` principal                            | No DID resolver in 0.1; `principal_id` must equal the key set `kid`                                                                                     |
+| Record steps under an expired or future delegation              | `occurred_at` outside `[not_before, not_after]`                    |                                                                                                                                                         |
+| Quantum adversary forges Ed25519 signatures                     | ML-DSA-65 signature still required                                 | Hybrid profile                                                                                                                                          |
+| Implementation bug in the ML-DSA library                        | Ed25519 signature still required                                   | Hybrid profile                                                                                                                                          |
+| Verifier and operator disagree on canonical bytes               | RFC 8785 and the test vectors                                      | Conformance is byte-for-byte                                                                                                                            |
 
 ## Key compromise
 

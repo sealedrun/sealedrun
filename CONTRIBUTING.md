@@ -19,7 +19,7 @@ pnpm lint && pnpm typecheck && pnpm test
 ## Rules
 
 - Sign the [CLA](CLA.md) in your first pull request.
-- Core code (`packages/`, `services/`, `apps/`, `spec/`) is Apache-2.0; `SPEC.md` is CC-BY-4.0;
-  `ee/` has its own license and is not open to external contributions.
+- Core code (`packages/`, `services/`, `apps/`, `spec/`) is Apache-2.0; `SPEC.md` and
+  `TRUST.md` are CC-BY-4.0.
 - Changes to `spec/schema` or `spec/vectors` require a `SPEC.md` update and a CHANGELOG entry.
 - Keep comments to the non-obvious "why"; the code says "what".

@@ -1,5 +1,15 @@
+/** A JSON value as defined by RFC 8259. */
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 
+/**
+ * Serializes a value in the JSON Canonicalization Scheme (RFC 8785), the form every hash and
+ * signature is computed over (SPEC 3).
+ *
+ * @remarks
+ * Object keys are sorted by UTF-16 code units, as JCS requires, not by locale.
+ *
+ * @throws TypeError if the value contains NaN or an infinity.
+ */
 export function canonicalize(value: Json): string {
   if (value === null || typeof value === "boolean" || typeof value === "string") {
     return JSON.stringify(value);
@@ -16,6 +26,7 @@ export function canonicalize(value: Json): string {
   return `{${parts.join(",")}}`;
 }
 
+/** UTF-8 bytes of {@link canonicalize}. */
 export function canonicalBytes(value: Json): Uint8Array {
   return new TextEncoder().encode(canonicalize(value));
 }

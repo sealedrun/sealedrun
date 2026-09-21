@@ -1,7 +1,10 @@
+import json
 from pathlib import Path
 from typing import Any
 
 from fastapi.testclient import TestClient
+from sealedrun_recorder.main import create_app
+from sealedrun_recorder.settings import Settings
 
 
 def test_health(client: TestClient) -> None:
@@ -32,6 +35,8 @@ def test_upload_and_browse(client: TestClient, valid_zip: bytes, upload: Any) ->
     llm = records[1]
     assert client.get(f"/api/records/{llm['record_id']}").json()["hash"] == llm["hash"]
     body = client.get(f"/api/records/{llm['record_id']}/payload/request")
+    assert body.headers["content-disposition"].startswith("attachment")
+    assert body.headers["x-content-type-options"] == "nosniff"
     assert body.status_code == 200
     assert body.headers["content-type"].startswith("application/json")
     assert b"gpt-4.1" in body.content
@@ -74,3 +79,65 @@ def test_garbage_rejected(client: TestClient, upload: Any) -> None:
     assert response.json()["detail"]["check"] == "bundle"
     assert client.get("/api/runs/nope").status_code == 404
     assert client.get("/api/records/nope").status_code == 404
+
+
+def test_unsafe_payload_media_type_is_downgraded(
+    client: TestClient, upload: Any, valid_zip: bytes
+) -> None:
+    from sealedrun_recorder.db import RecordRow
+
+    upload(client, "/api/bundles", valid_zip)
+    run_id = client.get("/api/runs").json()[0]["run_id"]
+    llm = client.get(f"/api/runs/{run_id}/records").json()[1]
+    with client.app.state.sessions() as session:  # type: ignore[attr-defined]
+        row = session.get(RecordRow, llm["record_id"])
+        document = {**row.document}
+        document["payload"] = {**document["payload"], "request_media_type": "text/html"}
+        row.document = document
+        session.commit()
+    body = client.get(f"/api/records/{llm['record_id']}/payload/request")
+    assert body.headers["content-type"] == "application/octet-stream"
+    assert "sandbox" in body.headers["content-security-policy"]
+
+
+def test_pagination(client: TestClient, upload: Any, valid_zip: bytes) -> None:
+    upload(client, "/api/bundles", valid_zip)
+    run_id = client.get("/api/runs").json()[0]["run_id"]
+    page = client.get(f"/api/runs/{run_id}/records", params={"limit": 2, "offset": 3}).json()
+    assert [r["seq"] for r in page] == [3, 4]
+    assert client.get("/api/runs", params={"limit": 1, "offset": 1}).json() == []
+    assert client.get("/api/bundles", params={"limit": 0}).status_code == 422
+    assert client.get("/api/runs", params={"limit": 100000}).status_code == 422
+
+
+def _trusting(tmp_path: Path, principals: list[str]) -> TestClient:
+    settings = Settings(data_dir=tmp_path, ui_dir=tmp_path / "no-ui", trusted_principals=principals)
+    return TestClient(create_app(settings), base_url="http://localhost")
+
+
+def test_unknown_principal_refused_when_trust_anchor_is_set(
+    tmp_path: Path, upload: Any, vectors: Path, valid_zip: bytes
+) -> None:
+    genuine = json.loads((vectors.parent / "keys.json").read_text())["principal"]["kid"]
+    forged = (vectors / "unknown-principal.zip").read_bytes()
+    with _trusting(tmp_path, [genuine]) as client:
+        refused = upload(client, "/api/bundles", forged)
+        assert refused.status_code == 422
+        assert refused.json()["detail"]["check"] == "trust"
+        assert upload(client, "/api/verify", forged).json()["check"] == "trust"
+        stored = upload(client, "/api/bundles", valid_zip)
+        assert stored.status_code == 201
+        assert stored.json()["principal_trusted"] is True
+        assert all(run["principal_trusted"] for run in client.get("/api/runs").json())
+
+
+def test_without_trust_anchor_bundles_are_stored_as_not_authenticated(
+    client: TestClient, upload: Any, vectors: Path
+) -> None:
+    forged = (vectors / "unknown-principal.zip").read_bytes()
+    stored = upload(client, "/api/bundles", forged)
+    assert stored.status_code == 201
+    assert stored.json()["principal_trusted"] is False
+    verdict = upload(client, "/api/verify", forged).json()
+    assert verdict["ok"] is True and verdict["principal_trusted"] is False
+    assert verdict["principal_id"] == stored.json()["principal_id"]

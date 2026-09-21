@@ -1,6 +1,6 @@
 [project]
 name = "sealedrun-recorder"
-version = "0.1.0"
+version = "0.1.1"
 description = "SealedRun recorder service: API and UI host for evidence bundles"
 license = "Apache-2.0"
 requires-python = ">=3.12"

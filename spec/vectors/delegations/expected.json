@@ -1,7 +1,20 @@
 {
+  "aat-compat-1-high-s.json": {
+    "agent_id": "to9YFOnP-2_Ra2ANTvUG-NIJai3WR1oopaAW97t29-w",
+    "hash": "67ad5aca823758e8f3f81402491d8b5fa70860aa6fe61181cdcf432b59e7bf45",
+    "ok": false,
+    "principal_id": "9EUYhICIRQE0SZfiff6n61tje6a92I27MhknJyyFSUs"
+  },
+  "aat-compat-1.json": {
+    "agent_id": "to9YFOnP-2_Ra2ANTvUG-NIJai3WR1oopaAW97t29-w",
+    "hash": "67ad5aca823758e8f3f81402491d8b5fa70860aa6fe61181cdcf432b59e7bf45",
+    "ok": true,
+    "principal_id": "9EUYhICIRQE0SZfiff6n61tje6a92I27MhknJyyFSUs"
+  },
   "valid.json": {
     "agent_id": "H342ugmg0Ea-GvTpUDeqxqFKsgeirlcywX047EFubuU",
     "hash": "cb6548d033797d8084a29b37a9ce9dbc2bb81729952d58cba9554512a9fc247a",
+    "ok": true,
     "principal_id": "qJtRVbgIsIjNNo6VuDr6nQ50Wj3rwEAAuR2e385pby8"
   }
 }

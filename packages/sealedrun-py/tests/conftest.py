@@ -111,7 +111,7 @@ def run(agent: PrivateKeySet, delegation: dict[str, Any], payloads: dict[str, by
                 "type": "rekor",
                 "anchored_hash": writer.head,
                 "anchored_seq": 2,
-                "receipt": {"log_index": 1},
+                "receipt": {"digest": writer.head, "log_index": 1},
                 "witness": "https://rekor.sigstore.dev",
             }
         },

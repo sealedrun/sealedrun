@@ -1178,7 +1178,7 @@ wheels = [
 
 [[package]]
 name = "sealedrun"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "packages/sealedrun-py" }
 dependencies = [
     { name = "cryptography" },
@@ -1197,7 +1197,7 @@ requires-dist = [
 
 [[package]]
 name = "sealedrun-recorder"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "services/recorder" }
 dependencies = [
     { name = "fastapi" },

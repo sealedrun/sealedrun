@@ -1,6 +1,6 @@
 [project]
 name = "sealedrun"
-version = "0.1.0"
+version = "0.1.1"
 description = "SealedRun Record: canonicalization, hash chain, hybrid signatures and evidence bundles"
 readme = "README.md"
 license = "Apache-2.0"
@@ -25,3 +25,9 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/sealedrun"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"../../spec/schema" = "sealedrun/_schema"
+
+[tool.hatch.build.targets.sdist.force-include]
+"../../spec/schema" = "src/sealedrun/_schema"

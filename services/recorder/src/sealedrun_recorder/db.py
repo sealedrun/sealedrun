@@ -1,3 +1,5 @@
+"""SQLAlchemy models and engine setup for the recorder database."""
+
 from __future__ import annotations
 
 from collections.abc import Iterator
@@ -17,10 +19,12 @@ from sqlalchemy.orm import (
 
 
 class Base(DeclarativeBase):
-    pass
+    """Declarative base that collects the recorder tables."""
 
 
 class BundleRow(Base):
+    """An imported bundle: manifest, verification report and the archive as uploaded."""
+
     __tablename__ = "bundles"
 
     bundle_id: Mapped[str] = mapped_column(String(36), primary_key=True)
@@ -31,12 +35,14 @@ class BundleRow(Base):
     size_bytes: Mapped[int]
     manifest: Mapped[dict[str, Any]] = mapped_column(JSON)
     report: Mapped[dict[str, Any]] = mapped_column(JSON)
-    archive: Mapped[bytes] = mapped_column(LargeBinary)
+    archive: Mapped[bytes] = mapped_column(LargeBinary, deferred=True)
 
     runs: Mapped[list[RunRow]] = relationship(back_populates="bundle", cascade="all, delete-orphan")
 
 
 class DelegationRow(Base):
+    """A signed Delegation in which a Principal authorises an agent's keys (SPEC section 2)."""
+
     __tablename__ = "delegations"
 
     delegation_id: Mapped[str] = mapped_column(String(36), primary_key=True)
@@ -46,6 +52,8 @@ class DelegationRow(Base):
 
 
 class RunRow(Base):
+    """A verified run with the figures from its verification report."""
+
     __tablename__ = "runs"
 
     run_id: Mapped[str] = mapped_column(String(36), primary_key=True)
@@ -69,6 +77,8 @@ class RunRow(Base):
 
 
 class RecordRow(Base):
+    """A signed record; indexed columns are copies of fields in `document`."""
+
     __tablename__ = "records"
 
     record_id: Mapped[str] = mapped_column(String(36), primary_key=True)
@@ -88,6 +98,8 @@ class RecordRow(Base):
 
 
 class PayloadRow(Base):
+    """A payload body keyed by its digest, shared by every record that references it."""
+
     __tablename__ = "payloads"
 
     digest: Mapped[str] = mapped_column(String(128), primary_key=True)
@@ -97,6 +109,11 @@ class PayloadRow(Base):
 
 
 def make_engine(url: str) -> Engine:
+    """Create the engine and any missing tables.
+
+    SQLite connections get WAL journaling and foreign key enforcement, and may be used from
+    any thread because FastAPI runs sync routes in a thread pool.
+    """
     engine = create_engine(
         url, connect_args={"check_same_thread": False} if url.startswith("sqlite") else {}
     )
@@ -112,9 +129,11 @@ def make_engine(url: str) -> Engine:
 
 
 def session_factory(engine: Engine) -> sessionmaker[Session]:
+    """Return a session factory whose objects stay readable after commit."""
     return sessionmaker(engine, expire_on_commit=False)
 
 
 def session_scope(factory: sessionmaker[Session]) -> Iterator[Session]:
+    """Yield a session from the factory and close it afterwards."""
     with factory() as session:
         yield session

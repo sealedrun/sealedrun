@@ -2,7 +2,7 @@ from typing import Any
 
 import pytest
 from sealedrun import PROFILES, KeySet, PrivateKeySet
-from sealedrun.keys import verify_one
+from sealedrun.keys import P256_ORDER, Es256Signer, verify_one
 from sealedrun.signing import signing_input
 
 
@@ -48,3 +48,15 @@ def test_verify_one_rejects_garbage() -> None:
     assert not verify_one("ed25519", b"\0" * 32, b"m", b"\0" * 64)
     assert not verify_one("ml-dsa-65", b"\0" * 10, b"m", b"\0" * 10)
     assert not verify_one("nope", b"", b"", b"")
+
+
+def test_es256_is_low_s_only() -> None:
+    signer = Es256Signer.generate()
+    for i in range(40):
+        message = f"message {i}".encode()
+        signature = signer.sign(message)
+        s = int.from_bytes(signature[32:], "big")
+        assert s <= P256_ORDER // 2
+        assert verify_one("es256", signer.public_bytes(), message, signature)
+        flipped = signature[:32] + (P256_ORDER - s).to_bytes(32, "big")
+        assert not verify_one("es256", signer.public_bytes(), message, flipped)

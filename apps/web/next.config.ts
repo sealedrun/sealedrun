@@ -4,6 +4,7 @@ const apiOrigin = process.env.SEALEDRUN_API_ORIGIN ?? "http://localhost:8080";
 
 const config: NextConfig = {
   output: "export",
+  agentRules: false,
   trailingSlash: true,
   reactStrictMode: true,
   async rewrites() {

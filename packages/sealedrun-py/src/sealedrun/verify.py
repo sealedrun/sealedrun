@@ -1,3 +1,5 @@
+"""Verification of a single run (SPEC 13.2)."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -14,12 +16,25 @@ from sealedrun.timeutil import parse_timestamp
 
 @dataclass
 class RunReport:
+    """What `verify_run` established about a run.
+
+    Attributes:
+        first_seq: Sequence number of the first record; above 0 for a partial run.
+        last_hash: Hash of the last record, the value a continuation must chain from.
+        complete: True when the run ends with `run_end`.
+        anchors: Number of anchor records whose reference into the chain was checked.
+        anchors_witness_verified: Anchors whose witness proof was checked cryptographically.
+            Always 0 in 0.1 (TRUST.md).
+        labels_sent_to_cloud: Per data label, the count of non-blocked records with a cloud target.
+    """
+
     run_id: str
     record_count: int
     first_seq: int
     last_hash: str
     complete: bool
     anchors: int = 0
+    anchors_witness_verified: int = 0
     labels_sent_to_cloud: dict[str, int] = field(default_factory=dict)
 
 
@@ -30,6 +45,15 @@ def verify_run(
     payloads: dict[str, bytes] | None = None,
     expected_prev_hash: str | None = None,
 ) -> RunReport:
+    """Verify schema, chain, hashes, delegation and signatures of one run, in record order.
+
+    `delegations` maps `delegation_id` to the delegation object. When `payloads` (digest to body)
+    is given, bodies stored in the bundle or inline are checked against their references. A run
+    that starts above seq 0 chains from `expected_prev_hash` and takes the first delegation issued
+    to its agent, since it has no `run_start` to name one.
+
+    Raises VerificationError at the first failed check.
+    """
     if not records:
         raise VerificationError("empty", "run has no records")
     run_id = records[0]["run_id"]
@@ -46,10 +70,10 @@ def verify_run(
 
     for index, record in enumerate(records):
         seq = first_seq + index
-        errors = validate("record.json", record)
+        errors = validate("record.json", record, first_only=True)
         if errors:
             raise VerificationError("schema", "; ".join(errors), run_id, seq)
-        ext_errors = validate_extensions(record.get("extensions", {}))
+        ext_errors = validate_extensions(record.get("extensions", {}), first_only=True)
         if ext_errors:
             raise VerificationError("schema", "; ".join(ext_errors), run_id, seq)
         if record["run_id"] != run_id:
@@ -137,9 +161,18 @@ def _check_payload(
 def _check_anchor(
     record: dict[str, Any], records: list[dict[str, Any]], first_seq: int, run_id: str, seq: int
 ) -> None:
+    """Check that an anchor points at an earlier record of this run and carries its hash.
+
+    SPEC 8.1: the receipt digest is the digest the witness was given, so it must equal
+    `anchored_hash`. The witness signature is not checked in 0.1.
+    """
     anchor = record["extensions"]["sealedrun.anchor"]
     index = anchor["anchored_seq"] - first_seq
     if index < 0 or index >= len(records) or anchor["anchored_seq"] >= seq:
         raise VerificationError("anchor", "anchored_seq not in run before anchor", run_id, seq)
     if records[index]["hash"] != anchor["anchored_hash"]:
         raise VerificationError("anchor", "anchored_hash does not match record", run_id, seq)
+    if anchor["receipt"]["digest"] != anchor["anchored_hash"]:
+        raise VerificationError(
+            "anchor", "receipt digest does not match anchored_hash", run_id, seq
+        )

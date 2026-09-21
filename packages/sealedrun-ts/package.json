@@ -1,6 +1,6 @@
 {
   "name": "@sealedrun/core",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "SealedRun Record verification: canonicalization, hash chain, hybrid signatures",
   "license": "Apache-2.0",
   "type": "module",
@@ -31,6 +31,8 @@
     "@eslint/js": "^9.30.0",
     "@types/node": "^22.16.0",
     "eslint": "^9.30.0",
+    "eslint-plugin-jsdoc": "^64.5.4",
+    "eslint-plugin-tsdoc": "^0.5.3",
     "typescript": "^5.8.3",
     "typescript-eslint": "^8.35.0",
     "vitest": "^3.2.4"

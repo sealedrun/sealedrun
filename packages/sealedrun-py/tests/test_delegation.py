@@ -25,6 +25,10 @@ def test_self_delegation(agent: PrivateKeySet) -> None:
     assert verify_delegation(d) is None
 
 
-def test_did_principal(principal: PrivateKeySet, agent: PrivateKeySet) -> None:
+def test_did_principal_rejected(principal: PrivateKeySet, agent: PrivateKeySet) -> None:
     d = create_delegation(principal, agent.public, principal_id="did:web:example.com")
-    assert verify_delegation(d) is None
+    assert "did" in (verify_delegation(d) or "")
+
+
+def test_wrong_principal_id(delegation: dict[str, Any]) -> None:
+    assert verify_delegation({**delegation, "principal_id": "x"}) is not None

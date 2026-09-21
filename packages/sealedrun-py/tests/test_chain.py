@@ -110,7 +110,7 @@ def test_bad_anchor(run: RunWriter, delegation: dict[str, Any], agent: PrivateKe
                 "type": "rekor",
                 "anchored_hash": "f" * 64,
                 "anchored_seq": 2,
-                "receipt": {},
+                "receipt": {"digest": "f" * 64},
                 "witness": "x",
             }
         },
@@ -139,3 +139,22 @@ def test_sha384_run(principal: PrivateKeySet, agent: PrivateKeySet) -> None:
     writer.end()
     assert len(writer.records[0]["hash"]) == 96
     assert verify_run(writer.records, {d["delegation_id"]: d}).complete
+
+
+def test_receipt_digest_must_match(run: RunWriter, delegation: dict[str, Any], agent: Any) -> None:
+    writer = RunWriter(agent, delegation, run_id=run.records[0]["run_id"])
+    writer.records = list(run.records[:3])
+    writer.append(
+        "anchor",
+        target={"type": "witness", "name": "rekor"},
+        extensions={
+            "sealedrun.anchor": {
+                "type": "rekor",
+                "anchored_hash": run.records[2]["hash"],
+                "anchored_seq": 2,
+                "receipt": {"digest": "f" * 64},
+                "witness": "x",
+            }
+        },
+    )
+    _expect(writer.records, delegation, "anchor", 3)

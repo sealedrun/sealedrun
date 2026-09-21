@@ -61,11 +61,10 @@ print(report.complete, report.labels_sent_to_cloud)
 | `spec/schema/`           | JSON Schema for records, delegations and bundles                                             | Apache-2.0 |
 | `spec/vectors/`          | Known-answer test vectors for independent implementations                                    | Apache-2.0 |
 | `spec/examples/`         | Example records and an example bundle                                                        | Apache-2.0 |
-| `packages/sealedrun-py/` | Reference Python implementation (`sealedrun` on PyPI)                                        | Apache-2.0 |
+| `packages/sealedrun-py/` | Reference Python implementation (`sealedrun`, not yet on PyPI)                               | Apache-2.0 |
 | `packages/sealedrun-ts/` | TypeScript verification library (`@sealedrun/core`), used by the web UI                      | Apache-2.0 |
 | `services/recorder/`     | FastAPI service: bundle upload and verification API, hosts the UI (proxy arrives in stage 1) | Apache-2.0 |
 | `apps/web/`              | Next.js UI: bundle inspector and verifier                                                    | Apache-2.0 |
-| `ee/`                    | Commercial features (not yet present)                                                        | Commercial |
 
 ## Cryptography
 
@@ -83,6 +82,23 @@ docker compose --profile postgres up -d   # with PostgreSQL; set SEALEDRUN_DATAB
 
 Open http://localhost:8080, drop a bundle (for example `spec/examples/bundle.zip`) and the browser
 verifies it. "Store in recorder" keeps it on the server.
+
+> **No authentication by default.** The recorder listens on `127.0.0.1` only and compose publishes
+> the port to localhost. Before exposing it to a network, set `SEALEDRUN_API_TOKEN` to a long random
+> value and put TLS in front. Clients send `Authorization: Bearer <token>`; the Inspector asks for
+> the token and keeps it for the current tab only. `/api/health` stays open.
+>
+> **A bundle carries its own keys, so "it verifies" is not "it is genuine".** Get the signer's
+> `principal_id` from the signer, not from the bundle, and give it to the verifier:
+> `verify_bundle(bundle, trusted_principals=[...])` in Python, `verifyBundle(bundle, { trustedPrincipals })`
+> in TypeScript, the "Trusted principal ids" box in the Inspector, or
+> `SEALEDRUN_TRUSTED_PRINCIPALS='["<principal_id>"]'` for the recorder, which then refuses bundles
+> from anyone else. Without it a report says `principal_trusted: false`: integrity, not origin.
+>
+> The recorder answers only to the Host names in `SEALEDRUN_ALLOWED_HOSTS` (default
+> `["127.0.0.1", "localhost"]`; add your public name when you expose it). Uploads are accepted from
+> the Inspector's own origin, or from a script that presents the token; a request a foreign web page
+> makes your browser send is refused.
 
 ## Development
 
@@ -105,5 +121,9 @@ semantic conventions (export mapping), EU AI Act Articles 12, 19 and 26 (logging
 ## License
 
 Code and schemas: Apache-2.0. Specification text (`SPEC.md`, `TRUST.md`): CC-BY-4.0.
-Contributions require the [CLA](CLA.md). The `ee/` directory, when it appears, is licensed
-separately.
+Contributions require the [CLA](CLA.md).
+
+## Security
+
+Report vulnerabilities privately, see [SECURITY.md](SECURITY.md). Please do not open public issues
+for them.

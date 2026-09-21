@@ -21,8 +21,9 @@
         "record_id": { "$ref": "../common.json#/$defs/uuid" },
         "fields": {
           "type": "array",
-          "items": { "type": "string", "enum": ["request", "response"] },
           "minItems": 1,
+          "maxItems": 2,
+          "items": { "type": "string", "enum": ["request", "response"] },
           "uniqueItems": true
         },
         "reason": { "type": "string", "minLength": 1 },
@@ -37,7 +38,11 @@
         "type": { "type": "string", "enum": ["rekor", "rfc3161", "scitt", "other"] },
         "anchored_hash": { "$ref": "../common.json#/$defs/digestHex" },
         "anchored_seq": { "type": "integer", "minimum": 0 },
-        "receipt": { "type": "object" },
+        "receipt": {
+          "type": "object",
+          "required": ["digest"],
+          "properties": { "digest": { "$ref": "../common.json#/$defs/digestHex" } }
+        },
         "witness": { "type": "string", "minLength": 1 }
       }
     },

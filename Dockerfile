@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM node:22-alpine AS ui
+FROM node:22-alpine@sha256:b6f26b36c8ff49624cfdac716b8ea1138d606df02586a77d364bb5536a634f85 AS ui
 WORKDIR /src
 RUN corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .prettierrc ./
@@ -11,7 +11,7 @@ COPY packages/sealedrun-ts packages/sealedrun-ts
 COPY apps/web apps/web
 RUN pnpm --filter @sealedrun/core build && pnpm --filter @sealedrun/web build
 
-FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS py
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim@sha256:e5b65587bce7de595f299855d7385fe7fca39b8a74baa261ba1b7147afa78e58 AS py
 WORKDIR /app
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never
 COPY pyproject.toml uv.lock ./
@@ -24,7 +24,7 @@ COPY services/recorder services/recorder
 COPY spec/schema spec/schema
 RUN uv sync --frozen --no-dev --all-packages
 
-FROM python:3.12-slim-bookworm
+FROM python:3.12-slim-bookworm@sha256:392307d22300de8b5986851a12d9176dfc0fc073e65bf6523ebd7dcbeb23564e
 WORKDIR /app
 ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1 \
     SEALEDRUN_DATA_DIR=/data SEALEDRUN_UI_DIR=/app/ui SEALEDRUN_HOST=0.0.0.0 SEALEDRUN_PORT=8080

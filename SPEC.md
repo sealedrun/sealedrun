@@ -89,6 +89,19 @@ Profiles:
   draft-sharif-agent-audit-trail.
 - `sealedrun-hybrid-2` (MAY): `ed25519` + `ml-dsa-87`.
 
+An `ed25519` public key MUST be the canonical encoding of a point of prime order: not the
+identity, no small-order component, `y` below the field prime. In a signature, `R` MUST be
+canonically encoded and MUST NOT be the identity. A verifier MUST reject a key or signature that
+breaks these rules before checking the equation. RFC 8032 permits both the cofactored and the
+cofactorless verification equation, and libraries differ; the two agree on every input that
+passes these checks, so all conforming verifiers return the same answer.
+
+`es256` signatures MUST be low-S: `s` is at most half the order of the P-256 group. A signer that
+obtains a high-S value replaces `s` with `n - s`; a verifier MUST reject a high-S signature. This
+gives every signature exactly one valid encoding. JWS (RFC 7515) does not require low-S, so a
+signature taken from another `es256` implementation may need this normalisation before it is
+placed in a SealedRun object; normalising does not need the private key.
+
 ML-DSA signatures use the pure (non pre-hash) variant with an empty context string. The
 deterministic signing variant SHOULD be used so test vectors are reproducible; verifiers accept
 both variants because verification does not depend on the choice.
@@ -102,8 +115,9 @@ A key set is a JSON object mapping `sig_alg` to a base64url public key:
 ```
 
 The key identifier `kid` of a key set is `base64url(SHA-256(JCS(keyset)))`. `agent_id` is the
-`kid` of the Agent's key set; `principal_id` is the `kid` of the Principal's key set, or a DID
-(`did:…`) whose document resolves to that key set. Rotation creates a new key set and therefore a
+`kid` of the Agent's key set; `principal_id` is the `kid` of the Principal's key set. The `did:…`
+form of `principal_id` is reserved: version 0.1 defines no DID resolution, so a verifier MUST reject
+a Delegation whose `principal_id` starts with `did:`. Rotation creates a new key set and therefore a
 new `kid`; a new Delegation binds it.
 
 ### 4.4 Signing input
@@ -325,15 +339,23 @@ rewrite of the chain is detectable.
     "type": "rekor" | "rfc3161" | "scitt" | "other",
     "anchored_hash": "<hash of record seq N>",
     "anchored_seq": N,
-    "receipt": { "…": "witness-specific proof" },
+    "receipt": { "digest": "<the digest given to the witness>", "…": "witness-specific proof" },
     "witness": "https://rekor.sigstore.dev"
   }
 }
 ```
 
-The anchor record itself is chained after `seq N`. Verifiers with network access MAY re-check the
-receipt against the witness; offline verifiers check that `anchored_hash` equals the hash of the
-record at `anchored_seq` and that the receipt's embedded digest matches.
+The anchor record itself is chained after `seq N`. `receipt.digest` is REQUIRED: it is the digest
+that was submitted to the witness, in the same hex form as `anchored_hash`; every other member of
+`receipt` is witness-specific. A verifier MUST check that `anchored_hash` equals the hash of the
+record at `anchored_seq` and that `receipt.digest` equals `anchored_hash`, and fails with check
+`anchor` otherwise. When a bundle carries `anchors/<record_id>.json`, that file MUST be the
+`receipt` of the anchor record with that `record_id`.
+
+These checks bind the receipt to the chain; they do not authenticate the witness. 0.1 defines no
+offline verification of the witness-specific proof, so a verifier MUST report how many anchors
+had their proof verified (always zero for a 0.1 verifier) and a relying party re-checks the
+receipt against the witness.
 
 ### 8.2 Cadence
 
@@ -451,21 +473,39 @@ anchors/<record_id>.json     optional raw witness receipts
 | `hash`         | hex       |                                                                                        |
 | `signatures`   | object    | Exporter's Agent signatures; MAY include `principal_signatures`                        |
 
+Bounds, enforced by the schemas so that a reader can reject an oversized document before doing
+any other work: `delegations` and `runs` hold at most 1024 items each, a Record's `data_labels`
+at most 64, and `manifest.json` is at most 4 MiB. Readers MUST check these before any hash or
+signature work and SHOULD stop at the first schema error on untrusted input.
+
 `complete` is true when the run contains a `run_end` record. A bundle MAY contain a slice of a
 run; then `first_hash` is the `prev_hash` of the first included record so the slice can be joined
 to an earlier bundle.
 
 ### 13.2 Verification procedure
 
+A bundle carries its own public keys, so steps 1 and 3 to 6 only show that the bundle is
+internally consistent: anyone can mint a Principal, delegate to an Agent and produce a bundle that
+passes them. Who signed it is settled by step 2 alone. The verifier obtains the identifiers of the
+Principals it trusts out of band (a contract, a registry, the Principal's website) and never from
+the bundle.
+
 1. Read `manifest.json`; verify its signatures against the exporter's key set found in a
-   delegation in the bundle; verify `files` digests.
-2. For each delegation: verify hash and Principal signatures; check `kid`.
+   delegation in the bundle; verify `files` digests. For each delegation: verify hash and
+   Principal signatures; check that `principal_id` and `agent_id` are the `kid` of the key sets
+   and that `principal_id` equals the manifest `principal_id`.
+2. Trust anchor: if the verifier was given a set of trusted Principals, the manifest
+   `principal_id` MUST be in it, otherwise fail with check `trust`. If it was given none, it
+   continues, and the report MUST state that the Principal was not authenticated.
 3. For each run: check `seq` contiguity, `prev_hash` linkage, `hash` recomputation, agent
    signatures, delegation validity at `occurred_at`, `run_start` binding, absence of records after
    `run_end`.
 4. For each record with a payload present: recompute body digests.
 5. For each anchor record: check `anchored_hash` against the run; optionally re-query the witness.
-6. Report: `ok`, or the first failing run, seq and check.
+6. Report: `ok`, or the first failing run, seq and check. The report MUST carry the manifest
+   `principal_id`, the exporter `agent_id` and whether the Principal was matched against a trust
+   anchor. A user interface MUST NOT present a bundle as verified without qualification when the
+   Principal was not authenticated.
 
 ## 14. Test vectors
 
@@ -475,15 +515,27 @@ implementations can prove conformance:
 - `keys.json`: public seeds for a Principal, an Agent and an attacker, the derived public keys and
   `kid` values, and the seed derivation rule. Test keys only, never for production.
 - `jcs/*.json` with `*.expected`: the RFC 8785 reference canonicalization set.
-- `delegations/valid.json` with `expected.json`: a signed delegation and its expected hash.
+- `signatures/ed25519.json`: Ed25519 edge cases (`mixed-order-key`, `mixed-order-r`, `identity-r`,
+  `small-order-key`) on which cofactored and cofactorless verifiers disagree; each entry states
+  whether a verifier MUST accept.
+- `delegations/valid.json`, `aat-compat-1.json`, `aat-compat-1-high-s.json` with `expected.json`:
+  signed delegations and their expected hashes. The last one carries a high-S `es256` signature
+  and MUST be rejected.
 - `records/valid-run.jsonl` with `expected.json`: a complete nine-record run covering every
   record kind, with the expected `prev_hash` and `hash` per seq.
 - `chains/*.jsonl` with `expected.json`: negative runs (`tampered-field`,
   `resigned-by-other-key`, `resigned-with-agent-key`, `gap-in-seq`, `reordered`,
-  `broken-prev-hash`, `record-after-run-end`, `expired-delegation`, `bad-anchor`) and the check
+  `broken-prev-hash`, `record-after-run-end`, `expired-delegation`, `bad-anchor`,
+  `receipt-digest-mismatch`,
+  `malformed-anchor-extension`) and the check
   name and seq at which a verifier MUST fail.
-- `bundle/valid.zip`, `tampered-payload.zip`, `tampered-record.zip`, `no-payloads.zip` with
-  `expected.json`.
+- `bundle/unknown-principal.zip`: consistent and correctly signed end to end, but by the
+  `attacker` Principal. `expected.json` lists `trusted_principals`; a verifier given that set MUST
+  fail with check `trust`, and without it MUST report the Principal as not authenticated.
+- `bundle/swapped-anchor-receipt.zip`: the `anchors/` file is not the receipt of its anchor
+  record; check `anchor`.
+- `bundle/valid.zip`, `tampered-payload.zip`, `tampered-record.zip`, `poisoned-payload-name.zip`,
+  `overlapping-entries.zip`, `too-many-delegations.zip`, `no-payloads.zip` with `expected.json`.
 
 Hashes are reproducible byte-for-byte. Signatures are verifiable but not necessarily
 reproducible: ML-DSA implementations may use the hedged (randomised) signing variant of

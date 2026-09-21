@@ -27,11 +27,14 @@ line-length = 100
 target-version = "py312"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP", "N", "S", "RUF"]
-ignore = ["S101"]
+select = ["E", "W", "F", "I", "B", "UP", "N", "S", "D", "RUF"]
+ignore = ["S101", "D105", "D107"]
 
 [tool.ruff.lint.per-file-ignores]
-"**/tests/**" = ["S"]
+"**/tests/**" = ["S", "D"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "pep257"
 
 [tool.mypy]
 python_version = "3.12"

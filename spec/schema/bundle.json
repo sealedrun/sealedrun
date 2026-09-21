@@ -34,12 +34,14 @@
     "principal_id": { "$ref": "common.json#/$defs/principalId" },
     "delegations": {
       "type": "array",
-      "items": { "$ref": "common.json#/$defs/uuid" },
       "minItems": 1,
+      "maxItems": 1024,
+      "items": { "$ref": "common.json#/$defs/uuid" },
       "uniqueItems": true
     },
     "runs": {
       "type": "array",
+      "maxItems": 1024,
       "items": {
         "type": "object",
         "additionalProperties": false,

@@ -1,25 +1,54 @@
 import { covers, verifyDelegation } from "./delegation.js";
 import { VerificationError } from "./errors.js";
 import { digestSize, type HashAlg, isHashAlg, payloadDigest, zeroHash } from "./hashing.js";
+import { assertRecord } from "./structure.js";
 import { checkHash, checkSignatures, DOMAIN_RECORD } from "./signing.js";
 import { parseTimestamp } from "./time.js";
 import type { SealedRunRecord, Delegation } from "./types.js";
 
+/** Result of a successful {@link verifyRun}. */
 export interface RunReport {
   runId: string;
+  /** Records in the verified slice, which may be less than the whole run. */
   recordCount: number;
   firstSeq: number;
   lastHash: string;
+  /** True when the slice contains a `run_end` record. */
   complete: boolean;
+  /** Anchor records whose `anchored_hash` and receipt digest matched the run. */
   anchors: number;
+  /** Anchors whose witness proof was checked cryptographically. Always 0 in 0.1 (TRUST.md). */
+  anchorsWitnessVerified: number;
+  /** Per data label, the number of non-blocked records whose target location is `cloud`. */
   labelsSentToCloud: Record<string, number>;
 }
 
+/** Optional inputs of {@link verifyRun}. */
 export interface VerifyRunOptions {
+  /**
+   * Bodies by base64url digest. When given, the bodies of `bundle` and `inline` payloads must be
+   * present and match their digest and size.
+   */
   payloads?: Map<string, Uint8Array>;
+  /** `prev_hash` the first record must carry when the slice does not start at seq 0. */
   expectedPrevHash?: string;
 }
 
+/**
+ * Verifies one run or a contiguous slice of it: structure, seq contiguity, hash chain, record
+ * hashes, delegation binding and validity, agent signatures, anchors, and nothing after `run_end`
+ * (SPEC 13.2 steps 3 to 5).
+ *
+ * @remarks
+ * All records are checked against a single Delegation. For a run that starts at seq 0 it is the
+ * one bound by `sealedrun.delegation` in `run_start` (SPEC 6.4). For a slice it is the first
+ * Delegation in the map issued to the agent.
+ *
+ * @param records - Records in ascending seq order.
+ * @param delegations - Delegations by `delegation_id`.
+ * @throws VerificationError naming the first failed check, with run id and seq.
+ * @throws TypeError if a timestamp is not in the SPEC 3 form.
+ */
 export function verifyRun(
   records: SealedRunRecord[],
   delegations: Map<string, Delegation>,
@@ -46,12 +75,19 @@ export function verifyRun(
     lastHash: last.hash,
     complete: false,
     anchors: 0,
+    anchorsWitnessVerified: 0,
     labelsSentToCloud: {},
   };
   let ended = false;
 
   records.forEach((record, index) => {
     const seq = firstSeq + index;
+    try {
+      assertRecord(record);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new VerificationError("schema", message, runId, seq);
+    }
     if (record.run_id !== runId) {
       throw new VerificationError("run", "record belongs to another run", runId, seq);
     }
@@ -146,6 +182,13 @@ function checkPayload(
   }
 }
 
+/**
+ * Checks that an anchor record points at an earlier record of the same run and that its receipt
+ * carries the digest the witness was given (SPEC 8.1).
+ *
+ * @remarks
+ * The witness signature is not checked in 0.1.
+ */
 function checkAnchor(
   record: SealedRunRecord,
   records: SealedRunRecord[],
@@ -156,12 +199,28 @@ function checkAnchor(
   const anchor = record.extensions?.["sealedrun.anchor"];
   if (!anchor)
     throw new VerificationError("anchor", "anchor record lacks sealedrun.anchor", runId, seq);
-  const anchoredSeq = Number(anchor["anchored_seq"]);
-  const index = anchoredSeq - firstSeq;
-  if (index < 0 || index >= records.length || anchoredSeq >= seq) {
+  const anchoredSeq = anchor["anchored_seq"];
+  const anchoredHash = anchor["anchored_hash"];
+  if (!Number.isSafeInteger(anchoredSeq) || (anchoredSeq as number) < 0) {
+    throw new VerificationError("anchor", "anchored_seq is not a non-negative integer", runId, seq);
+  }
+  if (typeof anchoredHash !== "string") {
+    throw new VerificationError("anchor", "anchored_hash is missing", runId, seq);
+  }
+  const index = (anchoredSeq as number) - firstSeq;
+  if (index < 0 || index >= records.length || (anchoredSeq as number) >= seq) {
     throw new VerificationError("anchor", "anchored_seq not in run before anchor", runId, seq);
   }
-  if (records[index]?.hash !== anchor["anchored_hash"]) {
+  if (records[index]?.hash !== anchoredHash) {
     throw new VerificationError("anchor", "anchored_hash does not match record", runId, seq);
+  }
+  const receipt = anchor["receipt"] as Record<string, unknown>;
+  if (receipt["digest"] !== anchoredHash) {
+    throw new VerificationError(
+      "anchor",
+      "receipt digest does not match anchored_hash",
+      runId,
+      seq,
+    );
   }
 }

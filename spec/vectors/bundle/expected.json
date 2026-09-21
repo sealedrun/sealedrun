@@ -4,6 +4,18 @@
     "ok": false,
     "seq": 1
   },
+  "overlapping-entries.zip": {
+    "check": "bundle",
+    "ok": false
+  },
+  "poisoned-payload-name.zip": {
+    "check": "bundle",
+    "ok": false
+  },
+  "swapped-anchor-receipt.zip": {
+    "check": "anchor",
+    "ok": false
+  },
   "tampered-payload.zip": {
     "check": "bundle",
     "ok": false
@@ -12,10 +24,24 @@
     "check": "bundle",
     "ok": false
   },
+  "too-many-delegations.zip": {
+    "check": "schema",
+    "ok": false
+  },
+  "unknown-principal.zip": {
+    "check": "trust",
+    "ok": false,
+    "trusted_principals": [
+      "qJtRVbgIsIjNNo6VuDr6nQ50Wj3rwEAAuR2e385pby8"
+    ]
+  },
   "valid.zip": {
     "complete": true,
     "ok": true,
     "records": 9,
-    "runs": 1
+    "runs": 1,
+    "trusted_principals": [
+      "qJtRVbgIsIjNNo6VuDr6nQ50Wj3rwEAAuR2e385pby8"
+    ]
   }
 }

@@ -86,6 +86,7 @@
     },
     "data_labels": {
       "type": "array",
+      "maxItems": 64,
       "items": {
         "type": "string",
         "pattern": "^[a-z0-9_-]+(:[a-z0-9_-]+)?$"

@@ -3,19 +3,22 @@ services:
     image: ghcr.io/sealedrun/sealedrun:latest
     build: .
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     volumes:
       - sealedrun-data:/data
     environment:
       SEALEDRUN_DATABASE_URL: ${SEALEDRUN_DATABASE_URL:-}
+      SEALEDRUN_API_TOKEN: ${SEALEDRUN_API_TOKEN:-}
+      SEALEDRUN_TRUSTED_PRINCIPALS: ${SEALEDRUN_TRUSTED_PRINCIPALS:-[]}
+      SEALEDRUN_ALLOWED_HOSTS: ${SEALEDRUN_ALLOWED_HOSTS:-["127.0.0.1","localhost"]}
     restart: unless-stopped
 
   postgres:
-    image: postgres:17-alpine
+    image: postgres:17-alpine@sha256:f02121de6f74d30d8a94cd1d9584125e2178d7e6c377d8130112d4e52d867995
     profiles: ["postgres"]
     environment:
       POSTGRES_USER: sealedrun
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sealedrun}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-} # no default: postgres refuses to start when empty
       POSTGRES_DB: sealedrun
     volumes:
       - sealedrun-postgres:/var/lib/postgresql/data

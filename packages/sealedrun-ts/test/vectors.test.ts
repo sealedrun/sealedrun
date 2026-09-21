@@ -17,6 +17,7 @@ import {
   VerificationError,
   verifyBundle,
   verifyDelegation,
+  verifyOne,
   verifyRun,
   b64urlEncode,
 } from "../src/index.js";
@@ -83,15 +84,31 @@ describe("keys", () => {
   });
 });
 
+describe("ed25519 edge cases", () => {
+  type Case = { name: string; ok: boolean; public_key: string; message: string; signature: string };
+  const hex = (s: string) => new Uint8Array(Buffer.from(s, "hex"));
+  test.each(readJson<Case[]>("signatures", "ed25519.json"))("$name", (c) => {
+    expect(verifyOne("ed25519", hex(c.public_key), hex(c.message), hex(c.signature))).toBe(c.ok);
+  });
+});
+
 describe("delegation", () => {
-  test("valid vector verifies", () => {
-    const d = validDelegation();
-    const expected = readJson<Record<string, { hash: string }>>("delegations", "expected.json");
-    expect(verifyDelegation(d)).toBeNull();
-    expect(d.hash).toBe(expected["valid.json"]!.hash);
+  const expected = readJson<Record<string, { ok: boolean; hash: string }>>(
+    "delegations",
+    "expected.json",
+  );
+  test.each(Object.keys(expected))("vector %s", (name) => {
+    const d = readJson<Delegation>("delegations", name);
+    if (expected[name]!.ok) expect(verifyDelegation(d)).toBeNull();
+    else expect(verifyDelegation(d)).toBe("principal signature invalid");
+    expect(d.hash).toBe(expected[name]!.hash);
   });
   test("forged agent id is rejected", () => {
     expect(verifyDelegation({ ...validDelegation(), agent_id: "x" })).not.toBeNull();
+  });
+  test("did principal is rejected", () => {
+    const d = { ...validDelegation(), principal_id: "did:web:example.com" };
+    expect(verifyDelegation(d)).toContain("did");
   });
 });
 
@@ -141,19 +158,31 @@ describe("bundles", () => {
     runs?: number;
     records?: number;
     complete?: boolean;
+    trusted_principals?: string[];
   };
   const expected = readJson<Record<string, Case>>("bundle", "expected.json");
   test.each(Object.keys(expected))("%s", (name) => {
     const c = expected[name]!;
     const data = new Uint8Array(readFileSync(join(VECTORS, "bundle", name)));
+    const options = c.trusted_principals ? { trustedPrincipals: c.trusted_principals } : {};
     if (c.ok) {
-      const report = verifyBundle(readBundle(data));
+      const report = verifyBundle(readBundle(data), options);
+      expect(report.principalTrusted).toBe(c.trusted_principals !== undefined);
       expect(report.runs).toHaveLength(c.runs!);
       expect(report.runs[0]!.recordCount).toBe(c.records);
       expect(report.runs[0]!.complete).toBe(c.complete);
       return;
     }
-    expectFailure(() => verifyBundle(readBundle(data)), c.check!, c.seq);
+    expectFailure(() => verifyBundle(readBundle(data), options), c.check!, c.seq);
+  });
+  test("unknown principal without a trust anchor is integrity only", () => {
+    const data = new Uint8Array(readFileSync(join(VECTORS, "bundle", "unknown-principal.zip")));
+    const report = verifyBundle(readBundle(data));
+    expect(report.principalTrusted).toBe(false);
+    expect(report.principalId).toBe(
+      readJson<{ attacker: { kid: string } }>("keys.json").attacker.kid,
+    );
+    expect(report.exporterAgentId).not.toBe("");
   });
 });
 

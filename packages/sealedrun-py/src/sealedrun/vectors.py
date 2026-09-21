@@ -1,21 +1,46 @@
+"""Generator of the conformance test vectors and examples under `spec/` (SPEC 14).
+
+Keys, ids and timestamps are fixed, so the output is byte-for-byte reproducible. Run as
+`python -m sealedrun.vectors [spec_dir]`.
+"""
+
 from __future__ import annotations
 
 import copy
+import hashlib
 import io
 import json
 import shutil
+import struct
 import sys
 import zipfile
+import zlib
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from sealedrun.bundle import write_bundle
+from sealedrun.bundle import MANIFEST, write_bundle
 from sealedrun.delegation import create_delegation
-from sealedrun.hashing import payload_digest
-from sealedrun.keys import PROFILES, PrivateKeySet
+from sealedrun.hashing import b64url_decode, b64url_encode, payload_digest
+from sealedrun.keys import (
+    _ED_L,
+    _ED_P,
+    P256_ORDER,
+    PROFILES,
+    PrivateKeySet,
+    _ed_add,
+    _ed_decode,
+    _ed_encode,
+    _ed_mul,
+)
 from sealedrun.records import RunWriter, payload_ref
-from sealedrun.signing import DOMAIN_DELEGATION, DOMAIN_RECORD, seal
+from sealedrun.signing import (
+    DOMAIN_DELEGATION,
+    DOMAIN_MANIFEST,
+    DOMAIN_RECORD,
+    countersign,
+    seal,
+)
 
 START = datetime(2026, 9, 16, 12, 0, tzinfo=UTC)
 UUID_PREFIX = "0192b3c4-5d6e-7f80-9a1b-"
@@ -47,32 +72,41 @@ PAYLOADS = {
 
 
 def seeds_for(prefix: str, profile: str) -> dict[str, bytes]:
+    """Derive the public test seeds of a named party, as described by `SEED_DERIVATION`."""
     return {alg: f"{prefix}:{alg}".encode().ljust(32, b"\0") for alg in PROFILES[profile]}
 
 
 def keys_for(prefix: str, profile: str = "sealedrun-hybrid-1") -> PrivateKeySet:
+    """Build the deterministic test keys of a named party. Never use them outside tests."""
     return PrivateKeySet.from_seeds(seeds_for(prefix, profile))
 
 
 class Clock:
+    """Deterministic clock: each call returns a time one second after the previous one."""
+
     def __init__(self) -> None:
         self.current = START
 
     def __call__(self) -> datetime:
+        """Advance by one second and return the new time; the first call gives START + 1 s."""
         self.current += timedelta(seconds=1)
         return self.current
 
 
 class Ids:
+    """Deterministic id factory: UUID-shaped strings with a counter in the last group."""
+
     def __init__(self) -> None:
         self.n = 0
 
     def __call__(self) -> str:
+        """Return the next id, counting from 1."""
         self.n += 1
         return f"{UUID_PREFIX}{self.n:012x}"
 
 
 def build_delegation(principal: PrivateKeySet, agent: PrivateKeySet) -> dict[str, Any]:
+    """Create the fixed 31-day delegation around START that all vectors share."""
     return create_delegation(
         principal,
         agent.public,
@@ -88,6 +122,10 @@ def build_delegation(principal: PrivateKeySet, agent: PrivateKeySet) -> dict[str
 
 
 def build_run(agent: PrivateKeySet, delegation: dict[str, Any]) -> RunWriter:
+    """Write the reference run: model and tool calls, a human approval, an anchor and a tombstone.
+
+    The policy decisions cover allow, redirect, block and require_approval.
+    """
     alg = delegation["hash_alg"]
     writer = RunWriter(agent, delegation, run_id=RUN_ID, clock=Clock(), id_factory=Ids())
     writer.start(
@@ -233,6 +271,7 @@ def build_run(agent: PrivateKeySet, delegation: dict[str, Any]) -> RunWriter:
                 "anchored_hash": writer.head,
                 "anchored_seq": writer.seq - 1,
                 "receipt": {
+                    "digest": writer.head,
                     "log_index": 123456789,
                     "integrated_time": 1789646406,
                     "uuid": "24296fb24b8ad77a" + "0" * 48,
@@ -260,6 +299,11 @@ def build_run(agent: PrivateKeySet, delegation: dict[str, Any]) -> RunWriter:
 def negative_chains(
     run: RunWriter, agent: PrivateKeySet, principal: PrivateKeySet, delegation: dict[str, Any]
 ) -> dict[str, tuple[list[dict[str, Any]], dict[str, Any]]]:
+    """Build invalid variants of the reference run with the failure a verifier must report.
+
+    Maps a case name to its records and the expected `check` and `seq`. An outcome with a
+    `delegation` key replaces the shared delegation for that case.
+    """
     base = run.records
     cases: dict[str, tuple[list[dict[str, Any]], dict[str, Any]]] = {}
 
@@ -313,26 +357,64 @@ def negative_chains(
                 "type": "rekor",
                 "anchored_hash": "e" * 64,
                 "anchored_seq": 2,
-                "receipt": {},
+                "receipt": {"digest": "e" * 64},
                 "witness": "https://rekor.sigstore.dev",
             }
         },
     )
     cases["bad-anchor"] = (anchored.records, {"check": "anchor", "seq": 3})
 
+    malformed = RunWriter(agent, delegation, run_id=RUN_ID, clock=Clock(), id_factory=Ids())
+    malformed.records = list(base[:3])
+    malformed.append(
+        "anchor",
+        target={"type": "witness", "name": "rekor"},
+        extensions={
+            "sealedrun.anchor": {
+                "type": "rekor",
+                "receipt": {"digest": "e" * 64},
+                "witness": "https://rekor.sigstore.dev",
+            }
+        },
+    )
+    mismatched = RunWriter(agent, delegation, run_id=RUN_ID, clock=Clock(), id_factory=Ids())
+    mismatched.records = list(base[:3])
+    mismatched.append(
+        "anchor",
+        target={"type": "witness", "name": "rekor"},
+        extensions={
+            "sealedrun.anchor": {
+                "type": "rekor",
+                "anchored_hash": base[2]["hash"],
+                "anchored_seq": 2,
+                "receipt": {"digest": "e" * 64},
+                "witness": "https://rekor.sigstore.dev",
+            }
+        },
+    )
+    cases["receipt-digest-mismatch"] = (mismatched.records, {"check": "anchor", "seq": 3})
+
+    cases["malformed-anchor-extension"] = (
+        malformed.records,
+        {"check": "schema", "seq": 3},
+    )
+
     return cases
 
 
 def jsonl(records: list[dict[str, Any]]) -> str:
+    """Serialize records as JSON Lines with compact separators and sorted keys."""
     return "".join(json.dumps(r, separators=(",", ":"), sort_keys=True) + "\n" for r in records)
 
 
 def dump(path: Path, value: Any) -> None:
+    """Write `value` as indented JSON with sorted keys, creating parent directories."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
 
 
 def payload_map(alg: str) -> dict[str, bytes]:
+    """Key the sample payload bodies by their digest, the form `write_bundle` expects."""
     return {payload_digest(alg, body): body for body in PAYLOADS.values()}
 
 
@@ -343,7 +425,18 @@ def bundle_bytes(
     records: list[dict[str, Any]],
     *,
     with_payloads: bool = True,
+    receipt_override: dict[str, Any] | None = None,
 ) -> bytes:
+    """Export one run as a bundle with fixed id and creation time and return the zip bytes.
+
+    `receipt_override` replaces every anchor receipt file, to build a bundle whose receipt
+    differs from its anchor record.
+    """
+    anchors = {
+        r["record_id"]: receipt_override or r["extensions"]["sealedrun.anchor"]["receipt"]
+        for r in records
+        if r["kind"] == "anchor"
+    }
     out = io.BytesIO()
     write_bundle(
         out,
@@ -353,13 +446,155 @@ def bundle_bytes(
         runs=[records],
         payloads=payload_map(delegation["hash_alg"]) if with_payloads else {},
         principal=principal,
+        anchors=anchors,
         bundle_id=BUNDLE_ID,
         created_at="2026-09-16T13:00:00.000Z",
     )
     return out.getvalue()
 
 
+def poison_payload_name(data: bytes, exporter: PrivateKeySet, principal: PrivateKeySet) -> bytes:
+    """Rename a payload entry to a digest it does not have, then re-seal the manifest."""
+    with zipfile.ZipFile(io.BytesIO(data)) as src:
+        entries = {name: src.read(name) for name in src.namelist()}
+    manifest = json.loads(entries.pop(MANIFEST))
+    victim = next(n for n in entries if n.startswith("payloads/"))
+    alg = manifest["hash_alg"]
+    poison = b"poisoned body, not the content this name claims"
+    entries[victim.rsplit("/", 1)[0] + "/" + payload_digest(alg, entries[victim])] = poison
+
+    for key in ("signatures", "principal_signatures", "hash"):
+        manifest.pop(key, None)
+    manifest["files"] = {n: payload_digest(alg, c) for n, c in entries.items()}
+    manifest = countersign(seal(manifest, DOMAIN_MANIFEST, exporter), DOMAIN_MANIFEST, principal)
+
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as dst:
+        dst.writestr(MANIFEST, json.dumps(manifest, indent=2, sort_keys=True))
+        for name, content in sorted(entries.items()):
+            dst.writestr(name, content)
+    return out.getvalue()
+
+
+def overlapping_entries_zip(copies: int = 3, body_size: int = 4096) -> bytes:
+    """Central-directory entries all point at one local entry and understate its size.
+
+    The compressed size is what a stored entry actually copies; the uncompressed size of 1 is
+    the understatement.
+    """
+    body = b"A" * body_size
+    crc = zlib.crc32(body) & 0xFFFFFFFF
+    name = b"payloads/sha-256/overlap"
+    compressed_size = body_size
+    understated_size = 1
+    out = bytearray()
+    out += (
+        struct.pack(
+            "<IHHHHHIIIHH", 0x04034B50, 20, 0, 0, 0, 0, crc, body_size, body_size, len(name), 0
+        )
+        + name
+        + body
+    )
+    central = bytearray()
+    for i in range(copies):
+        entry = name + b"%03d" % i
+        central += (
+            struct.pack(
+                "<IHHHHHHIIIHHHHHII",
+                0x02014B50,
+                20,
+                20,
+                0,
+                0,
+                0,
+                0,
+                crc,
+                compressed_size,
+                understated_size,
+                len(entry),
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+            )
+            + entry
+        )
+    cd_off = len(out)
+    out += central
+    out += struct.pack("<IHHHHIIH", 0x06054B50, 0, 0, copies, copies, len(central), cd_off, 0)
+    return bytes(out)
+
+
+def high_s(doc: dict[str, Any]) -> dict[str, Any]:
+    """Replace the es256 signature `s` with `n - s`.
+
+    The result still satisfies the ECDSA equation but breaks the SPEC 4.2 low-S rule, so a
+    verifier must reject it.
+    """
+    signature = b64url_decode(doc["signatures"]["es256"])
+    s = P256_ORDER - int.from_bytes(signature[32:], "big")
+    flipped = b64url_encode(signature[:32] + s.to_bytes(32, "big"))
+    return {**doc, "signatures": {**doc["signatures"], "es256": flipped}}
+
+
+ED_TORSION = bytes.fromhex("26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05")
+
+
+def ed25519_edge_cases() -> list[dict[str, Any]]:
+    """Signatures a cofactored verifier accepts and a cofactorless one rejects, or the reverse."""
+    base = _ed_decode((4 * pow(5, -1, _ED_P) % _ED_P).to_bytes(32, "little"))
+    torsion = _ed_decode(ED_TORSION)
+    assert base is not None and torsion is not None
+    message = b"sealedrun ed25519 edge cases"
+    expanded = hashlib.sha512(b"edge".ljust(32, b"\0")).digest()
+    a = (int.from_bytes(expanded[:32], "little") & ((1 << 254) - 8)) | (1 << 254)
+    key = _ed_mul(a, base)
+
+    def h(*parts: bytes) -> int:
+        return int.from_bytes(hashlib.sha512(b"".join(parts)).digest(), "little")
+
+    def case(
+        name: str, ok: bool, shift_key: bool = False, r_kind: str = "honest"
+    ) -> dict[str, Any]:
+        public = _ed_encode(_ed_add(key, torsion) if shift_key else key)
+        for counter in range(256):
+            r = 0 if r_kind == "identity" else h(expanded[32:], message, bytes([counter])) % _ED_L
+            point = _ed_mul(r, base)
+            encoded_r = _ed_encode(_ed_add(point, torsion) if r_kind == "mixed" else point)
+            k = h(encoded_r, public, message) % _ED_L
+            if k % 8 or r_kind == "identity":
+                break
+        signature = encoded_r + ((r + k * a) % _ED_L).to_bytes(32, "little")
+        return {
+            "name": name,
+            "ok": ok,
+            "public_key": public.hex(),
+            "message": message.hex(),
+            "signature": signature.hex(),
+        }
+
+    small = {**case("small-order-key", False), "public_key": ED_TORSION.hex()}
+    return [
+        case("honest", True),
+        case("mixed-order-key", False, shift_key=True),
+        case("mixed-order-r", False, r_kind="mixed"),
+        case("identity-r", False, r_kind="identity"),
+        small,
+    ]
+
+
+def too_many_delegations(data: bytes, count: int = 1025) -> bytes:
+    """List more delegation ids in the manifest than the bundle schema allows."""
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        manifest = json.loads(zf.read("manifest.json"))
+    manifest["delegations"] = [f"00000000-0000-4000-8000-{i:012x}" for i in range(count)]
+    return rewrite_zip(data, "manifest.json", json.dumps(manifest, sort_keys=True).encode())
+
+
 def rewrite_zip(data: bytes, path: str, content: bytes) -> bytes:
+    """Copy a zip archive, replacing the content of the entry at `path`."""
     out = io.BytesIO()
     with zipfile.ZipFile(io.BytesIO(data)) as src, zipfile.ZipFile(out, "w") as dst:
         for name in src.namelist():
@@ -368,9 +603,14 @@ def rewrite_zip(data: bytes, path: str, content: bytes) -> bytes:
 
 
 def generate(spec_dir: Path) -> None:
+    """Regenerate `vectors/` and `examples/` under `spec_dir`, deleting the previous output.
+
+    `unknown-principal.zip` is consistent and correctly signed end to end, but by a Principal the
+    verifier never heard of, so it fails only the trust check.
+    """
     vectors = spec_dir / "vectors"
     examples = spec_dir / "examples"
-    for sub in ("keys.json", "delegations", "records", "chains", "bundle"):
+    for sub in ("keys.json", "signatures", "delegations", "records", "chains", "bundle"):
         target = vectors / sub
         if target.is_dir():
             shutil.rmtree(target)
@@ -421,15 +661,25 @@ def generate(spec_dir: Path) -> None:
             },
         },
     )
+    dump(vectors / "signatures" / "ed25519.json", ed25519_edge_cases())
     dump(vectors / "delegations" / "valid.json", delegation)
+    aat = build_delegation(keys_for("principal", "aat-compat-1"), keys_for("agent", "aat-compat-1"))
+    dump(vectors / "delegations" / "aat-compat-1.json", aat)
+    dump(vectors / "delegations" / "aat-compat-1-high-s.json", high_s(aat))
     dump(
         vectors / "delegations" / "expected.json",
         {
-            "valid.json": {
-                "hash": delegation["hash"],
-                "agent_id": delegation["agent_id"],
-                "principal_id": delegation["principal_id"],
+            name: {
+                "ok": ok,
+                "hash": doc["hash"],
+                "agent_id": doc["agent_id"],
+                "principal_id": doc["principal_id"],
             }
+            for name, doc, ok in (
+                ("valid.json", delegation, True),
+                ("aat-compat-1.json", aat, True),
+                ("aat-compat-1-high-s.json", aat, False),
+            )
         },
     )
 
@@ -475,15 +725,51 @@ def generate(spec_dir: Path) -> None:
             valid, run_path, run_text.replace('"outcome":"blocked"', '"outcome":"success"').encode()
         )
     )
+    (bundle_dir / "poisoned-payload-name.zip").write_bytes(
+        poison_payload_name(valid, agent, principal)
+    )
+    (bundle_dir / "overlapping-entries.zip").write_bytes(overlapping_entries_zip())
+    (bundle_dir / "too-many-delegations.zip").write_bytes(too_many_delegations(valid))
+    (bundle_dir / "swapped-anchor-receipt.zip").write_bytes(
+        bundle_bytes(
+            agent, principal, delegation, run.records, receipt_override={"digest": "e" * 64}
+        )
+    )
+    forger, forger_agent = keys_for("attacker"), keys_for("attacker-agent")
+    forged_delegation = build_delegation(forger, forger_agent)
+    (bundle_dir / "unknown-principal.zip").write_bytes(
+        bundle_bytes(
+            forger_agent,
+            forger,
+            forged_delegation,
+            build_run(forger_agent, forged_delegation).records,
+        )
+    )
+    trusted = [principal.public.kid]
     (bundle_dir / "no-payloads.zip").write_bytes(
         bundle_bytes(agent, principal, delegation, run.records, with_payloads=False)
     )
     dump(
         bundle_dir / "expected.json",
         {
-            "valid.zip": {"ok": True, "runs": 1, "records": len(run.records), "complete": True},
+            "valid.zip": {
+                "ok": True,
+                "runs": 1,
+                "records": len(run.records),
+                "complete": True,
+                "trusted_principals": trusted,
+            },
+            "unknown-principal.zip": {
+                "ok": False,
+                "check": "trust",
+                "trusted_principals": trusted,
+            },
             "tampered-payload.zip": {"ok": False, "check": "bundle"},
             "tampered-record.zip": {"ok": False, "check": "bundle"},
+            "poisoned-payload-name.zip": {"ok": False, "check": "bundle"},
+            "overlapping-entries.zip": {"ok": False, "check": "bundle"},
+            "too-many-delegations.zip": {"ok": False, "check": "schema"},
+            "swapped-anchor-receipt.zip": {"ok": False, "check": "anchor"},
             "no-payloads.zip": {"ok": False, "check": "payload", "seq": 1},
         },
     )
@@ -498,6 +784,7 @@ def generate(spec_dir: Path) -> None:
 
 
 def main() -> None:
+    """Generate into the directory given as the first argument, `spec` by default."""
     generate(Path(sys.argv[1]) if len(sys.argv) > 1 else Path("spec"))
 
 

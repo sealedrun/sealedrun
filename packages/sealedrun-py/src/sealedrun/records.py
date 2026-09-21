@@ -1,3 +1,5 @@
+"""Writing the records of a run as a signed hash chain (SPEC 5)."""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -21,6 +23,10 @@ def payload_ref(
     request_media_type: str | None = None,
     response_media_type: str | None = None,
 ) -> dict[str, Any]:
+    """Build a SPEC 5.5 payload reference: digest and size of each body that is given.
+
+    The bodies themselves are not stored in the record.
+    """
     ref: dict[str, Any] = {"storage": storage}
     if request is not None:
         ref["request_hash"] = payload_digest(hash_alg, request)
@@ -36,6 +42,12 @@ def payload_ref(
 
 
 class RunWriter:
+    """Append-only writer for one run, signing every record with the agent's keys.
+
+    The hash algorithm, `principal_id` and `agent_id` are taken from the delegation. `clock` and
+    `id_factory` exist so that test vectors are reproducible.
+    """
+
     def __init__(
         self,
         agent: PrivateKeySet,
@@ -58,13 +70,19 @@ class RunWriter:
 
     @property
     def seq(self) -> int:
+        """Sequence number the next record will get."""
         return len(self.records)
 
     @property
     def head(self) -> str:
+        """Hash of the last record, or the all-zero hash before the first one."""
         return self.records[-1]["hash"] if self.records else zero_hash(self.hash_alg)
 
     def start(self, **fields: Any) -> dict[str, Any]:
+        """Write the `run_start` record and bind the run to the delegation (SPEC 6.4).
+
+        `fields` are passed to `append`. Raises ValueError if the run has already started.
+        """
         if self.records:
             raise ValueError("run already started")
         extensions = dict(fields.pop("extensions", {}))
@@ -80,6 +98,7 @@ class RunWriter:
         )
 
     def end(self, **fields: Any) -> dict[str, Any]:
+        """Write the `run_end` record and close the run; later appends raise ValueError."""
         record = self.append("run_end", target={"type": "none", "name": "run"}, **fields)
         self.closed = True
         return record
@@ -98,6 +117,11 @@ class RunWriter:
         extensions: dict[str, Any] | None = None,
         occurred_at: datetime | None = None,
     ) -> dict[str, Any]:
+        """Seal one record onto the chain and return it.
+
+        `data_labels` are deduplicated and sorted, and `actor` defaults to the agent. Raises
+        ValueError if the run is closed or if the first record is not `run_start`.
+        """
         if self.closed:
             raise ValueError("run is closed")
         if not self.records and kind != "run_start":
