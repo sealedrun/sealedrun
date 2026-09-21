@@ -16,7 +16,7 @@ sealedrun = { workspace = true }
 dev = [
   "pytest>=8.3",
   "pytest-cov>=6.0",
-  "ruff>=0.9",
+  "ruff>=0.16.8",
   "mypy>=1.14",
   "types-jsonschema>=4.26.0.20260518",
   "httpx>=0.28.1",
