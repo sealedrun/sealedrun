@@ -3,6 +3,22 @@
   "version": "0.1.1",
   "description": "SealedRun Record verification: canonicalization, hash chain, hybrid signatures",
   "license": "Apache-2.0",
+  "author": "SealedRun <info@sealedrun.com>",
+  "homepage": "https://sealedrun.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sealedrun/sealedrun.git",
+    "directory": "packages/sealedrun-ts"
+  },
+  "bugs": "https://github.com/sealedrun/sealedrun/issues",
+  "keywords": [
+    "ai-agents",
+    "audit-trail",
+    "hash-chain",
+    "ed25519",
+    "ml-dsa",
+    "verification"
+  ],
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -15,6 +31,12 @@
   "files": [
     "dist"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -23,7 +45,7 @@
   },
   "dependencies": {
     "@noble/curves": "^2.4.0",
-    "@noble/hashes": "^1.8.0",
+    "@noble/hashes": "^2.4.0",
     "@noble/post-quantum": "^0.7.1",
     "fflate": "^0.8.3"
   },

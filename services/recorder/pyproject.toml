@@ -2,10 +2,13 @@
 name = "sealedrun-recorder"
 version = "0.1.1"
 description = "SealedRun recorder service: API and UI host for evidence bundles"
+readme = "README.md"
 license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
+authors = [{ name = "Anatoli", email = "info@sealedrun.com" }]
 dependencies = [
-  "sealedrun",
+  "sealedrun>=0.1.1",
   "fastapi>=0.115",
   "uvicorn[standard]>=0.53.0",
   "sqlalchemy>=2.0",
@@ -13,6 +16,19 @@ dependencies = [
   "python-multipart>=0.0.32",
   "psycopg[binary]>=3.3.6",
 ]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Programming Language :: Python :: 3.12",
+  "License :: OSI Approved :: Apache Software License",
+  "Framework :: FastAPI",
+  "Topic :: Security",
+]
+
+[project.urls]
+Homepage = "https://sealedrun.com"
+Repository = "https://github.com/sealedrun/sealedrun"
+Changelog = "https://github.com/sealedrun/sealedrun/blob/main/CHANGELOG.md"
+Issues = "https://github.com/sealedrun/sealedrun/issues"
 
 [project.scripts]
 sealedrun-recorder = "sealedrun_recorder.main:run"
