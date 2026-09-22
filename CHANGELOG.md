@@ -3,9 +3,9 @@
 All notable changes are documented here. The format follows Keep a Changelog; the project
 follows Semantic Versioning once 1.0.0 is reached.
 
-## [0.1.1] - 2026-09-20
+## [0.1.1] - 2026-09-21
 
-Security hardening before the first public push. The project and the record format are now named
+First public release. Security hardening before publication. The project and the record format are now named
 SealedRun (previously AFR).
 
 ### Security
@@ -30,10 +30,16 @@ SealedRun (previously AFR).
 - Renamed everything from AFR to SealedRun: packages `sealedrun`, `sealedrun-recorder`, `@sealedrun/core`, env prefix `SEALEDRUN_`, field `spec_version`, extension namespace `sealedrun.*`, signing domains `sealedrun/*/v1`. Vectors and examples regenerated.
 - List endpoints are paginated (`limit`, `offset`); the bundle archive column is loaded only on download.
 - JSON Schemas ship inside the `sealedrun` wheel.
+- Public Python API carries PEP 257 docstrings and exported TypeScript symbols carry TSDoc; both are enforced by the linters (ruff `D`, `eslint-plugin-jsdoc`, `eslint-plugin-tsdoc`).
+
+### Fixed
+
+- The `sealedrun` wheel could not be built from its own sdist: the schema directory was a forced include that only exists in the repository. A build hook now handles both cases.
 
 ### Added
 
 - `SECURITY.md`, `CODE_OF_CONDUCT.md`, `.github/dependabot.yml`.
+- Release workflow: a `v*` tag builds the packages, installs them into a clean environment to verify the example bundle, and publishes to PyPI and npm through trusted publishing (OIDC, no stored tokens) behind a manually approved environment.
 
 ## [0.1.0] - 2026-09-17
 

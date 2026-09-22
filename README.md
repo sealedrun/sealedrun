@@ -61,10 +61,21 @@ print(report.complete, report.labels_sent_to_cloud)
 | `spec/schema/`           | JSON Schema for records, delegations and bundles                                             | Apache-2.0 |
 | `spec/vectors/`          | Known-answer test vectors for independent implementations                                    | Apache-2.0 |
 | `spec/examples/`         | Example records and an example bundle                                                        | Apache-2.0 |
-| `packages/sealedrun-py/` | Reference Python implementation (`sealedrun`, not yet on PyPI)                               | Apache-2.0 |
+| `packages/sealedrun-py/` | Reference Python implementation (`sealedrun` on PyPI)                                        | Apache-2.0 |
 | `packages/sealedrun-ts/` | TypeScript verification library (`@sealedrun/core`), used by the web UI                      | Apache-2.0 |
 | `services/recorder/`     | FastAPI service: bundle upload and verification API, hosts the UI (proxy arrives in stage 1) | Apache-2.0 |
 | `apps/web/`              | Next.js UI: bundle inspector and verifier                                                    | Apache-2.0 |
+
+## Install
+
+```bash
+pip install sealedrun              # Python library: write, read and verify records and bundles
+npm install @sealedrun/core        # TypeScript verifier, runs in Node.js and in the browser
+docker run --rm -p 127.0.0.1:8080:8080 ghcr.io/sealedrun/sealedrun:0.1.1   # recorder + Inspector
+```
+
+Releases are published from GitHub Actions through PyPI and npm trusted publishing; both registries
+show the provenance attestation that links a package to the commit and workflow that built it.
 
 ## Cryptography
 
