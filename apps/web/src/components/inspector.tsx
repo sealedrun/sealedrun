@@ -9,7 +9,9 @@ import { type LocalVerification, parsePrincipals, verifyLocally } from "@/lib/in
 import { trustedStore } from "@/lib/trusted-store";
 
 import { DropZone } from "./dropzone";
+import { Logo } from "./logo";
 import { RunFeed } from "./run-feed";
+import { ThemeToggle } from "./theme-toggle";
 import { Verdict } from "./verdict";
 
 /** The two tabs: a bundle file checked in the browser, or runs stored in the recorder. */
@@ -125,10 +127,20 @@ export function Inspector() {
   return (
     <div className="mx-auto max-w-5xl px-4 pb-24 sm:px-6">
       <header className="flex flex-wrap items-center justify-between gap-3 py-6">
-        <p className="text-lg font-semibold tracking-tight">
+        <p className="flex items-center gap-2.5 text-lg font-semibold tracking-wide">
+          <Logo size={22} />
           SealedRun <span className="font-normal text-ink-soft">Inspector</span>
         </p>
-        <RecorderStatus recorder={recorder} />
+        <div className="flex items-center gap-4 text-sm text-ink-soft">
+          <a href="https://sealedrun.com" className="hover:text-ink">
+            Home
+          </a>
+          <a href="https://docs.sealedrun.com" className="hover:text-ink">
+            Docs
+          </a>
+          <RecorderStatus recorder={recorder} />
+          <ThemeToggle />
+        </div>
       </header>
 
       <nav className="flex gap-1 border-b border-line" aria-label="Source">
