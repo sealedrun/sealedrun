@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
+import httpx
 import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
@@ -17,14 +18,18 @@ from sealedrun_recorder.api import public_router, router
 from sealedrun_recorder.db import make_engine, session_factory
 from sealedrun_recorder.keystore import load_identity
 from sealedrun_recorder.live import LiveRuns
+from sealedrun_recorder.proxy import RunGrouper
+from sealedrun_recorder.proxy import router as proxy_router
 from sealedrun_recorder.settings import Settings, load_settings
+from sealedrun_recorder.upstreams import load_upstreams
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> Any:
-    """Open the database and load the signing keys on startup, dispose the engine on shutdown.
+    """Open the database, load the signing keys and the upstreams, and close them on shutdown.
 
-    Keys and the delegation are generated under `data_dir/keys` on the first start.
+    Keys and the delegation are generated under `data_dir/keys` on the first start. A broken
+    upstreams file stops the start rather than leaving the proxy half configured.
     """
     settings: Settings = app.state.settings
     settings.data_dir.mkdir(parents=True, exist_ok=True)
@@ -32,21 +37,30 @@ async def lifespan(app: FastAPI) -> Any:
     app.state.engine = engine
     app.state.sessions = session_factory(engine)
     app.state.live = LiveRuns(app.state.sessions, load_identity(settings.data_dir))
+    app.state.runs = RunGrouper(app.state.live, settings.proxy_run_idle_seconds)
+    app.state.upstreams = load_upstreams(settings.upstreams_file)
+    app.state.http = httpx.AsyncClient(transport=app.state.http_transport, follow_redirects=False)
     yield
+    await app.state.http.aclose()
     engine.dispose()
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
-    """Build the FastAPI app with Host header checking, the API routers and the web UI.
+def create_app(
+    settings: Settings | None = None, *, http_transport: httpx.AsyncBaseTransport | None = None
+) -> FastAPI:
+    """Build the FastAPI app with Host header checking, the API routers, the proxy and the UI.
 
     The UI is mounted only when its directory exists, so the API also runs without a built UI.
+    `http_transport` replaces the network for upstream calls, for tests.
     """
     settings = settings or load_settings()
     app = FastAPI(title="SealedRun Recorder", version=__version__, lifespan=lifespan)
     app.state.settings = settings
+    app.state.http_transport = http_transport
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.allowed_hosts)
     app.include_router(public_router)
     app.include_router(router)
+    app.include_router(proxy_router)
     ui_dir = settings.ui_dir or _default_ui_dir()
     if ui_dir is not None and ui_dir.is_dir():
         _mount_ui(app, ui_dir)

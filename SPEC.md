@@ -380,6 +380,7 @@ verification failure. Registered:
 | `sealedrun.labels`     | 5.6     | Provenance of data labels        |
 | `sealedrun.llm`        | 10.1    | Model call details               |
 | `sealedrun.mcp`        | 10.2    | MCP tool call details            |
+| `sealedrun.proxy`      | 10.3    | Recorder proxy call details      |
 | `sealedrun.otel`       | 11      | OpenTelemetry trace and span ids |
 
 ### 9.1 Compatibility with MCP SEP-3004 and IETF AAT
@@ -414,6 +415,17 @@ formats. Reverse projection is lossy and produces records marked `extensions["se
 ```json
 { "server": "filesystem", "transport": "stdio" | "http", "method": "tools/call", "tool": "read_file",
   "request_id": "…", "is_error": false }
+```
+
+### 10.3 `sealedrun.proxy`
+
+Written by a recorder that sits between the agent and the provider. All fields are optional.
+`status` is the HTTP status returned to the agent and `latency_ms` the time spent upstream. On a
+`run_start` record, `run_label` is the label the agent chose for the run.
+
+```json
+{ "upstream": "openai", "dialect": "openai" | "anthropic" | "ollama" | "gemini", "operation": "chat",
+  "status": 200, "latency_ms": 412.5, "run_label": "nightly-report" }
 ```
 
 ## 11. Mapping to OpenTelemetry GenAI semantic conventions

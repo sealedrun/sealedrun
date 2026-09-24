@@ -3,6 +3,17 @@
 All notable changes are documented here. The format follows Keep a Changelog; the project
 follows Semantic Versioning once 1.0.0 is reached.
 
+## [Unreleased]
+
+### Added
+
+- Recorder LLM proxy, OpenAI wire format: `POST /v1/chat/completions`, `POST /v1/responses`, `POST /v1/embeddings`, `GET /v1/models`. Upstreams come from `upstreams.yaml` (`SEALEDRUN_UPSTREAMS_FILE`) and are routed by wire format and model name pattern, so one model can sit behind several formats; each upstream sets how its key is sent (`bearer`, `x-api-key`, `x-goog-api-key`, `api-key`) and optional static headers. `services/recorder/upstreams.example.yaml` covers OpenAI, Azure OpenAI, Anthropic, Gemini, DeepSeek, Kimi, Qwen, GLM, MiniMax, Mistral, xAI, Groq, OpenRouter, Ollama, LM Studio, vLLM and llama.cpp. The client sends `SEALEDRUN_API_TOKEN` wherever its SDK puts the API key and the upstream key is swapped in server side. Every call becomes a signed `llm_call` record with request and response bodies, never headers. Calls with the same `X-SealedRun-Run` label share a run; unlabelled calls share a run until it is idle for `SEALEDRUN_PROXY_RUN_IDLE_SECONDS`. If the record cannot be written the call fails. Streaming is refused for now.
+- Recorder LLM proxy, Anthropic Messages wire format: `POST /v1/messages`, `POST /v1/messages/count_tokens`, and `GET /v1/models` in the Anthropic shape when `anthropic-version` is sent. Works with Claude Code and the Anthropic SDKs through `ANTHROPIC_BASE_URL` (token as `x-api-key` or bearer); `anthropic-version` and `anthropic-beta` are passed through. Recorded `input_tokens` include cache writes and reads.
+- Recorder LLM proxy, Ollama native wire format: `POST /api/chat`, `/api/generate`, `/api/embed`, `/api/embeddings`, plus unrecorded `GET /api/tags`, `GET /api/version` and `POST /api/show`. Model management endpoints are not proxied. Ollama streams by default, so calls must send `"stream": false` for now.
+- Recorder LLM proxy, Gemini native wire format: `POST /v1beta/models/{model}:generateContent`, `:countTokens`, `:embedContent`, `:batchEmbedContents` (also under `/v1`), plus unrecorded `GET /v1beta/models` and `GET /v1beta/models/{model}`. The token is accepted as `x-goog-api-key` or `?key=`; the query key is never forwarded or recorded. Recorded `output_tokens` include thinking tokens.
+- Docker image reads upstreams from `/data/upstreams.yaml`.
+- `SPEC.md` 10.3: registered extension `sealedrun.proxy` (upstream, dialect, operation, HTTP status, latency, run label).
+
 ## [0.1.1] - 2026-09-21
 
 First public release. Security hardening before publication. The project and the record format are now named
