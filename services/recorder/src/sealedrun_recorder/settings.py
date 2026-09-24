@@ -19,6 +19,9 @@ class Settings(BaseSettings):
             from any other Principal are refused; when empty, everything consistent is stored
             and reported as not authenticated.
             Env form: SEALEDRUN_TRUSTED_PRINCIPALS='["qJtR..."]'.
+        upstreams_file: YAML file with the model providers the LLM proxy forwards to.
+        proxy_run_idle_seconds: Proxy calls without an X-SealedRun-Run header join the current
+            run until it has been idle this long; the next call then starts a new run.
 
     """
 
@@ -33,6 +36,10 @@ class Settings(BaseSettings):
     api_token: SecretStr | None = None
     allowed_hosts: list[str] = ["127.0.0.1", "localhost"]
     trusted_principals: list[str] = []
+    upstreams_file: Path = Path("upstreams.yaml")
+    proxy_timeout_seconds: float = 600.0
+    proxy_max_body_bytes: int = 32 * 1024 * 1024
+    proxy_run_idle_seconds: float = 900.0
 
     @property
     def trust_anchor(self) -> frozenset[str] | None:

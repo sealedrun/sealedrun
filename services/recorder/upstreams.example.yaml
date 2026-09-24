@@ -1,0 +1,168 @@
+# Upstreams for the SealedRun LLM proxy. Copy to upstreams.yaml and keep what you use.
+#
+# url      Base URL the vendor's own SDK would use for that wire format.
+# dialect  Wire format: openai | anthropic | ollama | gemini. A client reaches an upstream only
+#          through the proxy path of the same format (/v1/chat/completions, /v1/messages, ...).
+# key_env  Environment variable holding the upstream key. The client never sees it; it sends
+#          SEALEDRUN_API_TOKEN instead. An upstream whose variable is unset answers 503.
+# auth     How the key is sent: bearer | x-api-key | x-goog-api-key | api-key | none.
+#          Defaults: openai bearer, anthropic x-api-key, gemini x-goog-api-key.
+# location local | cloud | unknown. Recorded with every call.
+# models   Glob patterns. The first upstream of the request's format that matches the model wins,
+#          so put narrow patterns first.
+
+upstreams:
+  # Local runtimes. Ollama model names always carry a tag (llama3.2:3b), hence "*:*".
+  - name: ollama
+    url: http://127.0.0.1:11434/v1
+    dialect: openai
+    location: local
+    models: ["*:*"]
+  - name: ollama-anthropic
+    url: http://127.0.0.1:11434
+    dialect: anthropic
+    location: local
+    models: ["*:*"]
+  - name: ollama-native
+    url: http://127.0.0.1:11434
+    dialect: ollama
+    location: local
+    models: ["*"]
+  - name: lmstudio
+    url: http://127.0.0.1:1234/v1
+    dialect: openai
+    location: local
+    models: ["lmstudio-community/*", "mlx-community/*"]
+  - name: vllm
+    url: http://127.0.0.1:8000/v1
+    dialect: openai
+    location: local
+    models: ["Qwen/*", "meta-llama/*", "mistralai/*", "google/*"]
+  # llama-server listens on 8080 by default, which the recorder uses: start it with --port 8081
+  # and --alias local-gguf.
+  - name: llamacpp
+    url: http://127.0.0.1:8081/v1
+    dialect: openai
+    location: local
+    models: ["local-gguf"]
+
+  - name: openai
+    url: https://api.openai.com/v1
+    dialect: openai
+    key_env: OPENAI_API_KEY
+    location: cloud
+    models: ["gpt-*", "o1*", "o3*", "o4*", "codex-*", "text-embedding-*", "omni-moderation-*"]
+  # Azure OpenAI v1 API; models are your deployment names.
+  - name: azure-openai
+    url: https://YOUR-RESOURCE.openai.azure.com/openai/v1
+    dialect: openai
+    key_env: AZURE_OPENAI_API_KEY
+    auth: api-key
+    location: cloud
+    models: ["azure-*"]
+  - name: anthropic
+    url: https://api.anthropic.com
+    dialect: anthropic
+    key_env: ANTHROPIC_API_KEY
+    location: cloud
+    models: ["claude-*"]
+  - name: gemini
+    url: https://generativelanguage.googleapis.com
+    dialect: gemini
+    key_env: GEMINI_API_KEY
+    location: cloud
+    models: ["gemini-*", "gemma-*", "text-embedding-*", "gemini-embedding-*"]
+  - name: gemini-openai
+    url: https://generativelanguage.googleapis.com/v1beta/openai
+    dialect: openai
+    key_env: GEMINI_API_KEY
+    location: cloud
+    models: ["gemini-*", "gemma-*"]
+  - name: deepseek
+    url: https://api.deepseek.com/v1
+    dialect: openai
+    key_env: DEEPSEEK_API_KEY
+    location: cloud
+    models: ["deepseek-*"]
+  - name: deepseek-anthropic
+    url: https://api.deepseek.com/anthropic
+    dialect: anthropic
+    key_env: DEEPSEEK_API_KEY
+    location: cloud
+    models: ["deepseek-*"]
+  - name: kimi
+    url: https://api.moonshot.ai/v1
+    dialect: openai
+    key_env: MOONSHOT_API_KEY
+    location: cloud
+    models: ["kimi-*", "moonshot-*"]
+  - name: kimi-anthropic
+    url: https://api.moonshot.ai/anthropic
+    dialect: anthropic
+    key_env: MOONSHOT_API_KEY
+    location: cloud
+    models: ["kimi-*"]
+  - name: qwen
+    url: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+    dialect: openai
+    key_env: DASHSCOPE_API_KEY
+    location: cloud
+    models: ["qwen*", "qwq-*"]
+  - name: qwen-anthropic
+    url: https://dashscope-intl.aliyuncs.com/apps/anthropic
+    dialect: anthropic
+    key_env: DASHSCOPE_API_KEY
+    location: cloud
+    models: ["qwen*"]
+  - name: glm
+    url: https://api.z.ai/api/paas/v4
+    dialect: openai
+    key_env: ZAI_API_KEY
+    location: cloud
+    models: ["glm-*"]
+  - name: glm-anthropic
+    url: https://api.z.ai/api/anthropic
+    dialect: anthropic
+    key_env: ZAI_API_KEY
+    location: cloud
+    models: ["glm-*"]
+  - name: minimax
+    url: https://api.minimax.io/v1
+    dialect: openai
+    key_env: MINIMAX_API_KEY
+    location: cloud
+    models: ["MiniMax-*"]
+  - name: minimax-anthropic
+    url: https://api.minimax.io/anthropic
+    dialect: anthropic
+    key_env: MINIMAX_API_KEY
+    location: cloud
+    models: ["MiniMax-*"]
+  - name: mistral
+    url: https://api.mistral.ai/v1
+    dialect: openai
+    key_env: MISTRAL_API_KEY
+    location: cloud
+    models: ["mistral-*", "magistral-*", "codestral-*", "devstral-*", "pixtral-*"]
+  - name: xai
+    url: https://api.x.ai/v1
+    dialect: openai
+    key_env: XAI_API_KEY
+    location: cloud
+    models: ["grok-*"]
+  - name: groq
+    url: https://api.groq.com/openai/v1
+    dialect: openai
+    key_env: GROQ_API_KEY
+    location: cloud
+    models: ["llama-*", "openai/gpt-oss-*"]
+  # Model ids are vendor/model; anything with a slash that no upstream above claimed lands here.
+  - name: openrouter
+    url: https://openrouter.ai/api/v1
+    dialect: openai
+    key_env: OPENROUTER_API_KEY
+    location: cloud
+    models: ["*/*"]
+    headers:
+      HTTP-Referer: https://sealedrun.com
+      X-Title: SealedRun

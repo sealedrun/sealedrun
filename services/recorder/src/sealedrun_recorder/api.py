@@ -30,7 +30,7 @@ def require_token(request: Request) -> None:
     secret = request.app.state.settings.api_token
     if secret is None or not secret.get_secret_value():
         return
-    if not _has_valid_token(request):
+    if not has_valid_token(request):
         raise HTTPException(401, "invalid or missing token")
 
 
@@ -44,13 +44,14 @@ def require_same_site(request: Request) -> None:
         return
     site = request.headers.get("sec-fetch-site")
     if site is None:
-        if not _has_valid_token(request):
+        if not has_valid_token(request):
             raise HTTPException(403, "request without Sec-Fetch-Site needs a bearer token")
     elif site not in SAME_SITE:
         raise HTTPException(403, "cross-site request refused")
 
 
-def _has_valid_token(request: Request) -> bool:
+def has_valid_token(request: Request) -> bool:
+    """Tell whether a token is configured and the request carries it as a bearer token."""
     secret = request.app.state.settings.api_token
     if secret is None or not secret.get_secret_value():
         return False

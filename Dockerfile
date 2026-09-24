@@ -27,7 +27,8 @@ RUN uv sync --frozen --no-dev --all-packages
 FROM python:3.12-slim-bookworm@sha256:392307d22300de8b5986851a12d9176dfc0fc073e65bf6523ebd7dcbeb23564e
 WORKDIR /app
 ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1 \
-    SEALEDRUN_DATA_DIR=/data SEALEDRUN_UI_DIR=/app/ui SEALEDRUN_HOST=0.0.0.0 SEALEDRUN_PORT=8080
+    SEALEDRUN_DATA_DIR=/data SEALEDRUN_UI_DIR=/app/ui SEALEDRUN_HOST=0.0.0.0 SEALEDRUN_PORT=8080 \
+    SEALEDRUN_UPSTREAMS_FILE=/data/upstreams.yaml
 RUN useradd --system --uid 10001 --create-home sealedrun && mkdir -p /data && chown sealedrun:sealedrun /data
 COPY --from=py /app/.venv /app/.venv
 COPY --from=py /app/packages/sealedrun-py /app/packages/sealedrun-py
