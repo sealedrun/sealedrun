@@ -81,6 +81,19 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@router.get("/identity")
+def identity(request: Request) -> dict[str, Any]:
+    """Return the ids and public keys this recorder signs live runs with, and its delegation."""
+    live = request.app.state.live
+    return {
+        "principal_id": live.identity.principal_id,
+        "agent_id": live.identity.agent_id,
+        "principal_keys": live.identity.principal.public.to_json(),
+        "agent_keys": live.identity.agent.public.to_json(),
+        "delegation": live.identity.delegation,
+    }
+
+
 @router.post("/bundles", status_code=201)
 async def upload_bundle(request: Request, file: UploadFile, session: SessionDep) -> dict[str, Any]:
     """Verify a bundle archive and store it, returning its summary.
@@ -292,6 +305,7 @@ def _run_summary(row: RunRow, request: Request) -> dict[str, Any]:
     return {
         "run_id": row.run_id,
         "bundle_id": row.bundle_id,
+        "source": row.source,
         "agent_id": row.agent_id,
         "principal_id": row.principal_id,
         "principal_trusted": _is_trusted(request, row.principal_id),

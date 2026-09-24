@@ -51,6 +51,7 @@ def import_bundle(
         run_row = RunRow(
             run_id=run_report.run_id,
             bundle_id=row.bundle_id,
+            source="imported",
             agent_id=records[0]["agent_id"],
             principal_id=records[0]["principal_id"],
             hash_alg=records[0]["hash_alg"],

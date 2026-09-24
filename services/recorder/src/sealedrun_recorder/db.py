@@ -52,12 +52,19 @@ class DelegationRow(Base):
 
 
 class RunRow(Base):
-    """A verified run with the figures from its verification report."""
+    """A run: imported from a verified bundle, or recorded live by this recorder.
+
+    `source` is `imported` or `live`. Live runs have no bundle and their figures are kept
+    current on every append.
+    """
 
     __tablename__ = "runs"
 
     run_id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    bundle_id: Mapped[str] = mapped_column(ForeignKey("bundles.bundle_id"), index=True)
+    bundle_id: Mapped[str | None] = mapped_column(
+        ForeignKey("bundles.bundle_id"), index=True, nullable=True
+    )
+    source: Mapped[str] = mapped_column(String(16), default="imported", index=True)
     agent_id: Mapped[str] = mapped_column(String(128), index=True)
     principal_id: Mapped[str] = mapped_column(String(128), index=True)
     hash_alg: Mapped[str] = mapped_column(String(16))
@@ -70,7 +77,7 @@ class RunRow(Base):
     anchors: Mapped[int]
     labels_sent_to_cloud: Mapped[dict[str, int]] = mapped_column(JSON)
 
-    bundle: Mapped[BundleRow] = relationship(back_populates="runs")
+    bundle: Mapped[BundleRow | None] = relationship(back_populates="runs")
     records: Mapped[list[RecordRow]] = relationship(
         back_populates="run", cascade="all, delete-orphan", order_by="RecordRow.seq"
     )

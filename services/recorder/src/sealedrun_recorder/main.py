@@ -15,17 +15,23 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from sealedrun_recorder import __version__
 from sealedrun_recorder.api import public_router, router
 from sealedrun_recorder.db import make_engine, session_factory
+from sealedrun_recorder.keystore import load_identity
+from sealedrun_recorder.live import LiveRuns
 from sealedrun_recorder.settings import Settings, load_settings
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> Any:
-    """Create the data directory and database engine on startup, dispose the engine on shutdown."""
+    """Open the database and load the signing keys on startup, dispose the engine on shutdown.
+
+    Keys and the delegation are generated under `data_dir/keys` on the first start.
+    """
     settings: Settings = app.state.settings
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     engine = make_engine(settings.resolved_database_url)
     app.state.engine = engine
     app.state.sessions = session_factory(engine)
+    app.state.live = LiveRuns(app.state.sessions, load_identity(settings.data_dir))
     yield
     engine.dispose()
 

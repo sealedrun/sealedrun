@@ -65,25 +65,68 @@ class RunWriter:
         self.hash_alg: str = delegation["hash_alg"]
         self.principal_id: str = delegation["principal_id"]
         self.agent_id: str = delegation["agent_id"]
-        self.records: list[dict[str, Any]] = []
         self.closed = False
+        self._records: list[dict[str, Any]] = []
+        self._seq = 0
+        self._head = zero_hash(self.hash_alg)
+
+    @property
+    def records(self) -> list[dict[str, Any]]:
+        """Records written by this writer, in seq order."""
+        return self._records
+
+    @records.setter
+    def records(self, value: list[dict[str, Any]]) -> None:
+        """Replace the record list and continue the chain from its last element.
+
+        Used to fork a chain, for example to build negative test vectors.
+        """
+        self._records = list(value)
+        self._seq = self._records[-1]["seq"] + 1 if self._records else 0
+        self._head = self._records[-1]["hash"] if self._records else zero_hash(self.hash_alg)
+
+    @classmethod
+    def resume(
+        cls,
+        agent: PrivateKeySet,
+        delegation: dict[str, Any],
+        *,
+        run_id: str,
+        seq: int,
+        head: str,
+        clock: Any = now,
+        id_factory: Any = lambda: str(uuid4()),
+    ) -> RunWriter:
+        """Continue a run whose earlier records live elsewhere, for example in a database.
+
+        `seq` is the number the next record gets and `head` is the hash of the last stored
+        record. The writer starts empty but chains from `head`, so `records` holds only what is
+        appended after the resume. Raises ValueError unless `seq` is positive: a run with no
+        records is started, not resumed.
+        """
+        if seq < 1:
+            raise ValueError("a run with no records cannot be resumed")
+        writer = cls(agent, delegation, run_id=run_id, clock=clock, id_factory=id_factory)
+        writer._seq = seq
+        writer._head = head
+        return writer
 
     @property
     def seq(self) -> int:
         """Sequence number the next record will get."""
-        return len(self.records)
+        return self._seq
 
     @property
     def head(self) -> str:
         """Hash of the last record, or the all-zero hash before the first one."""
-        return self.records[-1]["hash"] if self.records else zero_hash(self.hash_alg)
+        return self._head
 
     def start(self, **fields: Any) -> dict[str, Any]:
         """Write the `run_start` record and bind the run to the delegation (SPEC 6.4).
 
         `fields` are passed to `append`. Raises ValueError if the run has already started.
         """
-        if self.records:
+        if self._seq:
             raise ValueError("run already started")
         extensions = dict(fields.pop("extensions", {}))
         extensions["sealedrun.delegation"] = {
@@ -124,7 +167,7 @@ class RunWriter:
         """
         if self.closed:
             raise ValueError("run is closed")
-        if not self.records and kind != "run_start":
+        if not self._seq and kind != "run_start":
             raise ValueError("first record must be run_start")
         doc: dict[str, Any] = {
             "spec_version": SPEC_VERSION,
@@ -151,5 +194,7 @@ class RunWriter:
         if extensions:
             doc["extensions"] = extensions
         record = seal(doc, DOMAIN_RECORD, self._agent)
-        self.records.append(record)
+        self._records.append(record)
+        self._seq += 1
+        self._head = record["hash"]
         return record
