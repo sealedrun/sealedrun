@@ -204,7 +204,8 @@ def test_unreachable_upstream_in_gemini_shape(
 @pytest.mark.parametrize(
     ("url", "status", "name"),
     [
-        ("/v1beta/models/gemini-3-flash:streamGenerateContent?alt=sse", 400, "INVALID_ARGUMENT"),
+        ("/v1beta/models/gemini-3-flash:streamGenerateContent", 400, "INVALID_ARGUMENT"),
+        ("/v1beta/models/gemini-3-flash:streamGenerateContent?alt=json", 400, "INVALID_ARGUMENT"),
         ("/v1beta/models/gemini-3-flash:tuneModel", 404, "NOT_FOUND"),
         ("/v1beta/models/:generateContent", 404, "NOT_FOUND"),
         ("/v2/models/gemini-3-flash:generateContent", 404, "NOT_FOUND"),

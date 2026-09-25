@@ -226,7 +226,6 @@ def test_unreachable_upstream_in_anthropic_shape(
     [
         ("mistral-large", {}, 404, "not_found_error"),
         ("gpt-4.1", {}, 400, "invalid_request_error"),
-        ("claude-sonnet-5", {"stream": True}, 400, "invalid_request_error"),
     ],
 )
 def test_proxy_errors_in_anthropic_shape(

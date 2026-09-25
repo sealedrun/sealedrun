@@ -19,12 +19,14 @@ from sealedrun_recorder.proxy.core import (
     JSON,
     Dialect,
     Operation,
+    StreamSummary,
     error,
     forward,
     integer,
     mapping,
     require_proxy_token,
     sequence,
+    sse_data,
     temperature_field,
 )
 
@@ -91,10 +93,42 @@ def embed_usage(reply: dict[str, Any]) -> dict[str, Any]:
     return {} if prompt is None else {"input_tokens": prompt}
 
 
+def generate_stream(raw: bytes) -> StreamSummary:
+    """Read the same fields from a streamed generateContent call (`alt=sse`).
+
+    Every chunk is a partial reply in the plain shape; the last one carries the finish reason
+    and the usage. Function calls may arrive in any chunk. A chunk with `error` marks the stream
+    failed.
+    """
+    llm: dict[str, Any] = {}
+    names: list[str] = []
+    failed = False
+    complete = False
+    for chunk in sse_data(raw):
+        if "error" in chunk:
+            failed = True
+        fields = generate_usage(chunk)
+        names.extend(fields.pop("tool_calls_requested", []))
+        llm.update(fields)
+        if "finish_reason" in fields:
+            complete = True
+    if names:
+        llm["tool_calls_requested"] = names
+    return StreamSummary(llm, failed, complete)
+
+
 GEMINI = Dialect("gemini", _error_body)
 OPERATIONS = {
     "generateContent": Operation(
         GEMINI, "generate", "", generate_usage, sampling=_generation_temperature
+    ),
+    "streamGenerateContent": Operation(
+        GEMINI,
+        "generate",
+        "",
+        generate_usage,
+        sampling=_generation_temperature,
+        stream=generate_stream,
     ),
     "countTokens": Operation(GEMINI, "count_tokens", "", count_tokens_usage),
     "embedContent": Operation(GEMINI, "embeddings", "", embed_usage),
@@ -111,12 +145,15 @@ async def model_action(version: str, target: str, request: Request) -> Response:
     if version not in ("v1beta", "v1"):
         return error(GEMINI, 404, "unknown API version")
     model, _, action = target.rpartition(":")
-    if action in STREAMING:
-        return error(GEMINI, 400, "streaming is not supported by this recorder version")
+    streaming = action in STREAMING
+    if streaming and request.query_params.get("alt") != "sse":
+        return error(GEMINI, 400, "streamGenerateContent is supported with alt=sse only")
     operation = OPERATIONS.get(action)
     if operation is None or not model:
         return error(GEMINI, 404, f"unsupported method {action or target}")
-    return await forward(request, operation, model=model, path=f"/{version}/models/{target}")
+    return await forward(
+        request, operation, model=model, path=f"/{version}/models/{target}", stream=streaming
+    )
 
 
 @router.get("/v1beta/models")

@@ -176,20 +176,6 @@ def test_credentials_never_recorded(
     assert secrets["upstream_key"] not in stored
 
 
-def test_stream_default_true_is_refused(
-    proxy: TestClient, upstream: Any, auth: dict[str, str]
-) -> None:
-    for path, body in (
-        ("/api/chat", {"model": "llama3.2:3b", "messages": []}),
-        ("/api/generate", {"model": "llama3.2:3b", "prompt": "x"}),
-        ("/api/chat", {"model": "llama3.2:3b", "messages": [], "stream": True}),
-    ):
-        response = proxy.post(path, json=body, headers=auth)
-        assert response.status_code == 400
-        assert "streaming" in response.json()["error"]
-    assert upstream.calls == []
-
-
 def test_upstream_error_passed_through_and_recorded(
     proxy: TestClient, upstream: Any, auth: dict[str, str], proxy_records: Any
 ) -> None:

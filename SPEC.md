@@ -420,12 +420,14 @@ formats. Reverse projection is lossy and produces records marked `extensions["se
 ### 10.3 `sealedrun.proxy`
 
 Written by a recorder that sits between the agent and the provider. All fields are optional.
-`status` is the HTTP status returned to the agent and `latency_ms` the time spent upstream. On a
-`run_start` record, `run_label` is the label the agent chose for the run.
+`status` is the HTTP status returned to the agent and `latency_ms` the time spent upstream.
+`truncated` is set when a streamed response ended before the upstream finished it (client
+disconnect, upstream break or size cap); the record then holds the bytes delivered so far and its
+outcome is `error`. On a `run_start` record, `run_label` is the label the agent chose for the run.
 
 ```json
 { "upstream": "openai", "dialect": "openai" | "anthropic" | "ollama" | "gemini", "operation": "chat",
-  "status": 200, "latency_ms": 412.5, "run_label": "nightly-report" }
+  "status": 200, "latency_ms": 412.5, "truncated": true, "run_label": "nightly-report" }
 ```
 
 ## 11. Mapping to OpenTelemetry GenAI semantic conventions

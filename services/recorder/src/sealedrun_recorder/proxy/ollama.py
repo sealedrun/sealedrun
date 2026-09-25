@@ -16,12 +16,15 @@ from fastapi import APIRouter, Depends, Request, Response
 
 from sealedrun_recorder.proxy.core import (
     JSON,
+    NDJSON,
     Dialect,
     Operation,
+    StreamSummary,
     error,
     forward,
     integer,
     mapping,
+    ndjson,
     require_proxy_token,
     sequence,
     temperature_field,
@@ -65,6 +68,29 @@ def embed_usage(reply: dict[str, Any]) -> dict[str, Any]:
     return llm
 
 
+def generation_stream(raw: bytes) -> StreamSummary:
+    """Read the same fields from a streamed chat or generate call.
+
+    Each line is a partial reply; the `done: true` line carries the counts and the done reason
+    and ends the stream. Tool calls may arrive on any line. A line with `error` marks it failed.
+    """
+    llm: dict[str, Any] = {}
+    names: list[str] = []
+    failed = False
+    complete = False
+    for line in ndjson(raw):
+        if "error" in line:
+            failed = True
+        fields = generation_usage(line)
+        names.extend(fields.pop("tool_calls_requested", []))
+        llm.update(fields)
+        if line.get("done") is True:
+            complete = True
+    if names:
+        llm["tool_calls_requested"] = names
+    return StreamSummary(llm, failed, complete)
+
+
 OLLAMA = Dialect("ollama", _error_body)
 CHAT = Operation(
     OLLAMA,
@@ -73,6 +99,8 @@ CHAT = Operation(
     generation_usage,
     stream_default=True,
     sampling=_options_temperature,
+    stream=generation_stream,
+    stream_media_type=NDJSON,
 )
 GENERATE = Operation(
     OLLAMA,
@@ -81,6 +109,8 @@ GENERATE = Operation(
     generation_usage,
     stream_default=True,
     sampling=_options_temperature,
+    stream=generation_stream,
+    stream_media_type=NDJSON,
 )
 EMBED = Operation(OLLAMA, "embeddings", "/api/embed", embed_usage)
 LEGACY_EMBEDDINGS = Operation(OLLAMA, "embeddings", "/api/embeddings", embed_usage)

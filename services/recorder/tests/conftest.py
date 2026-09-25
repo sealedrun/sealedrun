@@ -5,6 +5,7 @@ from typing import Any
 
 import httpx
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 from sealedrun_recorder.db import PayloadRow, RecordRow, RunRow
@@ -80,20 +81,43 @@ def make_proxy(
     monkeypatch.setenv("TEST_UPSTREAM_KEY", UPSTREAM_KEY)
 
     def _make(config: str, **overrides: Any) -> TestClient:
-        path = tmp_path / "upstreams.yaml"
-        path.write_text(config)
-        options: dict[str, Any] = {"api_token": SecretStr(PROXY_TOKEN), **overrides}
-        settings = Settings(
-            data_dir=tmp_path, ui_dir=tmp_path / "no-ui", upstreams_file=path, **options
-        )
-        app = create_app(settings, http_transport=httpx.MockTransport(upstream))
+        app = make_proxy_app(tmp_path, upstream, config, **overrides)
         return TestClient(app, base_url="http://localhost")
 
     return _make
 
 
+def make_proxy_app(tmp_path: Path, upstream: Any, config: str, **overrides: Any) -> FastAPI:
+    """Build the recorder app itself, for tests that drive it as an ASGI app."""
+    path = tmp_path / "upstreams.yaml"
+    path.write_text(config)
+    options: dict[str, Any] = {"api_token": SecretStr(PROXY_TOKEN), **overrides}
+    settings = Settings(
+        data_dir=tmp_path, ui_dir=tmp_path / "no-ui", upstreams_file=path, **options
+    )
+    return create_app(settings, http_transport=httpx.MockTransport(upstream))
+
+
+@pytest.fixture
+def make_app(
+    tmp_path: Path, upstream: FakeUpstream, monkeypatch: pytest.MonkeyPatch
+) -> Callable[..., FastAPI]:
+    """Like `make_proxy` but returns the bare app; the test runs its lifespan itself."""
+    monkeypatch.setenv("TEST_UPSTREAM_KEY", UPSTREAM_KEY)
+
+    def _make(config: str, **overrides: Any) -> FastAPI:
+        return make_proxy_app(tmp_path, upstream, config, **overrides)
+
+    return _make
+
+
 def _stored_text(client: TestClient) -> str:
-    live = client.app.state.live  # type: ignore[attr-defined]
+    return stored_text_of(client.app)
+
+
+def stored_text_of(app: Any) -> str:
+    """Every record document and payload body `app` holds, as one string."""
+    live = app.state.live
     with live._sessions() as session:
         bodies = [row.body.decode() for row in session.query(PayloadRow)]
         docs = [row.document for row in session.query(RecordRow)]
@@ -101,9 +125,16 @@ def _stored_text(client: TestClient) -> str:
 
 
 def _proxy_records(client: TestClient) -> list[dict[str, Any]]:
-    live = client.app.state.live  # type: ignore[attr-defined]
+    return records_of(client.app)
+
+
+def records_of(app: Any) -> list[dict[str, Any]]:
+    """The records of the only run of `app`, in seq order."""
+    live = app.state.live
     with live._sessions() as session:
         runs = session.query(RunRow).all()
+        if not runs:
+            return []
         assert len(runs) == 1
         rows = session.query(RecordRow).filter_by(run_id=runs[0].run_id).order_by(RecordRow.seq)
         return [row.document for row in rows]
@@ -119,6 +150,18 @@ def stored_text() -> Callable[[TestClient], str]:
 def proxy_records() -> Callable[[TestClient], list[dict[str, Any]]]:
     """The records of the only run, in seq order."""
     return _proxy_records
+
+
+@pytest.fixture
+def app_records() -> Callable[[Any], list[dict[str, Any]]]:
+    """Like `proxy_records`, but for a bare app."""
+    return records_of
+
+
+@pytest.fixture
+def app_stored_text() -> Callable[[Any], str]:
+    """Like `stored_text`, but for a bare app."""
+    return stored_text_of
 
 
 @pytest.fixture

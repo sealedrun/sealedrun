@@ -16,11 +16,14 @@ from fastapi import APIRouter, Depends, Request, Response
 from sealedrun_recorder.proxy.core import (
     Dialect,
     Operation,
+    StreamSummary,
     forward,
     integer,
     mapping,
     require_proxy_token,
     sequence,
+    sse_data,
+    sse_done,
 )
 
 
@@ -60,6 +63,33 @@ def chat_usage(reply: dict[str, Any]) -> dict[str, Any]:
     return llm
 
 
+def chat_stream(raw: bytes) -> StreamSummary:
+    """Read the same fields from a streamed chat completion.
+
+    Token counts appear only when the client asked for `stream_options.include_usage`; the
+    finish reason is the last one sent; tool names come from the deltas that open a tool call.
+    An `error` event marks the stream failed; `[DONE]` as the last event marks it complete.
+    """
+    llm: dict[str, Any] = {}
+    names: list[str] = []
+    failed = False
+    for chunk in sse_data(raw):
+        if "error" in chunk:
+            failed = True
+        llm.update(_model(chunk))
+        llm.update(_tokens(mapping(chunk.get("usage")), "prompt_tokens", "completion_tokens"))
+        for choice in map(mapping, sequence(chunk.get("choices"))):
+            if isinstance(choice.get("finish_reason"), str):
+                llm["finish_reason"] = choice["finish_reason"]
+            for call in map(mapping, sequence(mapping(choice.get("delta")).get("tool_calls"))):
+                name = mapping(call.get("function")).get("name")
+                if isinstance(name, str) and name:
+                    names.append(name)
+    if names:
+        llm["tool_calls_requested"] = names
+    return StreamSummary(llm, failed, complete=sse_done(raw))
+
+
 def embeddings_usage(reply: dict[str, Any]) -> dict[str, Any]:
     """Read model and input token count from an embeddings reply."""
     return _model(reply) | _tokens(mapping(reply.get("usage")), "prompt_tokens", "-")
@@ -88,10 +118,36 @@ def responses_usage(reply: dict[str, Any]) -> dict[str, Any]:
     return llm
 
 
+_RESPONSE_ENDS = ("response.completed", "response.incomplete", "response.failed")
+
+
+def responses_stream(raw: bytes) -> StreamSummary:
+    """Read the same fields from a streamed Responses API call.
+
+    The stream is typed events; the terminal one (`response.completed`, `response.incomplete`
+    or `response.failed`) carries the whole response, which is read like a plain reply. A
+    `response.failed` or `error` event marks the stream failed.
+    """
+    llm: dict[str, Any] = {}
+    failed = False
+    complete = False
+    for event in sse_data(raw):
+        kind = event.get("type")
+        if kind == "error":
+            failed = True
+        if kind in _RESPONSE_ENDS:
+            llm = responses_usage(mapping(event.get("response")))
+            complete = True
+            failed = failed or kind == "response.failed"
+        elif not llm:
+            llm.update(_model(mapping(event.get("response"))))
+    return StreamSummary(llm, failed, complete)
+
+
 OPENAI = Dialect("openai", _error_body, passthrough=("openai-beta",))
-CHAT = Operation(OPENAI, "chat", "/chat/completions", chat_usage)
+CHAT = Operation(OPENAI, "chat", "/chat/completions", chat_usage, stream=chat_stream)
 EMBEDDINGS = Operation(OPENAI, "embeddings", "/embeddings", embeddings_usage)
-RESPONSES = Operation(OPENAI, "responses", "/responses", responses_usage)
+RESPONSES = Operation(OPENAI, "responses", "/responses", responses_usage, stream=responses_stream)
 
 router = APIRouter(prefix="/v1", dependencies=[Depends(require_proxy_token)])
 
