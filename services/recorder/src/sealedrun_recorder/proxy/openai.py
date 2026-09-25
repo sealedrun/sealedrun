@@ -144,7 +144,13 @@ def responses_stream(raw: bytes) -> StreamSummary:
     return StreamSummary(llm, failed, complete)
 
 
-OPENAI = Dialect("openai", _error_body, passthrough=("openai-beta",))
+OPENAI = Dialect(
+    "openai",
+    _error_body,
+    passthrough=("openai-beta",),
+    reply_passthrough=("retry-after", "x-request-id"),
+    reply_prefixes=("x-ratelimit-",),
+)
 CHAT = Operation(OPENAI, "chat", "/chat/completions", chat_usage, stream=chat_stream)
 EMBEDDINGS = Operation(OPENAI, "embeddings", "/embeddings", embeddings_usage)
 RESPONSES = Operation(OPENAI, "responses", "/responses", responses_usage, stream=responses_stream)
