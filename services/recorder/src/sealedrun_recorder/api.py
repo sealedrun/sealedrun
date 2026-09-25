@@ -12,7 +12,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from sealedrun_recorder.db import BundleRow, PayloadRow, RecordRow, RunRow
+from sealedrun_recorder.export import ExportError, build_bundle
 from sealedrun_recorder.importer import import_bundle
+from sealedrun_recorder.live import LiveRunError
 
 SAFE_PAYLOAD_MEDIA_TYPES = frozenset({"application/json", "text/plain", "application/octet-stream"})
 
@@ -216,6 +218,35 @@ def get_run(run_id: str, request: Request, session: SessionDep) -> dict[str, Any
     return _run_summary(row, request)
 
 
+@router.post("/runs/{run_id}/export")
+def export_run(run_id: str, request: Request, session: SessionDep, end: bool = False) -> Response:
+    """Export a live run as a bundle archive signed by this recorder.
+
+    With `end=true` the run's `run_end` record is written first, so the bundle is complete;
+    otherwise an open run is exported as it stands. Responds 404 for an unknown run, 409 for an
+    imported run (download its original bundle) and 409 with `end=true` on a run that is
+    already closed.
+    """
+    if end:
+        try:
+            request.app.state.live.end(run_id)
+        except LiveRunError as error:
+            raise HTTPException(409, str(error)) from error
+        session.expire_all()
+    try:
+        archive = build_bundle(session, request.app.state.live.identity, run_id)
+    except ExportError as error:
+        raise HTTPException(error.status, str(error)) from error
+    return Response(
+        archive,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="sealedrun-{_safe_name(run_id)}.zip"',
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
 @router.get("/runs/{run_id}/records")
 def list_records(
     run_id: str, session: SessionDep, limit: Limit = 1000, offset: Offset = 0
@@ -281,10 +312,13 @@ def _safe_name(value: str) -> str:
 
 
 def _is_trusted(request: Request, principal_id: str) -> bool:
-    """Tell whether the Principal is in the trust anchor.
+    """Tell whether the Principal is in the trust anchor or is this recorder's own Principal.
 
+    The recorder holds its own principal key, so runs it signed itself need no out-of-band id.
     Evaluated against the current setting, not the one in force at import time.
     """
+    if principal_id == request.app.state.live.identity.principal_id:
+        return True
     anchor = request.app.state.settings.trust_anchor
     return anchor is not None and principal_id in anchor
 

@@ -4,6 +4,15 @@
     "ok": false,
     "seq": 1
   },
+  "open-run.zip": {
+    "complete": false,
+    "ok": true,
+    "records": 8,
+    "runs": 1,
+    "trusted_principals": [
+      "qJtRVbgIsIjNNo6VuDr6nQ50Wj3rwEAAuR2e385pby8"
+    ]
+  },
   "overlapping-entries.zip": {
     "check": "bundle",
     "ok": false
