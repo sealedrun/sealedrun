@@ -171,3 +171,26 @@ def test_manifest_principal_must_match_delegations(
     tampered = _rewrite(bundle_bytes, "manifest.json", json.dumps(manifest).encode())
     with pytest.raises(VerificationError, match="principal differs"):
         verify_bundle(read_bundle(tampered))
+
+
+def test_open_run_exports_incomplete(
+    agent: PrivateKeySet, principal: PrivateKeySet, delegation: dict[str, Any]
+) -> None:
+    from sealedrun import RunWriter, write_bundle
+
+    writer = RunWriter(agent, delegation)
+    writer.start()
+    writer.append("note", target={"type": "none", "name": "step"})
+    out = io.BytesIO()
+    write_bundle(
+        out,
+        exporter=agent,
+        software="test/0",
+        delegations=[delegation],
+        runs=[writer.records],
+        principal=principal,
+    )
+    report = verify_bundle(read_bundle(out.getvalue()), [principal.public.kid])
+    assert report.runs[0].complete is False
+    assert report.runs[0].record_count == 2
+    assert report.principal_trusted

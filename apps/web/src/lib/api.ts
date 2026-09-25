@@ -3,7 +3,8 @@ import type { SealedRunRecord } from "@sealedrun/core";
 /** One run as listed by the recorder's `GET /api/runs`. Field names follow the JSON response. */
 export interface RunSummary {
   run_id: string;
-  bundle_id: string;
+  bundle_id: string | null;
+  source: "live" | "imported";
   agent_id: string;
   principal_id: string;
   principal_trusted: boolean;
@@ -106,14 +107,33 @@ export const api = {
   downloadPayload: async (recordId: string, side: "request" | "response") => {
     const response = await request(`/api/records/${recordId}/payload/${side}`);
     if (!response.ok) throw new Error(`payload: ${response.status}`);
-    const url = URL.createObjectURL(await response.blob());
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `${recordId}-${side}`;
-    link.click();
-    URL.revokeObjectURL(url);
+    saveFile(await response.blob(), `${recordId}-${side}`);
+  },
+  /**
+   * Exports a live run as a bundle signed by the recorder and returns it as a File named like
+   * the recorder's attachment. With `end` the recorder closes the run first. Throws with the
+   * recorder's own error text on refusal.
+   */
+  export: async (runId: string, end = false): Promise<File> => {
+    const response = await request(`/api/runs/${runId}/export${end ? "?end=true" : ""}`, {
+      method: "POST",
+    });
+    if (!response.ok) throw new Error(describeError(await response.json()));
+    return new File([await response.blob()], `sealedrun-${runId}.zip`, {
+      type: "application/zip",
+    });
   },
 };
+
+/** Saves a blob through a temporary download link. */
+export function saveFile(blob: Blob, name: string): void {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = name;
+  link.click();
+  URL.revokeObjectURL(url);
+}
 
 /** Extracts the message from a FastAPI-style `{ detail }` error body. */
 function describeError(payload: unknown): string {

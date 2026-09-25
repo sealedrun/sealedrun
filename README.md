@@ -5,8 +5,8 @@ call, memory access, policy decision, human approval — becomes a signed record
 hash chain. Records are exported as an evidence bundle that anyone can verify offline, without
 trusting the operator.
 
-Status: early development, stage 0 (specification, reference implementation, inspector). The
-proxy that records live agent traffic arrives in stage 1.
+Status: early development. Stage 0 (specification, reference implementation, Inspector) is
+released as 0.1.1. Stage 1 (the recorder as a live LLM proxy) is on `main` and unreleased.
 
 ## Why
 
@@ -110,6 +110,31 @@ verifies it. "Store in recorder" keeps it on the server.
 > `["127.0.0.1", "localhost"]`; add your public name when you expose it). Uploads are accepted from
 > the Inspector's own origin, or from a script that presents the token; a request a foreign web page
 > makes your browser send is refused.
+
+## Record live traffic and export it (unreleased, on `main`)
+
+The recorder is also an LLM proxy. Point an agent's SDK at it, and every model call becomes a
+signed record in a live run; export the run as a bundle at any time.
+
+```bash
+cp services/recorder/upstreams.example.yaml upstreams.yaml   # keep the upstreams you use
+export SEALEDRUN_API_TOKEN=change-me OPENAI_API_KEY=sk-...
+SEALEDRUN_UPSTREAMS_FILE=./upstreams.yaml uv run sealedrun-recorder
+```
+
+```bash
+OPENAI_BASE_URL=http://127.0.0.1:8080/v1 OPENAI_API_KEY=change-me python agent.py   # the token goes where the key went
+curl -s -H "Authorization: Bearer change-me" http://127.0.0.1:8080/api/runs | jq '.[0].run_id'
+curl -s -X POST -H "Authorization: Bearer change-me" \
+  "http://127.0.0.1:8080/api/runs/<run_id>/export?end=true" -o run.zip     # end=true closes the run first
+```
+
+`run.zip` verifies with `verify_bundle`, `verifyBundle` or the Inspector like any bundle; the
+recorder's `principal_id` is at `/api/identity`. Anthropic, Ollama and Gemini SDKs use their own
+base-URL setting (`ANTHROPIC_BASE_URL`, `OLLAMA_HOST`, Gemini `http_options.base_url`). Calls
+that send the same `X-SealedRun-Run` header share a run; the Inspector's "Runs in the recorder"
+tab lists live runs as they grow and has the Export buttons. Details in `CHANGELOG.md` until
+0.2.0 is released.
 
 ## Development
 

@@ -548,6 +548,8 @@ implementations can prove conformance:
   fail with check `trust`, and without it MUST report the Principal as not authenticated.
 - `bundle/swapped-anchor-receipt.zip`: the `anchors/` file is not the receipt of its anchor
   record; check `anchor`.
+- `bundle/open-run.zip`: the same run exported before its `run_end`; a verifier MUST accept it
+  and report `complete: false`.
 - `bundle/valid.zip`, `tampered-payload.zip`, `tampered-record.zip`, `poisoned-payload-name.zip`,
   `overlapping-entries.zip`, `too-many-delegations.zip`, `no-payloads.zip` with `expected.json`.
 

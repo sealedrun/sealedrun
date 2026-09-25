@@ -1,11 +1,12 @@
 "use client";
 
 import type { SealedRunRecord } from "@sealedrun/core";
-import { KeyRound, Server } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { Download, KeyRound, Server } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
-import { api, type RunSummary, setToken, UnauthorizedError } from "@/lib/api";
+import { api, type RunSummary, saveFile, setToken, UnauthorizedError } from "@/lib/api";
 import { type LocalVerification, parsePrincipals, verifyLocally } from "@/lib/inspect";
+import { isGrowing, POLL_MS, runBadge, shouldPoll } from "@/lib/recorder-view";
 import { trustedStore } from "@/lib/trusted-store";
 
 import { DropZone } from "./dropzone";
@@ -41,12 +42,42 @@ export function Inspector() {
 
   const [refreshTick, setRefreshTick] = useState(0);
   const refreshRuns = useCallback(() => setRefreshTick((n) => n + 1), []);
+  const [visibility, setVisibility] = useState<DocumentVisibilityState>("visible");
 
+  useEffect(() => {
+    const update = () => setVisibility(document.visibilityState);
+    update();
+    document.addEventListener("visibilitychange", update);
+    return () => document.removeEventListener("visibilitychange", update);
+  }, []);
+
+  const polling = shouldPoll(view, recorder.state, visibility);
+  useEffect(() => {
+    if (!polling) return;
+    const timer = setInterval(refreshRuns, POLL_MS);
+    return () => clearInterval(timer);
+  }, [polling, refreshRuns]);
+
+  const shown = useRef<RunSummary | null>(null);
   useEffect(() => {
     let cancelled = false;
     api
       .runs()
-      .then((runs) => !cancelled && setRecorder({ state: "ready", runs }))
+      .then(async (runs) => {
+        if (cancelled) return;
+        setRecorder({ state: "ready", runs });
+        const selected = shown.current;
+        const current = selected && runs.find((run) => run.run_id === selected.run_id);
+        if (
+          current &&
+          isGrowing(selected) &&
+          (current.record_count !== selected.record_count || current.complete !== selected.complete)
+        ) {
+          shown.current = current;
+          setServerRun(current);
+          setServerRecords(await api.records(current.run_id));
+        }
+      })
       .catch((error: unknown) => {
         if (cancelled) return;
         if (error instanceof UnauthorizedError) setRecorder({ state: "locked" });
@@ -94,11 +125,27 @@ export function Inspector() {
   };
 
   const selectServerRun = async (run: RunSummary) => {
+    shown.current = run;
     setServerRun(run);
     try {
       setServerRecords(await api.records(run.run_id));
     } catch (error) {
       if (!onUnauthorized(error)) throw error;
+    }
+  };
+
+  const exportRun = async (run: RunSummary, end: boolean) => {
+    setNotice(end ? "Closing and exporting…" : "Exporting…");
+    try {
+      const file = await api.export(run.run_id, end);
+      saveFile(file, file.name);
+      setLastFile(file);
+      await verify(file, trusted);
+      setView("bundle");
+      refreshRuns();
+    } catch (error) {
+      onUnauthorized(error);
+      setNotice(error instanceof Error ? error.message : "The recorder refused the export.");
     }
   };
 
@@ -223,7 +270,8 @@ export function Inspector() {
           )}
           {recorder.state === "ready" && recorder.runs.length === 0 && (
             <Empty title="No runs stored yet">
-              Check a bundle file first, then choose “Store in the recorder”.
+              Point an agent at the proxy, or check a bundle file and choose “Store in the
+              recorder”.
             </Empty>
           )}
           {recorder.state === "ready" && recorder.runs.length > 0 && (
@@ -240,6 +288,31 @@ export function Inspector() {
                 ))}
               </ul>
               <section className="min-w-0">
+                {serverRun && serverRun.source === "live" && (
+                  <div className="mb-4 flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={() => void exportRun(serverRun, false)}
+                    >
+                      <Download aria-hidden className="size-4" /> Export bundle
+                    </button>
+                    {!serverRun.complete && (
+                      <button
+                        type="button"
+                        className="btn"
+                        onClick={() => void exportRun(serverRun, true)}
+                      >
+                        Close run and export
+                      </button>
+                    )}
+                    {notice && (
+                      <p className="text-sm text-ink-soft [overflow-wrap:anywhere]" role="status">
+                        {notice}
+                      </p>
+                    )}
+                  </div>
+                )}
                 {serverRun && serverRecords.length > 0 ? (
                   <RunFeed records={serverRecords} onDownload={downloadPayload} />
                 ) : (
@@ -413,6 +486,7 @@ function RunRow({
   selected: boolean;
   onSelect: () => void;
 }) {
+  const badge = runBadge(run);
   return (
     <button
       type="button"
@@ -423,8 +497,11 @@ function RunRow({
       }`}
     >
       <span className="hash block">{run.run_id}</span>
-      <span className="mt-1 block text-sm text-ink-soft">
-        {run.record_count} steps, {run.complete ? "complete" : "not finished"}
+      <span className="mt-1 flex items-center gap-2 text-sm text-ink-soft">
+        <span className={`rounded px-1.5 py-0.5 text-xs font-medium ${badge.tone}`}>
+          {badge.label}
+        </span>
+        {run.record_count} steps
       </span>
       <span
         className={`mt-1 block text-sm font-medium ${run.principal_trusted ? "text-ok" : "text-warn"}`}

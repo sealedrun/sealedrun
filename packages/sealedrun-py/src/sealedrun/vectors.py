@@ -746,6 +746,9 @@ def generate(spec_dir: Path) -> None:
         )
     )
     trusted = [principal.public.kid]
+    (bundle_dir / "open-run.zip").write_bytes(
+        bundle_bytes(agent, principal, delegation, run.records[:-1])
+    )
     (bundle_dir / "no-payloads.zip").write_bytes(
         bundle_bytes(agent, principal, delegation, run.records, with_payloads=False)
     )
@@ -757,6 +760,13 @@ def generate(spec_dir: Path) -> None:
                 "runs": 1,
                 "records": len(run.records),
                 "complete": True,
+                "trusted_principals": trusted,
+            },
+            "open-run.zip": {
+                "ok": True,
+                "runs": 1,
+                "records": len(run.records) - 1,
+                "complete": False,
                 "trusted_principals": trusted,
             },
             "unknown-principal.zip": {
