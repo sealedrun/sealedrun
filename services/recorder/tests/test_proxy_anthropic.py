@@ -274,3 +274,47 @@ def test_models_without_version_header_use_openai_shape(
 ) -> None:
     listing = proxy.get("/v1/models", headers={"x-api-key": secrets["token"]}).json()
     assert listing["object"] == "list"
+
+
+UPSTREAM_HEADERS = {
+    "x-should-retry": "true",
+    "retry-after": "7",
+    "request-id": "req_abc",
+    "anthropic-ratelimit-unified-status": "allowed",
+    "anthropic-ratelimit-unified-reset": "2026-09-25T12:00:00Z",
+    "anthropic-organization-id": "org_secret",
+    "set-cookie": "sticky=1",
+    "cf-ray": "abc",
+}
+
+
+def _reply_with_headers(status: int, body: dict[str, Any]) -> Callable[..., httpx.Response]:
+    return lambda request: httpx.Response(status, json=body, headers=UPSTREAM_HEADERS)
+
+
+def test_retry_and_ratelimit_headers_reach_the_client(
+    proxy: TestClient, upstream: Any, auth: dict[str, str]
+) -> None:
+    upstream.routes["/v1/messages"] = _reply_with_headers(200, MESSAGE_REPLY)
+    response = _message(proxy, {**auth, **VERSION})
+    assert response.status_code == 200
+    assert response.headers["x-should-retry"] == "true"
+    assert response.headers["retry-after"] == "7"
+    assert response.headers["request-id"] == "req_abc"
+    assert response.headers["anthropic-ratelimit-unified-status"] == "allowed"
+    assert response.headers["anthropic-ratelimit-unified-reset"] == "2026-09-25T12:00:00Z"
+    for name in ("anthropic-organization-id", "set-cookie", "cf-ray"):
+        assert name not in response.headers
+
+
+def test_headers_forwarded_on_upstream_errors_too(
+    proxy: TestClient, upstream: Any, auth: dict[str, str]
+) -> None:
+    error = {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}
+    upstream.routes["/v1/messages"] = _reply_with_headers(529, error)
+    response = _message(proxy, {**auth, **VERSION})
+    assert response.status_code == 529
+    assert response.json() == error
+    assert response.headers["x-should-retry"] == "true"
+    assert response.headers["retry-after"] == "7"
+    assert "anthropic-organization-id" not in response.headers

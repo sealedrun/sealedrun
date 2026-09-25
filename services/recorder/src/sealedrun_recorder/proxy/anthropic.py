@@ -81,7 +81,13 @@ def count_tokens_usage(reply: dict[str, Any]) -> dict[str, Any]:
     return {} if counted is None else {"input_tokens": counted}
 
 
-ANTHROPIC = Dialect("anthropic", _error_body, passthrough=PASSTHROUGH)
+ANTHROPIC = Dialect(
+    "anthropic",
+    _error_body,
+    passthrough=PASSTHROUGH,
+    reply_passthrough=("x-should-retry", "retry-after", "request-id"),
+    reply_prefixes=("anthropic-ratelimit-",),
+)
 
 
 def messages_stream(raw: bytes) -> StreamSummary:

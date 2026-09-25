@@ -803,3 +803,29 @@ def test_sse_data_parser() -> None:
 def test_ndjson_parser() -> None:
     raw = b'{"a": 1}\n\n{"b": 2}\r\nnot json\n[1]\n{"c": 3}'
     assert ndjson(raw) == [{"a": 1}, {"b": 2}, {"c": 3}]
+
+
+def test_anthropic_stream_carries_retry_and_ratelimit_headers(
+    make_proxy: Callable[..., TestClient], upstream: Any, secrets: Any
+) -> None:
+    extra = {
+        "x-should-retry": "false",
+        "anthropic-ratelimit-unified-status": "allowed",
+        "anthropic-organization-id": "org_secret",
+    }
+
+    def _route(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, headers={"content-type": SSE, **extra}, stream=Stream(MESSAGE_CHUNKS)
+        )
+
+    upstream.routes["/v1/messages"] = _route
+    headers = {"x-api-key": secrets["token"], "anthropic-version": "2023-06-01"}
+    with make_proxy(ANTHROPIC_UPSTREAMS) as proxy:
+        response = proxy.post("/v1/messages", json=MESSAGE_BODY, headers=headers)
+        assert response.status_code == 200
+        assert response.headers["content-type"] == SSE
+        assert response.headers["x-should-retry"] == "false"
+        assert response.headers["anthropic-ratelimit-unified-status"] == "allowed"
+        assert "anthropic-organization-id" not in response.headers
+        assert response.content == b"".join(MESSAGE_CHUNKS)

@@ -61,11 +61,27 @@ StreamFields = Callable[[bytes], StreamSummary]
 
 @dataclass(frozen=True)
 class Dialect:
-    """A wire format: how its errors look and which client headers reach the upstream."""
+    """A wire format: how its errors look and which headers cross the proxy.
+
+    `passthrough` names client request headers that reach the upstream. `reply_passthrough`
+    names upstream response headers, and `reply_prefixes` header-name prefixes, that reach the
+    client: retry hints and rate-limit figures the SDKs act on. Every other upstream header
+    stays behind the proxy.
+    """
 
     name: str
     error_body: Callable[[int, str], bytes]
     passthrough: tuple[str, ...] = ()
+    reply_passthrough: tuple[str, ...] = ()
+    reply_prefixes: tuple[str, ...] = ()
+
+    def reply_headers(self, reply: httpx.Response) -> dict[str, str]:
+        """Pick the upstream response headers this format lets through to the client."""
+        return {
+            name: value
+            for name, value in reply.headers.items()
+            if name in self.reply_passthrough or name.startswith(self.reply_prefixes)
+        }
 
 
 def top_level_temperature(call: dict[str, Any]) -> dict[str, Any]:
@@ -279,11 +295,12 @@ class Exchange:
             reply = await self.request.app.state.http.send(self._build())
             status, answer = reply.status_code, reply.content
             media_type = reply.headers.get("content-type", JSON)
+            headers = self.operation.dialect.reply_headers(reply)
         except httpx.HTTPError as failure:
             status, answer = self._unreachable(failure)
-            media_type = JSON
+            media_type, headers = JSON, {}
         await self._record(status, answer, media_type)
-        return Response(answer, status_code=status, media_type=media_type)
+        return Response(answer, status_code=status, media_type=media_type, headers=headers)
 
     async def stream(self) -> Response:
         """Forward a streamed call, pass the chunks through and record the stream when it ends.
@@ -298,15 +315,18 @@ class Exchange:
             await self._record(status, answer, JSON)
             return Response(answer, status_code=status, media_type=JSON)
         media_type = reply.headers.get("content-type", self.operation.stream_media_type)
+        headers = self.operation.dialect.reply_headers(reply)
         if not reply.is_success:
             answer = await reply.aread()
             await reply.aclose()
             await self._record(reply.status_code, answer, media_type)
-            return Response(answer, status_code=reply.status_code, media_type=media_type)
+            return Response(
+                answer, status_code=reply.status_code, media_type=media_type, headers=headers
+            )
         return StreamingResponse(
             self._relay(reply, media_type),
             status_code=reply.status_code,
-            headers={"content-type": media_type},
+            headers={**headers, "content-type": media_type},
         )
 
     async def _relay(self, reply: httpx.Response, media_type: str) -> AsyncIterator[bytes]:

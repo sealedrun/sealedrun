@@ -15,6 +15,7 @@ follows Semantic Versioning once 1.0.0 is reached.
 - The recorder reports its own Principal as trusted on the runs it signed itself (`principal_trusted` in `/api/runs`), so live runs need no `SEALEDRUN_TRUSTED_PRINCIPALS` entry. Bundles from other Principals are unaffected.
 - Inspector, "Runs in the recorder" tab: live and imported runs are badged, the list and the open live run refresh every 5 s while the tab is visible, and "Export bundle" / "Close run and export" download the bundle and verify it in the browser.
 - Test vector `spec/vectors/bundle/open-run.zip`: a run exported before `run_end`; verifiers accept it and report `complete: false` (SPEC 14).
+- The proxy forwards the upstream response headers SDKs act on: for the Anthropic format `x-should-retry`, `retry-after`, `request-id` and `anthropic-ratelimit-*` (what Claude Code reads through a gateway); for the OpenAI format `retry-after`, `x-request-id` and `x-ratelimit-*`. On plain, error and streamed replies alike. Every other upstream header stays behind the proxy.
 - Docker image reads upstreams from `/data/upstreams.yaml`.
 - `SPEC.md` 10.3: registered extension `sealedrun.proxy` (upstream, dialect, operation, HTTP status, latency, `truncated`, run label).
 

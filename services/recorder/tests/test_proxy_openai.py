@@ -404,3 +404,27 @@ def test_idle_default_run_is_closed_and_replaced(tmp_path: Path) -> None:
         live.append(first, "note", target={"type": "none", "name": "late"})
     live.end(second)
     assert runs.record(None, "note", target={"type": "none", "name": "x"})["run_id"] != second
+
+
+def test_ratelimit_headers_reach_the_client(
+    proxy: TestClient, upstream: Any, auth: dict[str, str]
+) -> None:
+    headers = {
+        "x-ratelimit-remaining-requests": "99",
+        "x-ratelimit-reset-tokens": "6ms",
+        "x-request-id": "req_1",
+        "retry-after": "3",
+        "openai-organization": "org-secret",
+        "set-cookie": "sticky=1",
+    }
+    upstream.routes["/chat/completions"] = lambda request: httpx.Response(
+        200, json=CHAT_REPLY, headers=headers
+    )
+    response = _chat(proxy, auth)
+    assert response.status_code == 200
+    assert response.headers["x-ratelimit-remaining-requests"] == "99"
+    assert response.headers["x-ratelimit-reset-tokens"] == "6ms"
+    assert response.headers["x-request-id"] == "req_1"
+    assert response.headers["retry-after"] == "3"
+    assert "openai-organization" not in response.headers
+    assert "set-cookie" not in response.headers
