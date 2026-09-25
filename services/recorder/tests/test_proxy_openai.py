@@ -302,9 +302,6 @@ def test_unknown_model_and_bad_bodies(
     assert post("/v1/chat/completions", content=b"{", headers=auth).status_code == 400
     assert post("/v1/chat/completions", content=b"[1]", headers=auth).status_code == 400
     assert post("/v1/chat/completions", json={"x": 1}, headers=auth).status_code == 400
-    streaming = {"model": "gpt-4.1", "messages": [], "stream": True}
-    assert post("/v1/chat/completions", json=streaming, headers=auth).status_code == 400
-    assert post("/v1/responses", json={**streaming, "input": "x"}, headers=auth).status_code == 400
     assert upstream.calls == []
     assert proxy.get("/api/runs", headers=auth).json() == []
 

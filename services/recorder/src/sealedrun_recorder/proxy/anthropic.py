@@ -17,11 +17,13 @@ from fastapi import APIRouter, Depends, Request, Response
 from sealedrun_recorder.proxy.core import (
     Dialect,
     Operation,
+    StreamSummary,
     forward,
     integer,
     mapping,
     require_proxy_token,
     sequence,
+    sse_data,
 )
 
 ERROR_TYPES = {
@@ -80,7 +82,40 @@ def count_tokens_usage(reply: dict[str, Any]) -> dict[str, Any]:
 
 
 ANTHROPIC = Dialect("anthropic", _error_body, passthrough=PASSTHROUGH)
-MESSAGES = Operation(ANTHROPIC, "messages", "/v1/messages", messages_usage)
+
+
+def messages_stream(raw: bytes) -> StreamSummary:
+    """Read the same fields from a streamed Messages call.
+
+    `message_start` carries the model and the input token counts, `content_block_start` opens
+    each tool use, `message_delta` carries the stop reason and the output token count, and
+    `message_stop` ends the stream. An `error` event marks it failed.
+    """
+    llm: dict[str, Any] = {}
+    names: list[str] = []
+    failed = False
+    complete = False
+    for event in sse_data(raw):
+        kind = event.get("type")
+        if kind == "message_start":
+            llm.update(messages_usage(mapping(event.get("message"))))
+        elif kind == "content_block_start":
+            block = mapping(event.get("content_block"))
+            if block.get("type") in TOOL_BLOCKS and isinstance(block.get("name"), str):
+                names.append(block["name"])
+        elif kind == "message_delta":
+            delta = {**mapping(event.get("delta")), "usage": event.get("usage")}
+            llm.update(messages_usage(delta))
+        elif kind == "message_stop":
+            complete = True
+        elif kind == "error":
+            failed = True
+    if names:
+        llm["tool_calls_requested"] = names
+    return StreamSummary(llm, failed, complete)
+
+
+MESSAGES = Operation(ANTHROPIC, "messages", "/v1/messages", messages_usage, stream=messages_stream)
 COUNT_TOKENS = Operation(ANTHROPIC, "count_tokens", "/v1/messages/count_tokens", count_tokens_usage)
 
 router = APIRouter(prefix="/v1", dependencies=[Depends(require_proxy_token)])

@@ -5,6 +5,10 @@ key; the upstream key is swapped in here, so it never reaches the client and nev
 record. Only request and response bodies are recorded, never headers or query strings; query
 parameters other than `key` are forwarded. A call that cannot be recorded fails: the client gets
 a 500 instead of an unrecorded answer.
+
+A streamed reply is passed through chunk by chunk and recorded as the raw stream bytes once it
+ends. A stream cut short, by the client leaving, the upstream breaking or the size cap, is still
+recorded, marked `truncated` with outcome `error`.
 """
 
 from __future__ import annotations
@@ -14,13 +18,15 @@ import json
 import re
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from typing import Any
 
+import anyio
 import httpx
 from fastapi import HTTPException, Request, Response
 from starlette.concurrency import run_in_threadpool
+from starlette.responses import StreamingResponse
 
 from sealedrun_recorder.live import LiveRunError, LiveRuns
 from sealedrun_recorder.upstreams import Upstream, Upstreams
@@ -29,9 +35,28 @@ RUN_HEADER = "x-sealedrun-run"
 RUN_LABEL = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 GEMINI_PATH = re.compile(r"^/(v1beta/|v1/models/[^/]+:)")
 JSON = "application/json"
+SSE = "text/event-stream"
+NDJSON = "application/x-ndjson"
 CLIENT_KEY_HEADERS = ("x-api-key", "x-goog-api-key", "api-key")
 
 BodyFields = Callable[[dict[str, Any]], dict[str, Any]]
+
+
+@dataclass(frozen=True)
+class StreamSummary:
+    """What a dialect reads from a stream that ended.
+
+    `llm` holds the `sealedrun.llm` fields, `failed` says the stream carried an error, and
+    `complete` says the format's own end marker was seen, so a connection closed right after it
+    (which SDKs do) is not a truncation.
+    """
+
+    llm: dict[str, Any]
+    failed: bool = False
+    complete: bool = False
+
+
+StreamFields = Callable[[bytes], StreamSummary]
 
 
 @dataclass(frozen=True)
@@ -60,7 +85,9 @@ class Operation:
     """One proxied endpoint: its wire format, upstream path and body parsers.
 
     `usage` reads `sealedrun.llm` fields from the reply and `sampling` from the request.
-    `stream_default` is what the format assumes when the body has no `stream` field.
+    `stream_default` is what the format assumes when the body has no `stream` field; `stream`
+    reads the fields from a finished stream, and is None for endpoints that never stream.
+    `stream_media_type` is the stream's content type when the upstream does not name one.
     """
 
     dialect: Dialect
@@ -69,6 +96,8 @@ class Operation:
     usage: BodyFields
     stream_default: bool = False
     sampling: BodyFields = top_level_temperature
+    stream: StreamFields | None = None
+    stream_media_type: str = SSE
 
 
 class RunGrouper:
@@ -155,11 +184,13 @@ async def forward(
     *,
     model: str | None = None,
     path: str | None = None,
+    stream: bool | None = None,
 ) -> Response:
     """Forward one call to the upstream serving its model and record it as an `llm_call`.
 
     `model` is taken from the JSON body unless the format carries it in the URL; `path`
-    overrides the operation's upstream path for such formats.
+    overrides the operation's upstream path for such formats; `stream` says whether the call
+    streams when the format decides that by URL rather than by a body field.
     """
     dialect = operation.dialect
     settings = request.app.state.settings
@@ -182,8 +213,9 @@ async def forward(
     model = model or call.get("model")
     if not isinstance(model, str) or not model:
         return error(dialect, 400, "request needs a model")
-    if call.get("stream", operation.stream_default):
-        return error(dialect, 400, "streaming is not supported by this recorder version")
+    streaming = bool(call.get("stream", operation.stream_default)) if stream is None else stream
+    if streaming and operation.stream is None:
+        return error(dialect, 400, f"streaming is not supported for {operation.name}")
 
     upstreams: Upstreams = request.app.state.upstreams
     upstream = upstreams.route(dialect.name, model)
@@ -196,58 +228,160 @@ async def forward(
     if upstream.missing_key:
         return error(dialect, 503, f"upstream {upstream.name}: {upstream.key_env} is not set")
 
-    endpoint = upstream.endpoint(path or operation.path)
-    started = time.perf_counter()
-    try:
-        reply = await request.app.state.http.post(
-            endpoint,
-            params=[(k, v) for k, v in request.query_params.multi_items() if k != "key"],
-            content=body,
-            headers=upstream_headers(request, upstream, dialect),
-            timeout=settings.proxy_timeout_seconds,
-        )
-        status, answer = reply.status_code, reply.content
-        media_type = reply.headers.get("content-type", JSON)
-    except httpx.HTTPError as failure:
-        status = 502
-        reason = f"upstream {upstream.name} unreachable: {type(failure).__name__}"
-        answer = dialect.error_body(status, reason)
-        media_type = JSON
-    latency_ms = round((time.perf_counter() - started) * 1000, 1)
+    exchange = Exchange(request, operation, upstream, label, model, call, body, streaming, path)
+    if streaming:
+        return await exchange.stream()
+    return await exchange.buffered()
 
-    llm: dict[str, Any] = {"model": model, "provider": upstream.name, "stream": False}
-    llm.update(operation.sampling(call))
-    parsed = _json_object(answer)
-    if parsed is not None:
-        llm.update(operation.usage(parsed))
-    await run_in_threadpool(
-        request.app.state.runs.record,
-        label,
-        "llm_call",
-        target={
-            "type": "model",
-            "name": model,
-            "endpoint": endpoint,
-            "location": upstream.location,
-            "provider": upstream.name,
-        },
-        request=body,
-        response=answer,
-        request_media_type=JSON,
-        response_media_type=media_type.partition(";")[0].strip() or None,
-        outcome="success" if 200 <= status < 300 else "error",
-        extensions={
-            "sealedrun.llm": llm,
-            "sealedrun.proxy": {
-                "upstream": upstream.name,
-                "dialect": dialect.name,
-                "operation": operation.name,
-                "status": status,
-                "latency_ms": latency_ms,
+
+@dataclass
+class Exchange:
+    """One routed call: forward it, then record it with the outcome the client saw."""
+
+    request: Request
+    operation: Operation
+    upstream: Upstream
+    label: str | None
+    model: str
+    call: dict[str, Any]
+    body: bytes
+    streaming: bool
+    path: str | None = None
+
+    def __post_init__(self) -> None:
+        settings = self.request.app.state.settings
+        self.endpoint = self.upstream.endpoint(self.path or self.operation.path)
+        self.timeout: float = settings.proxy_timeout_seconds
+        self.limit: int = settings.proxy_max_body_bytes
+        self.started = time.perf_counter()
+
+    def _build(self) -> httpx.Request:
+        http: httpx.AsyncClient = self.request.app.state.http
+        headers = upstream_headers(self.request, self.upstream, self.operation.dialect)
+        if self.streaming:
+            headers["accept"] = f"{self.operation.stream_media_type}, {JSON}"
+        return http.build_request(
+            "POST",
+            self.endpoint,
+            params=[(k, v) for k, v in self.request.query_params.multi_items() if k != "key"],
+            content=self.body,
+            headers=headers,
+            timeout=self.timeout,
+        )
+
+    def _unreachable(self, failure: httpx.HTTPError) -> tuple[int, bytes]:
+        reason = f"upstream {self.upstream.name} unreachable: {type(failure).__name__}"
+        return 502, self.operation.dialect.error_body(502, reason)
+
+    async def buffered(self) -> Response:
+        """Forward a plain call, record the reply and return it."""
+        try:
+            reply = await self.request.app.state.http.send(self._build())
+            status, answer = reply.status_code, reply.content
+            media_type = reply.headers.get("content-type", JSON)
+        except httpx.HTTPError as failure:
+            status, answer = self._unreachable(failure)
+            media_type = JSON
+        await self._record(status, answer, media_type)
+        return Response(answer, status_code=status, media_type=media_type)
+
+    async def stream(self) -> Response:
+        """Forward a streamed call, pass the chunks through and record the stream when it ends.
+
+        An upstream error status arrives as a plain body and is handled like a plain call.
+        """
+        http: httpx.AsyncClient = self.request.app.state.http
+        try:
+            reply = await http.send(self._build(), stream=True)
+        except httpx.HTTPError as failure:
+            status, answer = self._unreachable(failure)
+            await self._record(status, answer, JSON)
+            return Response(answer, status_code=status, media_type=JSON)
+        media_type = reply.headers.get("content-type", self.operation.stream_media_type)
+        if not reply.is_success:
+            answer = await reply.aread()
+            await reply.aclose()
+            await self._record(reply.status_code, answer, media_type)
+            return Response(answer, status_code=reply.status_code, media_type=media_type)
+        return StreamingResponse(
+            self._relay(reply, media_type),
+            status_code=reply.status_code,
+            headers={"content-type": media_type},
+        )
+
+    async def _relay(self, reply: httpx.Response, media_type: str) -> AsyncIterator[bytes]:
+        """Yield the upstream chunks as they come; whatever ends the stream, record it.
+
+        The record is written under a shielded scope so that a client disconnect, which
+        cancels the response, still leaves the partial stream on the chain.
+        """
+        received: list[bytes] = []
+        size = 0
+        truncated = True
+        try:
+            async for chunk in reply.aiter_raw():
+                if size + len(chunk) > self.limit:
+                    break
+                received.append(chunk)
+                size += len(chunk)
+                yield chunk
+            else:
+                truncated = False
+        except httpx.HTTPError:
+            pass
+        finally:
+            with anyio.CancelScope(shield=True):
+                await reply.aclose()
+                await self._record(reply.status_code, b"".join(received), media_type, truncated)
+
+    async def _record(
+        self, status: int, answer: bytes, media_type: str, truncated: bool = False
+    ) -> None:
+        latency_ms = round((time.perf_counter() - self.started) * 1000, 1)
+        operation = self.operation
+        llm: dict[str, Any] = {
+            "model": self.model,
+            "provider": self.upstream.name,
+            "stream": self.streaming,
+        }
+        llm.update(operation.sampling(self.call))
+        if self.streaming and status < 300 and operation.stream is not None:
+            summary = operation.stream(answer)
+            llm.update(summary.llm)
+            truncated = truncated and not summary.complete
+            failed = truncated or summary.failed
+        else:
+            failed = truncated or not 200 <= status < 300
+            parsed = _json_object(answer)
+            if parsed is not None:
+                llm.update(operation.usage(parsed))
+        proxy: dict[str, Any] = {
+            "upstream": self.upstream.name,
+            "dialect": operation.dialect.name,
+            "operation": operation.name,
+            "status": status,
+            "latency_ms": latency_ms,
+        }
+        if truncated:
+            proxy["truncated"] = True
+        await run_in_threadpool(
+            self.request.app.state.runs.record,
+            self.label,
+            "llm_call",
+            target={
+                "type": "model",
+                "name": self.model,
+                "endpoint": self.endpoint,
+                "location": self.upstream.location,
+                "provider": self.upstream.name,
             },
-        },
-    )
-    return Response(answer, status_code=status, media_type=media_type)
+            request=self.body,
+            response=answer,
+            request_media_type=JSON,
+            response_media_type=media_type.partition(";")[0].strip() or None,
+            outcome="error" if failed else "success",
+            extensions={"sealedrun.llm": llm, "sealedrun.proxy": proxy},
+        )
 
 
 def upstream_headers(request: Request, upstream: Upstream, dialect: Dialect) -> dict[str, str]:
@@ -281,6 +415,38 @@ def mapping(value: Any) -> dict[str, Any]:
 def sequence(value: Any) -> list[Any]:
     """Return `value` if it is a JSON array, else an empty one."""
     return value if isinstance(value, list) else []
+
+
+def sse_data(raw: bytes) -> list[dict[str, Any]]:
+    """Return the JSON objects carried by the `data:` fields of an SSE stream, in order.
+
+    Events are separated by blank lines; several `data:` lines of one event are joined with a
+    newline. `[DONE]` and anything that is not a JSON object are skipped.
+    """
+    objects = (_json_object(data) for data in sse_payloads(raw) if data.strip() != b"[DONE]")
+    return [o for o in objects if o is not None]
+
+
+def sse_payloads(raw: bytes) -> list[bytes]:
+    """Return the `data:` payload of every event of an SSE stream, in order, as raw bytes."""
+    payloads: list[bytes] = []
+    for block in re.split(rb"\r?\n\r?\n", raw):
+        lines = [line[5:].lstrip(b" ") for line in block.splitlines() if line.startswith(b"data:")]
+        if lines:
+            payloads.append(b"\n".join(lines))
+    return payloads
+
+
+def sse_done(raw: bytes) -> bool:
+    """Whether the stream ended with the OpenAI-style `data: [DONE]` marker."""
+    payloads = sse_payloads(raw)
+    return bool(payloads) and payloads[-1].strip() == b"[DONE]"
+
+
+def ndjson(raw: bytes) -> list[dict[str, Any]]:
+    """Return the JSON objects of a newline-delimited stream, in order, skipping other lines."""
+    objects = (_json_object(line) for line in raw.splitlines() if line.strip())
+    return [o for o in objects if o is not None]
 
 
 def _json_object(body: bytes) -> dict[str, Any] | None:

@@ -187,6 +187,9 @@
           "type": "number",
           "minimum": 0
         },
+        "truncated": {
+          "type": "boolean"
+        },
         "run_label": {
           "type": "string",
           "minLength": 1,
