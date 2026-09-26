@@ -7,6 +7,9 @@
 #          SEALEDRUN_API_TOKEN instead. An upstream whose variable is unset answers 503.
 # auth     How the key is sent: bearer | x-api-key | x-goog-api-key | api-key | none.
 #          Defaults: openai bearer, anthropic x-api-key, gemini x-goog-api-key.
+# client_auth  replace (default) | passthrough. With passthrough, a client that sends the
+#          recorder token in X-SealedRun-Token keeps its own Authorization / x-api-key for this
+#          upstream (Claude Code on a Pro/Max login); key_env, if set, is used otherwise.
 # location local | cloud | unknown. Recorded with every call.
 # models   Glob patterns. The first upstream of the request's format that matches the model wins,
 #          so put narrow patterns first.
@@ -65,6 +68,7 @@ upstreams:
     url: https://api.anthropic.com
     dialect: anthropic
     key_env: ANTHROPIC_API_KEY
+    client_auth: passthrough
     location: cloud
     models: ["claude-*"]
   - name: gemini

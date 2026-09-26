@@ -5,6 +5,12 @@ follows Semantic Versioning once 1.0.0 is reached.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-26
+
+Stage 1: the recorder as a live LLM proxy. Every model call made through it becomes a signed record
+in a live run that can be exported as a bundle at any time. Tested live with the OpenAI, Anthropic
+and Ollama SDKs, Claude Code (API key and Pro/Max login) and Codex.
+
 ### Added
 
 - Recorder LLM proxy, OpenAI wire format: `POST /v1/chat/completions`, `POST /v1/responses`, `POST /v1/embeddings`, `GET /v1/models`. Upstreams come from `upstreams.yaml` (`SEALEDRUN_UPSTREAMS_FILE`) and are routed by wire format and model name pattern, so one model can sit behind several formats; each upstream sets how its key is sent (`bearer`, `x-api-key`, `x-goog-api-key`, `api-key`) and optional static headers. `services/recorder/upstreams.example.yaml` covers OpenAI, Azure OpenAI, Anthropic, Gemini, DeepSeek, Kimi, Qwen, GLM, MiniMax, Mistral, xAI, Groq, OpenRouter, Ollama, LM Studio, vLLM and llama.cpp. The client sends `SEALEDRUN_API_TOKEN` wherever its SDK puts the API key and the upstream key is swapped in server side. Every call becomes a signed `llm_call` record with request and response bodies, never headers. Calls with the same `X-SealedRun-Run` label share a run; unlabelled calls share a run until it is idle for `SEALEDRUN_PROXY_RUN_IDLE_SECONDS`. If the record cannot be written the call fails. `POST /v1/chat/completions` with `"stream": true` is passed through chunk by chunk and recorded as the raw SSE bytes when it ends: usage from the final `usage` chunk (`stream_options.include_usage`), `finish_reason`, tool names from the deltas. A stream cut by a client disconnect, an upstream break or `SEALEDRUN_PROXY_MAX_BODY_BYTES` is recorded with `sealedrun.proxy.truncated` and outcome `error`. `POST /v1/responses` with `"stream": true` is passed through the same way; usage, status or incomplete reason and tool names come from the terminal `response.completed` / `response.incomplete` / `response.failed` event, and `response.failed` gives outcome `error`.
@@ -15,6 +21,8 @@ follows Semantic Versioning once 1.0.0 is reached.
 - The recorder reports its own Principal as trusted on the runs it signed itself (`principal_trusted` in `/api/runs`), so live runs need no `SEALEDRUN_TRUSTED_PRINCIPALS` entry. Bundles from other Principals are unaffected.
 - Inspector, "Runs in the recorder" tab: live and imported runs are badged, the list and the open live run refresh every 5 s while the tab is visible, and "Export bundle" / "Close run and export" download the bundle and verify it in the browser.
 - Test vector `spec/vectors/bundle/open-run.zip`: a run exported before `run_end`; verifiers accept it and report `complete: false` (SPEC 14).
+- Claude Code on a subscription login through the proxy: the recorder token is also accepted in `X-SealedRun-Token` (set with `ANTHROPIC_CUSTOM_HEADERS`), and an upstream with `client_auth: passthrough` receives the client's own `Authorization` / `x-api-key` instead of its configured key, with `anthropic-beta` as sent. Other upstreams keep swapping in their key; the client credential and the recorder token are never recorded, and the recorder token is never forwarded.
+- README: Codex through the proxy (Responses API provider), and the Ollama context length that coding agents need.
 - The proxy forwards the upstream response headers SDKs act on: for the Anthropic format `x-should-retry`, `retry-after`, `request-id` and `anthropic-ratelimit-*` (what Claude Code reads through a gateway); for the OpenAI format `retry-after`, `x-request-id` and `x-ratelimit-*`. On plain, error and streamed replies alike. Every other upstream header stays behind the proxy.
 - Docker image reads upstreams from `/data/upstreams.yaml`.
 - `/api/runs` and `/api/runs/{run_id}` carry `run_label`, the `X-SealedRun-Run` label a live run was opened with (`null` otherwise); the Inspector shows it in the run list. Live-test finding: clients had no way to find their run.
