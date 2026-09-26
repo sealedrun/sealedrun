@@ -11,6 +11,7 @@ EXAMPLE = Path(__file__).resolve().parents[1] / "upstreams.example.yaml"
 # (dialect, model, upstream, base url, credential header, key variable)
 EXAMPLE_ROUTES = [
     ("openai", "llama3.2:3b", "ollama", "http://127.0.0.1:11434/v1", None, None),
+    ("openai", "nomic-embed-text", "ollama", "http://127.0.0.1:11434/v1", None, None),
     ("anthropic", "qwen3-coder:30b", "ollama-anthropic", "http://127.0.0.1:11434", None, None),
     ("ollama", "llama3.2", "ollama-native", "http://127.0.0.1:11434", None, None),
     ("openai", "lmstudio-community/gemma-3", "lmstudio", "http://127.0.0.1:1234/v1", None, None),

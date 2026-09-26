@@ -55,7 +55,8 @@ class RunRow(Base):
     """A run: imported from a verified bundle, or recorded live by this recorder.
 
     `source` is `imported` or `live`. Live runs have no bundle and their figures are kept
-    current on every append.
+    current on every append. `run_label` is the proxy's X-SealedRun-Run label when the run was
+    opened by a labelled proxy call.
     """
 
     __tablename__ = "runs"
@@ -76,6 +77,7 @@ class RunRow(Base):
     complete: Mapped[bool]
     anchors: Mapped[int]
     labels_sent_to_cloud: Mapped[dict[str, int]] = mapped_column(JSON)
+    run_label: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
 
     bundle: Mapped[BundleRow | None] = relationship(back_populates="runs")
     records: Mapped[list[RecordRow]] = relationship(

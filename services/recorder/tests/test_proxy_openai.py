@@ -371,7 +371,13 @@ def test_labelled_calls_share_a_run(proxy: TestClient, auth: dict[str, str]) -> 
     _chat(proxy, auth, **{"X-SealedRun-Run": "job-2"})
     runs = proxy.get("/api/runs", headers=auth).json()
     assert sorted(r["record_count"] for r in runs) == [2, 3]
+    assert {r["run_label"]: r["record_count"] for r in runs} == {"job-1": 3, "job-2": 2}
+    one = proxy.get(f"/api/runs/{runs[0]['run_id']}", headers=auth).json()
+    assert one["run_label"] == runs[0]["run_label"]
     assert _chat(proxy, auth, **{"X-SealedRun-Run": "bad label!"}).status_code == 400
+    _chat(proxy, auth)
+    unlabelled = [r for r in proxy.get("/api/runs", headers=auth).json() if r["run_label"] is None]
+    assert len(unlabelled) == 1
 
 
 def test_record_failure_fails_the_call(

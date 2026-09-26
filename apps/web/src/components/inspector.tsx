@@ -497,6 +497,9 @@ function RunRow({
       }`}
     >
       <span className="hash block">{run.run_id}</span>
+      {run.run_label ? (
+        <span className="mt-1 block text-sm font-medium text-ink">{run.run_label}</span>
+      ) : null}
       <span className="mt-1 flex items-center gap-2 text-sm text-ink-soft">
         <span className={`rounded px-1.5 py-0.5 text-xs font-medium ${badge.tone}`}>
           {badge.label}

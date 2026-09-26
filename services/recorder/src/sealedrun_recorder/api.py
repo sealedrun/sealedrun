@@ -353,4 +353,5 @@ def _run_summary(row: RunRow, request: Request) -> dict[str, Any]:
         "complete": row.complete,
         "anchors": row.anchors,
         "labels_sent_to_cloud": row.labels_sent_to_cloud,
+        "run_label": row.run_label,
     }

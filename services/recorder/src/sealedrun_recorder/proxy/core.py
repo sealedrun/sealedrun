@@ -276,6 +276,9 @@ class Exchange:
         headers = upstream_headers(self.request, self.upstream, self.operation.dialect)
         if self.streaming:
             headers["accept"] = f"{self.operation.stream_media_type}, {JSON}"
+            # Streamed chunks are relayed and recorded as received, so ask for them uncompressed:
+            # a gzip stream passed on without its content-encoding header is unreadable.
+            headers["accept-encoding"] = "identity"
         return http.build_request(
             "POST",
             self.endpoint,

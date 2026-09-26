@@ -1,5 +1,6 @@
 """Streaming through the proxy: pass-through, recording, and every way a stream can end."""
 
+import gzip
 import json
 from collections.abc import AsyncIterator, Callable
 from typing import Any
@@ -149,6 +150,33 @@ def test_chat_stream_passed_through_and_recorded(
         stored = proxy.get(f"/api/records/{call['record_id']}/payload/response", headers=auth)
         assert stored.content == b"".join(CHAT_CHUNKS)
         assert secrets["upstream_key"] not in stored_text(proxy)
+
+
+def test_stream_is_requested_uncompressed(
+    make_proxy: Callable[..., TestClient],
+    upstream: Any,
+    auth: dict[str, str],
+    proxy_records: Any,
+) -> None:
+    """A vendor that gzips SSE when allowed is asked for identity: the relay is byte-for-byte."""
+
+    def _route(request: httpx.Request) -> httpx.Response:
+        if "gzip" in request.headers.get("accept-encoding", ""):
+            body = gzip.compress(b"".join(CHAT_CHUNKS))
+            return httpx.Response(
+                200, headers={"content-type": SSE, "content-encoding": "gzip"}, content=body
+            )
+        return httpx.Response(200, headers={"content-type": SSE}, stream=Stream(CHAT_CHUNKS))
+
+    upstream.routes["/chat/completions"] = _route
+    with make_proxy(UPSTREAMS) as proxy:
+        response = proxy.post("/v1/chat/completions", json=BODY, headers=auth)
+        assert upstream.calls[0].headers["accept-encoding"] == "identity"
+        assert "content-encoding" not in response.headers
+        assert response.content == b"".join(CHAT_CHUNKS)
+        call = proxy_records(proxy)[1]
+        stored = proxy.get(f"/api/records/{call['record_id']}/payload/response", headers=auth)
+        assert stored.content == b"".join(CHAT_CHUNKS)
 
 
 def test_stream_without_usage_records_what_it_has(

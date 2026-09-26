@@ -17,6 +17,9 @@ follows Semantic Versioning once 1.0.0 is reached.
 - Test vector `spec/vectors/bundle/open-run.zip`: a run exported before `run_end`; verifiers accept it and report `complete: false` (SPEC 14).
 - The proxy forwards the upstream response headers SDKs act on: for the Anthropic format `x-should-retry`, `retry-after`, `request-id` and `anthropic-ratelimit-*` (what Claude Code reads through a gateway); for the OpenAI format `retry-after`, `x-request-id` and `x-ratelimit-*`. On plain, error and streamed replies alike. Every other upstream header stays behind the proxy.
 - Docker image reads upstreams from `/data/upstreams.yaml`.
+- `/api/runs` and `/api/runs/{run_id}` carry `run_label`, the `X-SealedRun-Run` label a live run was opened with (`null` otherwise); the Inspector shows it in the run list. Live-test finding: clients had no way to find their run.
+- Streamed calls ask the upstream for `accept-encoding: identity`. Live-test finding: api.anthropic.com gzips SSE when allowed, and the relay passed the compressed bytes on without `content-encoding`, so the Anthropic SDK failed on `messages.stream()`; buffered calls were decoded and unaffected. The recorded stream bytes are now always plain SSE.
+- README: Docker + Ollama on one host (host networking), the upstreams file is read once at start, unroutable calls leave no record. `upstreams.example.yaml` names the common untagged Ollama embedding models, which `"*:*"` does not match.
 - `SPEC.md` 10.3: registered extension `sealedrun.proxy` (upstream, dialect, operation, HTTP status, latency, `truncated`, run label).
 
 ## [0.1.1] - 2026-09-21
