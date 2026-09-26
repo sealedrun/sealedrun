@@ -17,6 +17,8 @@ export interface RunSummary {
   complete: boolean;
   anchors: number;
   labels_sent_to_cloud: Record<string, number>;
+  /** X-SealedRun-Run label of a live run opened through the proxy, else null. */
+  run_label?: string | null;
 }
 
 const PAGE_SIZE = 1000;

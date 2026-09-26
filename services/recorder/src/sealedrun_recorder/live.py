@@ -63,6 +63,7 @@ class LiveRuns:
                         complete=False,
                         anchors=0,
                         labels_sent_to_cloud={},
+                        run_label=_run_label(extensions),
                     )
                 )
                 session.add(_record_row(record))
@@ -221,3 +222,8 @@ def _record_row(record: dict[str, Any]) -> RecordRow:
         hash=record["hash"],
         document=record,
     )
+
+
+def _run_label(extensions: dict[str, Any] | None) -> str | None:
+    label = ((extensions or {}).get("sealedrun.proxy") or {}).get("run_label")
+    return label if isinstance(label, str) and label else None

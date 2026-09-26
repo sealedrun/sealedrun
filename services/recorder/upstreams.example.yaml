@@ -12,12 +12,13 @@
 #          so put narrow patterns first.
 
 upstreams:
-  # Local runtimes. Ollama model names always carry a tag (llama3.2:3b), hence "*:*".
+  # Local runtimes. Ollama chat models carry a tag (llama3.2:3b), hence "*:*"; clients often
+  # send embedding models untagged (nomic-embed-text), so name those explicitly.
   - name: ollama
     url: http://127.0.0.1:11434/v1
     dialect: openai
     location: local
-    models: ["*:*"]
+    models: ["*:*", "nomic-embed-text", "mxbai-embed-large", "all-minilm"]
   - name: ollama-anthropic
     url: http://127.0.0.1:11434
     dialect: anthropic

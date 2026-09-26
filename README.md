@@ -129,6 +129,15 @@ curl -s -X POST -H "Authorization: Bearer change-me" \
   "http://127.0.0.1:8080/api/runs/<run_id>/export?end=true" -o run.zip     # end=true closes the run first
 ```
 
+The upstreams file is read once at start; edit it, then restart the recorder. A call the proxy
+cannot route (no upstream for the model, or the model is reachable only through another wire
+format) is answered 400/404 and leaves no record: nothing was sent to a model. In Docker, a
+recorder that must reach Ollama on the same box needs host networking, because Ollama listens on
+127.0.0.1 only: `network_mode: host` plus `SEALEDRUN_HOST=127.0.0.1` (and drop `ports:`), or start
+Ollama with `OLLAMA_HOST=0.0.0.0` and point the upstream at `host.docker.internal:11434` with
+`extra_hosts: ["host.docker.internal:host-gateway"]`. A bind-mounted `upstreams.yaml` is read
+from the mounted inode, so replace its content in place rather than swapping the file.
+
 `run.zip` verifies with `verify_bundle`, `verifyBundle` or the Inspector like any bundle; the
 recorder's `principal_id` is at `/api/identity`. Anthropic, Ollama and Gemini SDKs use their own
 base-URL setting (`ANTHROPIC_BASE_URL`, `OLLAMA_HOST`, Gemini `http_options.base_url`). Calls
