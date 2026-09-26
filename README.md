@@ -5,8 +5,8 @@ call, memory access, policy decision, human approval — becomes a signed record
 hash chain. Records are exported as an evidence bundle that anyone can verify offline, without
 trusting the operator.
 
-Status: early development. Stage 0 (specification, reference implementation, Inspector) is
-released as 0.1.1. Stage 1 (the recorder as a live LLM proxy) is on `main` and unreleased.
+Status: early development. 0.2.0 adds the recorder as a live LLM proxy (OpenAI, Anthropic,
+Ollama and Gemini wire formats) on top of the Stage 0 specification, libraries and Inspector.
 
 ## Why
 
@@ -71,7 +71,7 @@ print(report.complete, report.labels_sent_to_cloud)
 ```bash
 pip install sealedrun              # Python library: write, read and verify records and bundles
 npm install @sealedrun/core        # TypeScript verifier, runs in Node.js and in the browser
-docker run --rm -p 127.0.0.1:8080:8080 ghcr.io/sealedrun/sealedrun:0.1.1   # recorder + Inspector
+docker run --rm -p 127.0.0.1:8080:8080 ghcr.io/sealedrun/sealedrun:0.2.0   # recorder + Inspector
 ```
 
 Releases are published from GitHub Actions through PyPI and npm trusted publishing; both registries
@@ -142,8 +142,34 @@ from the mounted inode, so replace its content in place rather than swapping the
 recorder's `principal_id` is at `/api/identity`. Anthropic, Ollama and Gemini SDKs use their own
 base-URL setting (`ANTHROPIC_BASE_URL`, `OLLAMA_HOST`, Gemini `http_options.base_url`). Calls
 that send the same `X-SealedRun-Run` header share a run; the Inspector's "Runs in the recorder"
-tab lists live runs as they grow and has the Export buttons. Details in `CHANGELOG.md` until
-0.2.0 is released.
+tab lists live runs as they grow and has the Export buttons. Details in `CHANGELOG.md`.
+
+Claude Code on a Pro/Max login needs no API key: mark the Anthropic upstream
+`client_auth: passthrough` and send the recorder token in its own header, so the login token
+reaches Anthropic and the recorder token stays behind the proxy.
+
+```bash
+export ANTHROPIC_BASE_URL=http://127.0.0.1:8080
+export ANTHROPIC_CUSTOM_HEADERS="X-SealedRun-Token: $SEALEDRUN_API_TOKEN"
+claude
+```
+
+Codex speaks the Responses API; give it a provider in `~/.codex/config.toml` and the token in
+`SEALEDRUN_TOKEN`:
+
+```toml
+model_provider = "sealedrun"
+
+[model_providers.sealedrun]
+name = "SealedRun"
+base_url = "http://127.0.0.1:8080/v1"
+env_key = "SEALEDRUN_TOKEN"
+wire_api = "responses"
+```
+
+Coding agents on Ollama send prompts of 10k tokens and more, while Ollama may run a model with a
+smaller context and cut the prompt silently, tool definitions included. Raise it with
+`OLLAMA_CONTEXT_LENGTH` or a model alias with `PARAMETER num_ctx 16384`.
 
 ## Development
 

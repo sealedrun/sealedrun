@@ -20,6 +20,7 @@ from sealedrun_recorder.proxy.core import (
     Dialect,
     Operation,
     StreamSummary,
+    client_credentials,
     error,
     forward,
     integer,
@@ -167,13 +168,13 @@ async def list_models(request: Request) -> dict[str, Any]:
     models: list[dict[str, Any]] = []
     seen: set[str] = set()
     for upstream in request.app.state.upstreams:
-        if upstream.dialect != "gemini" or upstream.missing_key:
+        if upstream.dialect != "gemini" or not upstream.ready(client_credentials(request)):
             continue
         try:
             reply = await client.get(
                 upstream.endpoint("/v1beta/models"),
                 params={"pageSize": 1000},
-                headers={"accept": JSON, **upstream.request_headers()},
+                headers={"accept": JSON, **upstream.request_headers(client_credentials(request))},
             )
             items = sequence(reply.json().get("models")) if reply.is_success else []
         except (httpx.HTTPError, ValueError, AttributeError):
@@ -193,12 +194,12 @@ async def get_model(model: str, request: Request) -> Response:
     upstream = request.app.state.upstreams.route("gemini", model)
     if upstream is None:
         return error(GEMINI, 404, f"no upstream configured for model {model}")
-    if upstream.missing_key:
+    if not upstream.ready(client_credentials(request)):
         return error(GEMINI, 503, f"upstream {upstream.name}: {upstream.key_env} is not set")
     try:
         reply = await request.app.state.http.get(
             upstream.endpoint(f"/v1beta/models/{model}"),
-            headers={"accept": JSON, **upstream.request_headers()},
+            headers={"accept": JSON, **upstream.request_headers(client_credentials(request))},
         )
     except httpx.HTTPError:
         return error(GEMINI, 502, f"upstream {upstream.name} unreachable")

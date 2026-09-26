@@ -2,9 +2,12 @@
 
 Clients point their SDK's base URL at the recorder and use the recorder API token as their API
 key; the upstream key is swapped in here, so it never reaches the client and never enters a
-record. Only request and response bodies are recorded, never headers or query strings; query
-parameters other than `key` are forwarded. A call that cannot be recorded fails: the client gets
-a 500 instead of an unrecorded answer.
+record. A client that sends the recorder token in `X-SealedRun-Token` instead keeps its own
+credential headers, and upstreams marked `client_auth: passthrough` receive them in place of a
+configured key: this is how Claude Code on a subscription login goes through the proxy. Only
+request and response bodies are recorded, never headers or query strings; query parameters
+other than `key` are forwarded. A call that cannot be recorded fails: the client gets a 500
+instead of an unrecorded answer.
 
 A streamed reply is passed through chunk by chunk and recorded as the raw stream bytes once it
 ends. A stream cut short, by the client leaving, the upstream breaking or the size cap, is still
@@ -37,7 +40,9 @@ GEMINI_PATH = re.compile(r"^/(v1beta/|v1/models/[^/]+:)")
 JSON = "application/json"
 SSE = "text/event-stream"
 NDJSON = "application/x-ndjson"
-CLIENT_KEY_HEADERS = ("x-api-key", "x-goog-api-key", "api-key")
+TOKEN_HEADER = "x-sealedrun-token"  # noqa: S105
+CLIENT_KEY_HEADERS = (TOKEN_HEADER, "x-api-key", "x-goog-api-key", "api-key")
+CLIENT_CREDENTIALS = ("authorization", "x-api-key", "x-goog-api-key", "api-key")
 
 BodyFields = Callable[[dict[str, Any]], dict[str, Any]]
 
@@ -171,8 +176,9 @@ class RunGrouper:
 def require_proxy_token(request: Request) -> None:
     """Refuse proxy calls unless the recorder token is configured and presented.
 
-    The token is accepted wherever the client SDKs put their API key: `Authorization: Bearer`,
-    `x-api-key`, `x-goog-api-key`, `api-key`, or the `key` query parameter on Gemini paths,
+    The token is accepted in `X-SealedRun-Token` and wherever the client SDKs put their API key:
+    `Authorization: Bearer`, `x-api-key`, `x-goog-api-key`, `api-key`, or the `key` query
+    parameter on Gemini paths,
     which is removed before the call is forwarded or recorded.
     The proxy spends the upstream keys, so unlike the read-only API it never runs open.
     """
@@ -192,6 +198,26 @@ def _presented_tokens(request: Request) -> list[str]:
     if GEMINI_PATH.match(request.url.path):
         tokens.append(request.query_params.get("key", ""))
     return [t for t in tokens if t]
+
+
+def client_credentials(request: Request) -> dict[str, str]:
+    """Return the client's own credential headers, kept only when the token came separately.
+
+    A client that sends the recorder token in `X-SealedRun-Token` leaves its SDK credential
+    headers free for its own key or subscription login; otherwise those headers carry the
+    recorder token and nothing is kept. A header that still carries the recorder token is
+    dropped, so the token never leaves the proxy.
+    """
+    if not request.headers.get(TOKEN_HEADER):
+        return {}
+    secret = request.app.state.settings.api_token
+    token = secret.get_secret_value() if secret is not None else ""
+    kept = {}
+    for name in CLIENT_CREDENTIALS:
+        value = request.headers.get(name)
+        if value and not (token and token in value):
+            kept[name] = value
+    return kept
 
 
 async def forward(
@@ -241,7 +267,7 @@ async def forward(
             formats = ", ".join(others)
             return error(dialect, 400, f"model {model} is reachable only as: {formats}")
         return error(dialect, 404, f"no upstream configured for model {model}")
-    if upstream.missing_key:
+    if not upstream.ready(client_credentials(request)):
         return error(dialect, 503, f"upstream {upstream.name}: {upstream.key_env} is not set")
 
     exchange = Exchange(request, operation, upstream, label, model, call, body, streaming, path)
@@ -414,7 +440,7 @@ def upstream_headers(request: Request, upstream: Upstream, dialect: Dialect) -> 
         value = request.headers.get(name)
         if value is not None:
             headers[name] = value
-    headers.update(upstream.request_headers())
+    headers.update(upstream.request_headers(client_credentials(request)))
     return headers
 
 
