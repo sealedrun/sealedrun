@@ -14,6 +14,12 @@ Example file::
         dialect: openai
         location: local
         models: ["*:*"]
+      - name: anthropic-subscription
+        url: https://api.anthropic.com
+        dialect: anthropic
+        client_auth: passthrough
+        location: cloud
+        models: ["claude-*"]
 
 `url` is the base URL the vendor's own SDK would use for that wire format. A request is routed to
 the first upstream of its wire format whose `models` patterns match the requested model, so one
@@ -35,6 +41,7 @@ from pydantic import SecretStr
 
 DIALECTS = frozenset({"openai", "anthropic", "ollama", "gemini"})
 LOCATIONS = frozenset({"local", "cloud", "unknown"})
+CLIENT_AUTH = {"replace": False, "passthrough": True}
 AUTH_STYLES = frozenset({"bearer", "x-api-key", "x-goog-api-key", "api-key", "none"})
 DEFAULT_AUTH = {
     "openai": "bearer",
@@ -56,7 +63,9 @@ class Upstream:
     """One provider endpoint and the credential the proxy swaps in for it.
 
     `key_env` names the variable the key is read from; when it is set in the file but missing
-    from the environment, `key` is None and calls to this upstream are refused.
+    from the environment, `key` is None and calls to this upstream are refused. With
+    `client_auth` the client's own credential is forwarded instead, when the client sent one
+    (Claude Code on a subscription login); the configured key, if any, is the fallback.
     """
 
     name: str
@@ -68,11 +77,16 @@ class Upstream:
     key_env: str | None = None
     key: SecretStr | None = None
     headers: Mapping[str, str] = field(default_factory=dict)
+    client_auth: bool = False
 
     @property
     def missing_key(self) -> bool:
         """Tell whether a key is configured but its environment variable is not set."""
         return self.key_env is not None and self.key is None
+
+    def ready(self, client: Mapping[str, str] | None = None) -> bool:
+        """Tell whether a call can be authenticated, with `client` credential headers if any."""
+        return not self.missing_key or bool(self.client_auth and client)
 
     def serves(self, model: str) -> bool:
         """Tell whether `model` matches one of this upstream's model patterns."""
@@ -82,9 +96,15 @@ class Upstream:
         """Join the upstream base URL and an API path such as `/chat/completions`."""
         return self.url.rstrip("/") + path
 
-    def request_headers(self) -> dict[str, str]:
-        """Return the static headers of this upstream plus its credential header."""
+    def request_headers(self, client: Mapping[str, str] | None = None) -> dict[str, str]:
+        """Return the static headers of this upstream plus its credential header.
+
+        `client` holds the caller's own credential headers; they replace the configured key
+        only on an upstream with `client_auth`.
+        """
         headers = dict(self.headers)
+        if self.client_auth and client:
+            return {**headers, **client}
         if self.key is None or self.auth == "none":
             return headers
         secret = self.key.get_secret_value()
@@ -147,6 +167,7 @@ def _parse(entry: Any, env: Mapping[str, str]) -> Upstream:
     models = entry.get("models", ["*"])
     key_env = entry.get("key_env")
     headers = entry.get("headers", {})
+    client_auth = entry.get("client_auth", "replace")
     if not isinstance(url, str) or not url.startswith(("http://", "https://")):
         raise UpstreamConfigError(f"upstream {name}: url must be http(s)")
     if dialect not in DIALECTS:
@@ -160,6 +181,10 @@ def _parse(entry: Any, env: Mapping[str, str]) -> Upstream:
     auth = entry.get("auth", DEFAULT_AUTH[dialect] if key_env else "none")
     if auth not in AUTH_STYLES:
         raise UpstreamConfigError(f"upstream {name}: auth must be one of {sorted(AUTH_STYLES)}")
+    if client_auth not in CLIENT_AUTH:
+        raise UpstreamConfigError(
+            f"upstream {name}: client_auth must be one of {sorted(CLIENT_AUTH)}"
+        )
     if not isinstance(headers, dict) or not all(
         isinstance(k, str) and isinstance(v, str) for k, v in headers.items()
     ):
@@ -177,4 +202,5 @@ def _parse(entry: Any, env: Mapping[str, str]) -> Upstream:
         key_env=key_env,
         key=SecretStr(value) if value else None,
         headers={k.lower(): v for k, v in headers.items()},
+        client_auth=CLIENT_AUTH[client_auth],
     )

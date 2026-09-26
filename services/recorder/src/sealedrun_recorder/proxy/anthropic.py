@@ -18,6 +18,7 @@ from sealedrun_recorder.proxy.core import (
     Dialect,
     Operation,
     StreamSummary,
+    client_credentials,
     forward,
     integer,
     mapping,
@@ -153,13 +154,13 @@ async def list_models(request: Request) -> dict[str, Any]:
     data: list[dict[str, Any]] = []
     seen: set[str] = set()
     for upstream in request.app.state.upstreams:
-        if upstream.dialect != "anthropic" or upstream.missing_key:
+        if upstream.dialect != "anthropic" or not upstream.ready(client_credentials(request)):
             continue
         try:
             reply = await client.get(
                 upstream.endpoint("/v1/models"),
                 params={"limit": 1000},
-                headers={**headers, **upstream.request_headers()},
+                headers={**headers, **upstream.request_headers(client_credentials(request))},
             )
             items = sequence(reply.json().get("data")) if reply.is_success else []
         except (httpx.HTTPError, ValueError, AttributeError):
