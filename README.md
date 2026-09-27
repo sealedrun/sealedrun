@@ -236,6 +236,31 @@ Any integration can post its own steps the same way: `POST /api/steps` (bearer t
 `response` text or `request_base64` / `response_base64`, validates the whole record against the
 schema before sealing it and returns the signed record; the recorder sets `occurred_at`.
 
+### A2A agents
+
+Agents that speak A2A 1.0 go behind the recorder too, listed under `a2a_agents` in the
+upstreams file (same fields as `mcp_servers`; `url` is the agent's JSON-RPC endpoint from its
+card) and reached at `/a2a/<name>`. The proxy serves `/a2a/<name>/.well-known/agent-card.json`
+with the interface URLs rewritten to itself, so an SDK client that discovers the agent there
+keeps talking through the recorder; a signed card no longer matches its signature after the
+rewrite, so verify the original directly when that matters. `SendMessage`, `SendStreamingMessage`
+and `CancelTask` (and the REST `message:send`, `message:stream`, `tasks/{id}:cancel`) become
+`tool_call` records with `sealedrun.a2a` (task, context and message ids, last task state); the
+outcome follows the task state (`COMPLETED` success, `FAILED` / `REJECTED` / `CANCELED` error,
+`INPUT_REQUIRED` and other open states pending). `GetTask`, `ListTasks`, `SubscribeToTask` and
+push-notification configs pass through unrecorded.
+
+```yaml
+a2a_agents:
+  - name: planner
+    url: http://127.0.0.1:9999/
+    location: local
+```
+
+```python
+card = await A2ACardResolver(http, "http://127.0.0.1:8080/a2a/planner").get_agent_card()
+```
+
 ### Report steps from your own code
 
 Actions an agent takes inside its own process (SQL, files, shell, HTTP) never pass a proxy.
@@ -277,6 +302,29 @@ const fetchPage = recorder.wrap(fetchPageImpl, "fetch_page", { location: "cloud"
 A step whose body throws is recorded with outcome `error` and the error is rethrown. A recorder
 that refuses a step (schema) or cannot be reached raises `RecorderError`; unlike the MCP wrapper
 there is no fail-open, because the caller asked for the record.
+
+### OpenTelemetry spans
+
+Frameworks that already emit OpenTelemetry GenAI spans (LangChain and LangGraph through
+`opentelemetry-instrumentation-langchain`, the OpenAI Agents SDK, LangSmith's OTel export) can
+send them straight to the recorder: point an OTLP/HTTP exporter at `POST /otlp/v1/traces`
+(binary protobuf or JSON, gzip accepted) with the recorder token in a header.
+
+```bash
+export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://127.0.0.1:8080/otlp/v1/traces
+export OTEL_EXPORTER_OTLP_HEADERS="X-SealedRun-Token=$SEALEDRUN_API_TOKEN,X-SealedRun-Run=my-task"
+```
+
+`execute_tool` spans become `tool_call` records (tool name, `gen_ai.tool.call.arguments` and
+`gen_ai.tool.call.result` as payloads), model spans (`chat`, `embeddings`, ...) become `llm_call`
+records with `sealedrun.llm` from the `gen_ai.*` attributes, memory operations `memory_read` /
+`memory_write`; other spans are dropped. The spans of one trace land in one run: the
+`X-SealedRun-Run` header, else the trace id (`gen_ai.conversation.id` is kept on the record but
+cannot group, because batch exporters send child spans before the agent span that carries it).
+Ollama, llama.cpp and vLLM providers are `local`, the OTel-listed cloud providers `cloud`,
+anything else `unknown`. A span with status
+`ERROR` gives outcome `error`; a span whose record would not verify is counted in the OTLP
+`partial_success` reply and skipped; a re-sent span is recorded once. SPEC 11 has the mapping.
 
 Servers that log users in with OAuth cannot do that through the proxy: their tokens are bound to
 the server's own URL, and clients refuse the discovery answer for a different address. Give such

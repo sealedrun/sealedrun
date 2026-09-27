@@ -7,6 +7,8 @@ import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
+from opentelemetry.proto.common.v1.common_pb2 import AnyValue, KeyValue
 from pydantic import SecretStr
 from sealedrun_recorder.db import PayloadRow, RecordRow, RunRow
 from sealedrun_recorder.main import create_app
@@ -168,3 +170,62 @@ def app_stored_text() -> Callable[[Any], str]:
 def secrets() -> dict[str, str]:
     """The recorder token clients send and the upstream key the proxy swaps in."""
     return {"token": PROXY_TOKEN, "upstream_key": UPSTREAM_KEY}
+
+
+def any_value(value: Any) -> AnyValue:
+    if isinstance(value, bool):
+        return AnyValue(bool_value=value)
+    if isinstance(value, int):
+        return AnyValue(int_value=value)
+    if isinstance(value, float):
+        return AnyValue(double_value=value)
+    if isinstance(value, bytes):
+        return AnyValue(bytes_value=value)
+    if isinstance(value, list):
+        out = AnyValue()
+        out.array_value.values.extend(any_value(v) for v in value)
+        return out
+    if isinstance(value, dict):
+        out = AnyValue()
+        out.kvlist_value.values.extend(
+            KeyValue(key=k, value=any_value(v)) for k, v in value.items()
+        )
+        return out
+    return AnyValue(string_value=str(value))
+
+
+def export_with(
+    spans: list[dict[str, Any]], resource: dict[str, Any] | None = None
+) -> ExportTraceServiceRequest:
+    """Build an export with one resource and one scope holding `spans` (name + attributes)."""
+    export = ExportTraceServiceRequest()
+    rs = export.resource_spans.add()
+    for key, value in (resource or {"service.name": "agent"}).items():
+        rs.resource.attributes.add(key=key, value=any_value(value))
+    ss = rs.scope_spans.add()
+    ss.scope.name = "test-scope"
+    for index, spec in enumerate(spans):
+        span = ss.spans.add()
+        span.name = spec["name"]
+        span.trace_id = bytes.fromhex(spec.get("trace_id", "0af7651916cd43dd8448eb211c80319c"))
+        span.span_id = bytes.fromhex(spec.get("span_id", f"{index + 1:016x}"))
+        span.start_time_unix_nano = spec.get("start", 1_700_000_000_000_000_000 + index)
+        span.end_time_unix_nano = spec.get("end", span.start_time_unix_nano + 5_000_000)
+        for key, value in spec.get("attributes", {}).items():
+            span.attributes.add(key=key, value=any_value(value))
+        if spec.get("error"):
+            span.status.code = 2
+            span.status.message = spec["error"]
+    return export
+
+
+@pytest.fixture
+def otlp_export() -> Callable[..., ExportTraceServiceRequest]:
+    """Builder of OTLP exports: `otlp_export(spans, resource=None)`."""
+    return export_with
+
+
+@pytest.fixture
+def otlp_value() -> Callable[[Any], AnyValue]:
+    """Builder of OTLP `AnyValue`s from plain Python values."""
+    return any_value

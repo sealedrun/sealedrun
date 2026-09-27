@@ -21,6 +21,7 @@ dev = [
   "types-jsonschema>=4.26.0.20260518",
   "httpx>=0.28.1",
   "types-pyyaml>=6.0.12.20260906",
+  "types-protobuf>=7.35.1.20260906",
 ]
 
 [tool.ruff]

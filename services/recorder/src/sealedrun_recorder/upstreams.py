@@ -32,7 +32,8 @@ model can be reachable through several formats. Upstream URLs come only from thi
 from a request. See `upstreams.example.yaml` for the common providers.
 
 `mcp_servers` lists the MCP servers reachable at `/mcp/<name>`; their `url` is the server's
-Streamable HTTP endpoint. Both lists are optional.
+Streamable HTTP endpoint. `a2a_agents` lists A2A agents reachable at `/a2a/<name>` with the same
+fields; their `url` is the agent's JSON-RPC endpoint from its agent card. All lists are optional.
 """
 
 from __future__ import annotations
@@ -163,12 +164,21 @@ def _with_credential(
     return headers
 
 
-class Upstreams:
-    """The configured upstreams in file order, and the MCP servers by name."""
+A2aAgent = McpServer
 
-    def __init__(self, upstreams: list[Upstream], mcp_servers: list[McpServer] | None = None):
+
+class Upstreams:
+    """The configured upstreams in file order, and the MCP servers and A2A agents by name."""
+
+    def __init__(
+        self,
+        upstreams: list[Upstream],
+        mcp_servers: list[McpServer] | None = None,
+        a2a_agents: list[A2aAgent] | None = None,
+    ):
         self._upstreams = upstreams
         self._mcp = {server.name: server for server in mcp_servers or []}
+        self._a2a = {agent.name: agent for agent in a2a_agents or []}
 
     def __iter__(self) -> Iterator[Upstream]:
         return iter(self._upstreams)
@@ -190,6 +200,15 @@ class Upstreams:
         """The MCP servers in file order."""
         return list(self._mcp.values())
 
+    def a2a(self, name: str) -> A2aAgent | None:
+        """Return the A2A agent called `name`, or None."""
+        return self._a2a.get(name)
+
+    @property
+    def a2a_agents(self) -> list[A2aAgent]:
+        """The A2A agents in file order."""
+        return list(self._a2a.values())
+
 
 def load_upstreams(path: Path, environ: Mapping[str, str] | None = None) -> Upstreams:
     """Read the upstreams file; a missing file means no upstreams.
@@ -204,22 +223,29 @@ def load_upstreams(path: Path, environ: Mapping[str, str] | None = None) -> Upst
     except yaml.YAMLError as error:
         raise UpstreamConfigError(f"{path}: {error}") from error
     if not isinstance(document, dict):
-        raise UpstreamConfigError(f"{path}: expected a mapping with 'upstreams' / 'mcp_servers'")
+        raise UpstreamConfigError(
+            f"{path}: expected a mapping with 'upstreams' / 'mcp_servers' / 'a2a_agents'"
+        )
     entries = document.get("upstreams", [])
     if not isinstance(entries, list):
         raise UpstreamConfigError(f"{path}: 'upstreams' must be a list")
     servers = document.get("mcp_servers", [])
     if not isinstance(servers, list):
         raise UpstreamConfigError(f"{path}: 'mcp_servers' must be a list")
+    agents = document.get("a2a_agents", [])
+    if not isinstance(agents, list):
+        raise UpstreamConfigError(f"{path}: 'a2a_agents' must be a list")
     upstreams = [_parse(entry, env) for entry in entries]
     mcp_servers = [_parse_mcp(entry, env) for entry in servers]
+    a2a_agents = [_parse_mcp(entry, env, "A2A agent") for entry in agents]
     for kind, names in (
         ("upstream", [u.name for u in upstreams]),
         ("MCP server", [s.name for s in mcp_servers]),
+        ("A2A agent", [a.name for a in a2a_agents]),
     ):
         if len(names) != len(set(names)):
             raise UpstreamConfigError(f"{path}: {kind} names must be unique")
-    return Upstreams(upstreams, mcp_servers)
+    return Upstreams(upstreams, mcp_servers, a2a_agents)
 
 
 def _parse(entry: Any, env: Mapping[str, str]) -> Upstream:
@@ -264,18 +290,18 @@ def _parse(entry: Any, env: Mapping[str, str]) -> Upstream:
     )
 
 
-def _parse_mcp(entry: Any, env: Mapping[str, str]) -> McpServer:
+def _parse_mcp(entry: Any, env: Mapping[str, str], what: str = "MCP server") -> McpServer:
     if not isinstance(entry, dict):
-        raise UpstreamConfigError("each MCP server must be a mapping")
+        raise UpstreamConfigError(f"each {what} must be a mapping")
     name = entry.get("name")
     if not isinstance(name, str) or not MCP_NAME.match(name):
-        raise UpstreamConfigError(f"MCP server needs a name matching {MCP_NAME.pattern}")
+        raise UpstreamConfigError(f"{what} needs a name matching {MCP_NAME.pattern}")
     url = entry.get("url")
     location = entry.get("location", "unknown")
     key_env = entry.get("key_env")
     headers = entry.get("headers", {})
     client_auth = entry.get("client_auth", "replace")
-    where = f"MCP server {name}"
+    where = f"{what} {name}"
     if not isinstance(url, str) or not url.startswith(("http://", "https://")):
         raise UpstreamConfigError(f"{where}: url must be http(s)")
     if location not in LOCATIONS:
