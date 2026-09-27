@@ -236,6 +236,48 @@ Any integration can post its own steps the same way: `POST /api/steps` (bearer t
 `response` text or `request_base64` / `response_base64`, validates the whole record against the
 schema before sealing it and returns the signed record; the recorder sets `occurred_at`.
 
+### Report steps from your own code
+
+Actions an agent takes inside its own process (SQL, files, shell, HTTP) never pass a proxy.
+Report them with the SDKs; the recorder validates and signs each step onto the run named by the
+label, next to the proxied model calls. Python (`pip install sealedrun`, standard library only):
+
+```python
+from sealedrun import Recorder
+
+recorder = Recorder("http://127.0.0.1:8080", token="...", run="my-task")
+
+with recorder.step("tool_call", "db.query", provider="postgres") as step:
+    step.request = sql
+    step.response = rows  # anything JSON-serialisable, or text/bytes
+
+
+@recorder.tool("fetch_page", location="cloud")
+def fetch_page(url: str) -> str: ...  # arguments and return value are recorded
+```
+
+TypeScript (`npm install @sealedrun/core`, Node 22):
+
+```ts
+import { Recorder } from "@sealedrun/core";
+
+const recorder = new Recorder("http://127.0.0.1:8080", { token: "...", run: "my-task" });
+await recorder.step(
+  "tool_call",
+  "db.query",
+  async (step) => {
+    step.request = sql;
+    step.response = await db.query(sql);
+  },
+  { provider: "postgres" },
+);
+const fetchPage = recorder.wrap(fetchPageImpl, "fetch_page", { location: "cloud" });
+```
+
+A step whose body throws is recorded with outcome `error` and the error is rethrown. A recorder
+that refuses a step (schema) or cannot be reached raises `RecorderError`; unlike the MCP wrapper
+there is no fail-open, because the caller asked for the record.
+
 Servers that log users in with OAuth cannot do that through the proxy: their tokens are bound to
 the server's own URL, and clients refuse the discovery answer for a different address. Give such
 a server a static token (`key_env`, for example a GitHub personal access token), or mark it

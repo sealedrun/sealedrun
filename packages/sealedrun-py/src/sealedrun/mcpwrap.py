@@ -29,11 +29,11 @@ import subprocess
 import sys
 import threading
 import time
-import urllib.error
-import urllib.request
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import IO, Any
+
+from sealedrun.client import RecorderError, post_step
 
 DEFAULT_URL = "http://127.0.0.1:8080"
 DEFAULT_TIMEOUT = 5.0
@@ -192,24 +192,14 @@ class Recording(Observer):
         truncated: bool = False,
     ) -> bool:
         step = self._step(pending, line, message, truncated)
-        body = json.dumps(step).encode()
-        headers = {"Content-Type": "application/json"}
-        if self.token:
-            headers["Authorization"] = f"Bearer {self.token}"
-        if self.run:
-            headers["X-SealedRun-Run"] = self.run
-        request = urllib.request.Request(  # noqa: S310
-            f"{self.url}/api/steps", data=body, headers=headers, method="POST"
-        )
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as reply:  # noqa: S310
-                reply.read()
+            post_step(self.url, step, token=self.token, run=self.run, timeout=self.timeout)
             return True
-        except urllib.error.HTTPError as error:
-            detail = error.read(300).decode(errors="replace")
-            self._warn(f"recorder refused the {pending.method} record: {error.code} {detail}")
-        except (urllib.error.URLError, OSError, ValueError) as error:
-            self._warn(f"recorder unreachable at {_public(self.url)}: {error}")
+        except RecorderError as error:
+            if error.status:
+                self._warn(f"recorder refused the {pending.method} record: {error.status}")
+            else:
+                self._warn(str(error))
         return False
 
     def _step(
@@ -287,11 +277,6 @@ def _valid_id(value: Any) -> bool:
 
 def _is_bool(value: object) -> bool:
     return isinstance(value, bool)
-
-
-def _public(url: str) -> str:
-    scheme, _, rest = url.partition("://")
-    return f"{scheme}://{rest.rpartition('@')[2]}"
 
 
 def _refusal(request_id: Any, server: str) -> bytes:
