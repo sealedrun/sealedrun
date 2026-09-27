@@ -184,7 +184,7 @@ def require_proxy_token(request: Request) -> None:
     """
     secret = request.app.state.settings.api_token
     if secret is None or not secret.get_secret_value():
-        raise HTTPException(503, "the LLM proxy needs SEALEDRUN_API_TOKEN to be set")
+        raise HTTPException(503, "the proxy needs SEALEDRUN_API_TOKEN to be set")
     expected = secret.get_secret_value().encode()
     if not any(hmac.compare_digest(c.encode(), expected) for c in _presented_tokens(request)):
         raise HTTPException(401, "invalid or missing token")
