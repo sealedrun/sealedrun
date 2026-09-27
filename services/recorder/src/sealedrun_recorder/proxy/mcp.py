@@ -195,20 +195,25 @@ class McpCall:
 
 
 class ListSeen:
-    """The last `tools/list` result recorded per run, server and cursor, as a digest."""
+    """The last `tools/list` result recorded per run, server, transport and cursor, as a digest."""
 
     def __init__(self) -> None:
-        self._seen: dict[tuple[str, str, str | None], str] = {}
+        self._seen: dict[tuple[str, str, str, str | None], str] = {}
         self._lock = threading.Lock()
 
-    def changed(self, key: tuple[str, str, str | None], result: Any) -> bool:
-        """Remember `result` under `key`; tell whether it differs from the last one."""
-        digest = hashlib.sha256(json.dumps(result, sort_keys=True).encode()).hexdigest()
+    def changed(self, key: tuple[str, str, str, str | None], result: Any) -> bool:
+        """Tell whether `result` differs from the last one remembered under `key`."""
         with self._lock:
-            if self._seen.get(key) == digest:
-                return False
-            self._seen[key] = digest
-            return True
+            return self._seen.get(key) != _digest(result)
+
+    def remember(self, key: tuple[str, str, str, str | None], result: Any) -> None:
+        """Remember `result` under `key`, once it has been recorded."""
+        with self._lock:
+            self._seen[key] = _digest(result)
+
+
+def _digest(result: Any) -> str:
+    return hashlib.sha256(json.dumps(result, sort_keys=True).encode()).hexdigest()
 
 
 async def _record(
@@ -226,10 +231,12 @@ async def _record(
     message = call.response_in(answer, media_type)
     result = mapping(message.get("result")) if message is not None else {}
     runs = request.app.state.runs
+    seen: ListSeen = request.app.state.mcp_lists
+    list_key = None
     if call.method == "tools/list" and message is not None and "result" in message:
         run_id = await run_in_threadpool(runs.run_for, label)
-        seen: ListSeen = request.app.state.mcp_lists
-        if not seen.changed((run_id, target.name, call.cursor), result):
+        list_key = (run_id, target.name, "http", call.cursor)
+        if not seen.changed(list_key, result):
             return
     failed = message is None or "error" in message or result.get("isError") is True
     if failed:
@@ -262,6 +269,8 @@ async def _record(
     }
     if message is None:
         proxy["truncated"] = True
+    if list_key is not None:
+        seen.remember(list_key, result)
     await run_in_threadpool(
         runs.record,
         label,

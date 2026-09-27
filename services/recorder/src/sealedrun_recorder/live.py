@@ -8,6 +8,7 @@ from typing import Any
 
 from sealedrun import RunWriter, payload_ref
 from sealedrun.hashing import payload_digest
+from sealedrun.schema import validate
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -17,6 +18,10 @@ from sealedrun_recorder.keystore import Identity
 
 class LiveRunError(Exception):
     """A live run cannot take the requested operation."""
+
+
+class InvalidRecordError(Exception):
+    """A caller-supplied record would not verify; nothing was written."""
 
 
 class LiveRuns:
@@ -81,12 +86,15 @@ class LiveRuns:
         response: bytes | None = None,
         request_media_type: str | None = None,
         response_media_type: str | None = None,
+        check: bool = False,
         **fields: Any,
     ) -> dict[str, Any]:
         """Seal one record onto the run and store it with its payload bodies.
 
-        `fields` go to `RunWriter.append`. Raises LiveRunError when the run is unknown, closed,
-        or imported rather than live.
+        `fields` go to `RunWriter.preview`. With `check` the unsigned document is validated
+        against the record schema first, so a caller-supplied record that would not verify
+        never enters the chain. Raises LiveRunError when the run is unknown, closed, imported
+        rather than live; InvalidRecordError when the document fails that check.
         """
         with self._lock(run_id):
             writer = self._writer(run_id)
@@ -100,7 +108,12 @@ class LiveRuns:
                     response_media_type=response_media_type,
                 )
             try:
-                record = writer.append(kind, target=target, payload=payload, **fields)
+                doc = writer.preview(kind, target=target, payload=payload, **fields)
+                if check:
+                    problems = _schema_problems(doc)
+                    if problems:
+                        raise InvalidRecordError(f"record would not verify: {problems[0]}")
+                record = writer.seal(doc)
             except ValueError as error:
                 raise LiveRunError(str(error)) from error
             with self._sessions() as session:
@@ -188,6 +201,12 @@ class LiveRuns:
                 )
             )
             session.commit()
+
+
+def _schema_problems(doc: dict[str, Any]) -> list[str]:
+    """Return the schema violations of an unsigned document, ignoring its missing signatures."""
+    placeholder = {**doc, "hash": "0" * 64, "signatures": {}}
+    return [e for e in validate("record.json", placeholder) if not e.startswith("signatures")]
 
 
 def _store_payload(session: Session, hash_alg: str, body: bytes) -> None:

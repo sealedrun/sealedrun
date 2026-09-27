@@ -422,7 +422,9 @@ formats. Reverse projection is lossy and produces records marked `extensions["se
 for a JSON-RPC error and for a result with `isError: true`. `protocol_version` is the MCP version
 the client sent, `result_type` the result's `resultType` (MCP 2026-07-28; `input_required` goes
 with outcome `pending`). `session` is the SHA-256 of the `Mcp-Session-Id` of the handshake-era
-transport, never the id itself.
+transport, never the id itself. For `transport: stdio` the record is written by a wrapper around
+the server process; `protocol_version` then comes from the request's `_meta` or from the
+`initialize` handshake of that process, and `session` is absent.
 
 ### 10.3 `sealedrun.proxy`
 

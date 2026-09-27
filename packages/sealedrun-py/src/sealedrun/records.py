@@ -146,7 +146,25 @@ class RunWriter:
         self.closed = True
         return record
 
-    def append(
+    def append(self, kind: str, **fields: Any) -> dict[str, Any]:
+        """Seal one record onto the chain and return it.
+
+        Takes the arguments of `preview`. Raises ValueError if the run is closed or if the
+        first record is not `run_start`.
+        """
+        return self.seal(self.preview(kind, **fields))
+
+    def seal(self, doc: dict[str, Any]) -> dict[str, Any]:
+        """Sign a document from `preview` and advance the chain head to it."""
+        if doc["seq"] != self.seq or doc["prev_hash"] != self.head:
+            raise ValueError("document was previewed for another position in the chain")
+        record = seal(doc, DOMAIN_RECORD, self._agent)
+        self._records.append(record)
+        self._seq += 1
+        self._head = record["hash"]
+        return record
+
+    def preview(
         self,
         kind: str,
         *,
@@ -160,7 +178,7 @@ class RunWriter:
         extensions: dict[str, Any] | None = None,
         occurred_at: datetime | None = None,
     ) -> dict[str, Any]:
-        """Seal one record onto the chain and return it.
+        """Build the next record's unsigned document without touching the chain.
 
         `data_labels` are deduplicated and sorted, and `actor` defaults to the agent. Raises
         ValueError if the run is closed or if the first record is not `run_start`.
@@ -193,8 +211,4 @@ class RunWriter:
             doc["parent_record_id"] = parent_record_id
         if extensions:
             doc["extensions"] = extensions
-        record = seal(doc, DOMAIN_RECORD, self._agent)
-        self._records.append(record)
-        self._seq += 1
-        self._head = record["hash"]
-        return record
+        return doc
