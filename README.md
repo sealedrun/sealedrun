@@ -205,6 +205,37 @@ http_headers = { "X-SealedRun-Run" = "my-task" }
 default_tools_approval_mode = "approve" # codex exec cannot ask; interactive Codex can
 ```
 
+#### MCP servers over stdio
+
+A server the client launches as a subprocess is wrapped instead of proxied. `sealedrun-mcp-wrap`
+comes with `pip install sealedrun`, starts the real server, relays its stdin and stdout unchanged
+and posts each `tools/call`, `resources/read`, `prompts/get` and `tools/list` to the recorder as a
+`tool_call` record (`transport: stdio`) before the reply reaches the client. The rules are the
+ones of the HTTP proxy; the server's stderr and exit code pass through. The recorder address and
+token come from `--url` / `--token` or `SEALEDRUN_URL` / `SEALEDRUN_TOKEN`; `--run` (or
+`SEALEDRUN_RUN`) is the same label as `X-SealedRun-Run`, so the tool calls land in the run of the
+model calls. A recorder that cannot be reached does not stop the call: the reply is delivered and
+a warning goes to stderr; with `--strict` the client gets a JSON-RPC error instead. POSIX only.
+
+```bash
+claude mcp add --env SEALEDRUN_TOKEN=$SEALEDRUN_API_TOKEN --transport stdio fs -- \
+  sealedrun-mcp-wrap --server fs --run my-task -- npx -y @modelcontextprotocol/server-filesystem .
+```
+
+```toml
+# ~/.codex/config.toml
+[mcp_servers.fs]
+command = "sealedrun-mcp-wrap"
+args = ["--server", "fs", "--run", "my-task", "--", "npx", "-y", "@modelcontextprotocol/server-filesystem", "."]
+env = { SEALEDRUN_TOKEN = "..." }
+```
+
+Any integration can post its own steps the same way: `POST /api/steps` (bearer token, optional
+`X-SealedRun-Run`) or `POST /api/runs/<id>/steps` takes a JSON body with `kind`, `target`,
+`actor`, `outcome`, `policy`, `data_labels`, `extensions` and the payload bodies as `request` /
+`response` text or `request_base64` / `response_base64`, validates the whole record against the
+schema before sealing it and returns the signed record; the recorder sets `occurred_at`.
+
 Servers that log users in with OAuth cannot do that through the proxy: their tokens are bound to
 the server's own URL, and clients refuse the discovery answer for a different address. Give such
 a server a static token (`key_env`, for example a GitHub personal access token), or mark it

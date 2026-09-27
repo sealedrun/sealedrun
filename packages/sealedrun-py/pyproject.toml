@@ -26,6 +26,9 @@ Repository = "https://github.com/sealedrun/sealedrun"
 Changelog = "https://github.com/sealedrun/sealedrun/blob/main/CHANGELOG.md"
 Issues = "https://github.com/sealedrun/sealedrun/issues"
 
+[project.scripts]
+sealedrun-mcp-wrap = "sealedrun.mcpwrap:run"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

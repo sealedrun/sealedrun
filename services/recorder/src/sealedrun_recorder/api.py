@@ -10,11 +10,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response,
 from sealedrun import VerificationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
+from starlette.responses import JSONResponse
 
 from sealedrun_recorder.db import BundleRow, PayloadRow, RecordRow, RunRow
 from sealedrun_recorder.export import ExportError, build_bundle
 from sealedrun_recorder.importer import import_bundle
-from sealedrun_recorder.live import LiveRunError
+from sealedrun_recorder.live import InvalidRecordError, LiveRunError
+from sealedrun_recorder.proxy.core import RUN_HEADER, RUN_LABEL
+from sealedrun_recorder.steps import Step, StepError, parse_step
 
 SAFE_PAYLOAD_MEDIA_TYPES = frozenset({"application/json", "text/plain", "application/octet-stream"})
 
@@ -245,6 +249,103 @@ def export_run(run_id: str, request: Request, session: SessionDep, end: bool = F
             "X-Content-Type-Options": "nosniff",
         },
     )
+
+
+@router.post("/steps", status_code=201, response_model=None)
+async def post_step(request: Request) -> Response | dict[str, Any]:
+    """Seal a self-reported step onto the run named by `X-SealedRun-Run`, or the default run.
+
+    Runs are joined exactly as for proxied calls: the same label shares a run with the LLM
+    proxy, no label means the shared idle-closed run. The body is checked against the record
+    schema before anything is sealed: 400 names the first problem, 413 is an oversize body.
+    Returns the signed record.
+    """
+    label = request.headers.get(RUN_HEADER)
+    if label is not None and not RUN_LABEL.match(label):
+        raise HTTPException(400, f"{RUN_HEADER} must match {RUN_LABEL.pattern}")
+    step = await _read_step(request)
+    runs = request.app.state.runs
+    listing = step.tools_list()
+    if listing is not None:
+        run_id = await run_in_threadpool(runs.run_for, label)
+        if not _list_changed(request, run_id, listing):
+            return _unchanged_list()
+    record: dict[str, Any]
+    try:
+        record = await run_in_threadpool(runs.record, label, step.kind, **step.fields())
+    except InvalidRecordError as error:
+        raise HTTPException(400, str(error)) from error
+    if listing is not None:
+        _remember_list(request, str(record["run_id"]), listing)
+    return record
+
+
+@router.post("/runs/{run_id}/steps", status_code=201, response_model=None)
+async def post_run_step(
+    run_id: str, request: Request, session: SessionDep
+) -> Response | dict[str, Any]:
+    """Seal a self-reported step onto one open live run by id.
+
+    Responds 404 for an unknown run and 409 for an imported or closed one; otherwise as
+    `POST /api/steps`.
+    """
+    row = session.get(RunRow, run_id)
+    if row is None:
+        raise HTTPException(404, "run not found")
+    if row.source != "live":
+        raise HTTPException(409, "run was imported, not recorded live")
+    if row.complete:
+        raise HTTPException(409, "run is closed")
+    step = await _read_step(request)
+    live = request.app.state.live
+    listing = step.tools_list()
+    if listing is not None and not _list_changed(request, run_id, listing):
+        return _unchanged_list()
+    record: dict[str, Any]
+    try:
+        record = await run_in_threadpool(live.append, run_id, step.kind, **step.fields())
+    except InvalidRecordError as error:
+        raise HTTPException(400, str(error)) from error
+    except LiveRunError as error:
+        raise HTTPException(409, str(error)) from error
+    if listing is not None:
+        _remember_list(request, run_id, listing)
+    return record
+
+
+def _list_changed(request: Request, run_id: str, listing: dict[str, Any]) -> bool:
+    """Tell whether a `tools/list` step differs from the last one recorded for its key.
+
+    Self-reported `tools/list` results are deduplicated like proxied ones: once per run,
+    server, transport and cursor until the result changes.
+    """
+    key = (run_id, listing["server"], listing["transport"], listing["cursor"])
+    return bool(request.app.state.mcp_lists.changed(key, listing["result"]))
+
+
+def _remember_list(request: Request, run_id: str, listing: dict[str, Any]) -> None:
+    key = (run_id, listing["server"], listing["transport"], listing["cursor"])
+    request.app.state.mcp_lists.remember(key, listing["result"])
+
+
+def _unchanged_list() -> Response:
+    body = {"recorded": False, "reason": "tools/list result unchanged"}
+    return JSONResponse(body, status_code=200)
+
+
+async def _read_step(request: Request) -> Step:
+    limit = request.app.state.settings.proxy_max_body_bytes
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > limit:
+        raise HTTPException(413, "step exceeds size limit")
+    body = await request.body()
+    if len(body) > limit:
+        raise HTTPException(413, "step exceeds size limit")
+    try:
+        step = parse_step(body)
+    except StepError as error:
+        raise HTTPException(400, str(error)) from error
+    return step
 
 
 @router.get("/runs/{run_id}/records")
