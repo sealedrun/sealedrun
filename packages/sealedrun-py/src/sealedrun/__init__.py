@@ -5,6 +5,7 @@ Reference implementation of SPEC.md: writing runs, delegations, bundles and thei
 
 from sealedrun.bundle import Bundle, BundleReport, read_bundle, verify_bundle, write_bundle
 from sealedrun.canonical import canonicalize
+from sealedrun.client import Recorder, RecorderError
 from sealedrun.delegation import covers, create_delegation, verify_delegation
 from sealedrun.errors import SealedRunError, VerificationError
 from sealedrun.hashing import b64url_decode, b64url_encode, object_hash, payload_digest, zero_hash
@@ -20,6 +21,8 @@ __all__ = [
     "BundleReport",
     "KeySet",
     "PrivateKeySet",
+    "Recorder",
+    "RecorderError",
     "RunReport",
     "RunWriter",
     "SealedRunError",

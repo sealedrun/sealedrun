@@ -25,6 +25,14 @@ export {
 } from "./signing.js";
 export { covers, verifyDelegation } from "./delegation.js";
 export { VerificationError } from "./errors.js";
+export {
+  Recorder,
+  RecorderError,
+  type RecorderOptions,
+  type RecordOptions,
+  type Step,
+  type StepOptions,
+} from "./client.js";
 export { assertDelegation, assertManifest, assertRecord } from "./structure.js";
 export type { SealedRunRecord, Delegation, Manifest, Payload, Target } from "./types.js";
 export { type RunReport, verifyRun, type VerifyRunOptions } from "./verify.js";
