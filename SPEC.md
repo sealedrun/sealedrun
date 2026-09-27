@@ -381,6 +381,7 @@ verification failure. Registered:
 | `sealedrun.llm`        | 10.1    | Model call details               |
 | `sealedrun.mcp`        | 10.2    | MCP tool call details            |
 | `sealedrun.proxy`      | 10.3    | Recorder proxy call details      |
+| `sealedrun.a2a`        | 10.4    | A2A task delegation details      |
 | `sealedrun.otel`       | 11      | OpenTelemetry trace and span ids |
 
 ### 9.1 Compatibility with MCP SEP-3004 and IETF AAT
@@ -434,12 +435,29 @@ Written by a recorder that sits between the agent and the provider. All fields a
 disconnect, upstream break or size cap); the record then holds the bytes delivered so far and its
 outcome is `error`. On a `run_start` record, `run_label` is the label the agent chose for the run.
 For dialect `mcp`, `upstream` is the MCP server and `operation` the JSON-RPC method; `truncated`
-means the stream ended before the response to the request.
+means the stream ended before the response to the request. Dialect `a2a` follows the same rules
+with the agent as `upstream`.
 
 ```json
 { "upstream": "openai", "dialect": "openai" | "anthropic" | "ollama" | "gemini" | "mcp", "operation": "chat",
   "status": 200, "latency_ms": 412.5, "truncated": true, "run_label": "nightly-report" }
 ```
+
+### 10.4 `sealedrun.a2a`
+
+```json
+{ "agent": "planner", "method": "SendMessage", "binding": "jsonrpc" | "rest", "task_id": "…",
+  "context_id": "…", "message_id": "…", "state": "TASK_STATE_COMPLETED", "is_error": false,
+  "protocol_version": "1.0" }
+```
+
+A delegation to another agent over A2A is a `tool_call` record with `target.type: tool`,
+`target.provider: a2a:<agent>` and this extension. `agent` and `method` are required; `method` is
+the JSON-RPC method (`SendMessage`, `SendStreamingMessage`, `CancelTask`) or the REST operation
+mapped to it. `state` is the last task state seen in the reply; the outcome follows it:
+`TASK_STATE_COMPLETED` or a direct message -> `success`; `TASK_STATE_FAILED`, `_REJECTED`,
+`_CANCELED` or a JSON-RPC error -> `error`; `_INPUT_REQUIRED`, `_AUTH_REQUIRED`, `_WORKING`,
+`_SUBMITTED` -> `pending`. `protocol_version` is the `A2A-Version` header the client sent.
 
 ## 11. Mapping to OpenTelemetry GenAI semantic conventions
 
@@ -454,6 +472,21 @@ gen-ai/1.42.0). The mapping is informative and tracks that repository:
 | `memory_read` / `memory_write`       | `retrieval` / memory operation span                       |
 | `sealedrun.otel.trace_id`, `span_id` | trace and span ids of the originating span                |
 | `payload.*_hash`                     | span attributes `sealedrun.payload.request_hash` etc.     |
+
+A recorder that receives OTLP spans (`POST /otlp/v1/traces`) turns GenAI spans into records by
+`gen_ai.operation.name`: `execute_tool` -> `tool_call` (`gen_ai.tool.name`, payloads from
+`gen_ai.tool.call.arguments` / `gen_ai.tool.call.result`); `chat`, `text_completion`,
+`generate_content`, `embeddings`, `fetch_response` -> `llm_call` (`sealedrun.llm` from
+`gen_ai.request.model`, `gen_ai.provider.name`, `gen_ai.usage.*`, `gen_ai.response.finish_reasons`;
+payloads from `gen_ai.input.messages` / `gen_ai.output.messages` when the emitter includes them);
+`retrieval`, `search_memory` -> `memory_read`; `create_memory`, `update_memory`, `upsert_memory`,
+`delete_memory` -> `memory_write`. Other spans are not recorded. Spans of one trace share one run:
+the `X-SealedRun-Run` header, else `otel:<trace_id>`. `gen_ai.conversation.id`, own or inherited
+from an ancestor span in the same export, is kept as `sealedrun.otel.conversation` but does not
+choose the run: batch exporters deliver child spans before the agent span that carries it. A span
+with status `ERROR` or `error.type` has outcome `error`. `occurred_at` is the recorder's clock;
+the span's own time is kept in `sealedrun.otel` (`started_at`, `duration_ms`) with `operation`,
+`span_name`, `scope` and `agent` (`gen_ai.agent.name`). The same span id is recorded once per run.
 
 ## 12. EU AI Act mapping
 

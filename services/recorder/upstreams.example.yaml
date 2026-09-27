@@ -183,3 +183,10 @@ mcp_servers:
     url: https://api.githubcopilot.com/mcp/
     key_env: GITHUB_MCP_TOKEN
     location: cloud
+
+# A2A agents reachable at /a2a/<name>; url = the JSON-RPC endpoint from the agent card.
+# The proxy serves /a2a/<name>/.well-known/agent-card.json with the url rewritten to itself.
+a2a_agents:
+  - name: planner
+    url: http://127.0.0.1:9999/
+    location: local

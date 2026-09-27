@@ -1,10 +1,10 @@
-"""LLM and MCP proxy: every supported wire format, recorded into live runs."""
+"""LLM, MCP and A2A proxy: every supported wire format, recorded into live runs."""
 
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
 
-from sealedrun_recorder.proxy import anthropic, gemini, mcp, ollama, openai
+from sealedrun_recorder.proxy import a2a, anthropic, gemini, mcp, ollama, openai
 from sealedrun_recorder.proxy.core import RunGrouper, require_proxy_token
 
 router = APIRouter()
@@ -13,6 +13,7 @@ router.include_router(anthropic.router)
 router.include_router(ollama.router)
 router.include_router(gemini.router)
 router.include_router(mcp.router)
+router.include_router(a2a.router)
 
 
 @router.get("/v1/models", dependencies=[Depends(require_proxy_token)])

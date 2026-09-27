@@ -18,6 +18,8 @@ from sealedrun_recorder.api import public_router, router
 from sealedrun_recorder.db import make_engine, session_factory
 from sealedrun_recorder.keystore import load_identity
 from sealedrun_recorder.live import LiveRuns
+from sealedrun_recorder.otlp import SpansSeen
+from sealedrun_recorder.otlp import router as otlp_router
 from sealedrun_recorder.proxy import RunGrouper
 from sealedrun_recorder.proxy import router as proxy_router
 from sealedrun_recorder.proxy.mcp import ListSeen
@@ -41,6 +43,7 @@ async def lifespan(app: FastAPI) -> Any:
     app.state.runs = RunGrouper(app.state.live, settings.proxy_run_idle_seconds)
     app.state.upstreams = load_upstreams(settings.upstreams_file)
     app.state.mcp_lists = ListSeen()
+    app.state.otel_seen = SpansSeen()
     app.state.http = httpx.AsyncClient(transport=app.state.http_transport, follow_redirects=False)
     yield
     await app.state.http.aclose()
@@ -63,6 +66,7 @@ def create_app(
     app.include_router(public_router)
     app.include_router(router)
     app.include_router(proxy_router)
+    app.include_router(otlp_router)
     ui_dir = settings.ui_dir or _default_ui_dir()
     if ui_dir is not None and ui_dir.is_dir():
         _mount_ui(app, ui_dir)
