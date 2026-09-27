@@ -414,8 +414,15 @@ formats. Reverse projection is lossy and produces records marked `extensions["se
 
 ```json
 { "server": "filesystem", "transport": "stdio" | "http", "method": "tools/call", "tool": "read_file",
-  "request_id": "…", "is_error": false }
+  "request_id": "…", "is_error": false, "protocol_version": "2026-07-28",
+  "result_type": "complete", "session": "<sha256 hex>" }
 ```
+
+`server`, `transport` and `method` are required. `tool` is set for `tools/call`. `is_error` is true
+for a JSON-RPC error and for a result with `isError: true`. `protocol_version` is the MCP version
+the client sent, `result_type` the result's `resultType` (MCP 2026-07-28; `input_required` goes
+with outcome `pending`). `session` is the SHA-256 of the `Mcp-Session-Id` of the handshake-era
+transport, never the id itself.
 
 ### 10.3 `sealedrun.proxy`
 
@@ -424,9 +431,11 @@ Written by a recorder that sits between the agent and the provider. All fields a
 `truncated` is set when a streamed response ended before the upstream finished it (client
 disconnect, upstream break or size cap); the record then holds the bytes delivered so far and its
 outcome is `error`. On a `run_start` record, `run_label` is the label the agent chose for the run.
+For dialect `mcp`, `upstream` is the MCP server and `operation` the JSON-RPC method; `truncated`
+means the stream ended before the response to the request.
 
 ```json
-{ "upstream": "openai", "dialect": "openai" | "anthropic" | "ollama" | "gemini", "operation": "chat",
+{ "upstream": "openai", "dialect": "openai" | "anthropic" | "ollama" | "gemini" | "mcp", "operation": "chat",
   "status": 200, "latency_ms": 412.5, "truncated": true, "run_label": "nightly-report" }
 ```
 

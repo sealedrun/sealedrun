@@ -159,6 +159,18 @@
         },
         "is_error": {
           "type": "boolean"
+        },
+        "protocol_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "result_type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "session": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
         }
       }
     },
@@ -172,7 +184,7 @@
         },
         "dialect": {
           "type": "string",
-          "enum": ["openai", "anthropic", "ollama", "gemini"]
+          "enum": ["openai", "anthropic", "ollama", "gemini", "mcp"]
         },
         "operation": {
           "type": "string",

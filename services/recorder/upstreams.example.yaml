@@ -171,3 +171,15 @@ upstreams:
     headers:
       HTTP-Referer: https://sealedrun.com
       X-Title: SealedRun
+
+# MCP servers reachable at /mcp/<name> (Streamable HTTP). url is the server's MCP endpoint;
+# key_env, auth (bearer | x-api-key | api-key | none), client_auth, headers and location work
+# as above. auth defaults to bearer when key_env is set.
+mcp_servers:
+  - name: local
+    url: http://127.0.0.1:8000/mcp
+    location: local
+  - name: github
+    url: https://api.githubcopilot.com/mcp/
+    key_env: GITHUB_MCP_TOKEN
+    location: cloud

@@ -20,17 +20,26 @@ Example file::
         client_auth: passthrough
         location: cloud
         models: ["claude-*"]
+    mcp_servers:
+      - name: github
+        url: https://api.githubcopilot.com/mcp/
+        key_env: GITHUB_MCP_TOKEN
+        location: cloud
 
 `url` is the base URL the vendor's own SDK would use for that wire format. A request is routed to
 the first upstream of its wire format whose `models` patterns match the requested model, so one
 model can be reachable through several formats. Upstream URLs come only from this file, never
 from a request. See `upstreams.example.yaml` for the common providers.
+
+`mcp_servers` lists the MCP servers reachable at `/mcp/<name>`; their `url` is the server's
+Streamable HTTP endpoint. Both lists are optional.
 """
 
 from __future__ import annotations
 
 import fnmatch
 import os
+import re
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -43,6 +52,8 @@ DIALECTS = frozenset({"openai", "anthropic", "ollama", "gemini"})
 LOCATIONS = frozenset({"local", "cloud", "unknown"})
 CLIENT_AUTH = {"replace": False, "passthrough": True}
 AUTH_STYLES = frozenset({"bearer", "x-api-key", "x-goog-api-key", "api-key", "none"})
+MCP_AUTH_STYLES = frozenset({"bearer", "x-api-key", "api-key", "none"})
+MCP_NAME = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 DEFAULT_AUTH = {
     "openai": "bearer",
     "anthropic": "x-api-key",
@@ -102,24 +113,62 @@ class Upstream:
         `client` holds the caller's own credential headers; they replace the configured key
         only on an upstream with `client_auth`.
         """
-        headers = dict(self.headers)
-        if self.client_auth and client:
-            return {**headers, **client}
-        if self.key is None or self.auth == "none":
-            return headers
-        secret = self.key.get_secret_value()
-        if self.auth == "bearer":
-            headers["authorization"] = f"Bearer {secret}"
-        else:
-            headers[self.auth] = secret
+        return _with_credential(self, client)
+
+
+@dataclass(frozen=True)
+class McpServer:
+    """One MCP server behind `/mcp/<name>` and the credential the proxy swaps in for it.
+
+    Credentials work as for an `Upstream`: `key_env` with `auth`, or the client's own
+    `Authorization` with `client_auth`.
+    """
+
+    name: str
+    url: str
+    location: str
+    auth: str = "none"
+    key_env: str | None = None
+    key: SecretStr | None = None
+    headers: Mapping[str, str] = field(default_factory=dict)
+    client_auth: bool = False
+
+    @property
+    def missing_key(self) -> bool:
+        """Tell whether a key is configured but its environment variable is not set."""
+        return self.key_env is not None and self.key is None
+
+    def ready(self, client: Mapping[str, str] | None = None) -> bool:
+        """Tell whether a call can be authenticated, with `client` credential headers if any."""
+        return not self.missing_key or bool(self.client_auth and client)
+
+    def request_headers(self, client: Mapping[str, str] | None = None) -> dict[str, str]:
+        """Return the static headers of this server plus its credential header."""
+        return _with_credential(self, client)
+
+
+def _with_credential(
+    target: Upstream | McpServer, client: Mapping[str, str] | None
+) -> dict[str, str]:
+    headers = dict(target.headers)
+    if target.client_auth and client:
+        return {**headers, **client}
+    if target.key is None or target.auth == "none":
         return headers
+    secret = target.key.get_secret_value()
+    if target.auth == "bearer":
+        headers["authorization"] = f"Bearer {secret}"
+    else:
+        headers[target.auth] = secret
+    return headers
 
 
 class Upstreams:
-    """The configured upstreams in file order."""
+    """The configured upstreams in file order, and the MCP servers by name."""
 
-    def __init__(self, upstreams: list[Upstream]):
+    def __init__(self, upstreams: list[Upstream], mcp_servers: list[McpServer] | None = None):
         self._upstreams = upstreams
+        self._mcp = {server.name: server for server in mcp_servers or []}
 
     def __iter__(self) -> Iterator[Upstream]:
         return iter(self._upstreams)
@@ -131,6 +180,15 @@ class Upstreams:
     def dialects_for(self, model: str) -> list[str]:
         """Return the wire formats through which `model` is reachable, in file order."""
         return list(dict.fromkeys(u.dialect for u in self._upstreams if u.serves(model)))
+
+    def mcp(self, name: str) -> McpServer | None:
+        """Return the MCP server called `name`, or None."""
+        return self._mcp.get(name)
+
+    @property
+    def mcp_servers(self) -> list[McpServer]:
+        """The MCP servers in file order."""
+        return list(self._mcp.values())
 
 
 def load_upstreams(path: Path, environ: Mapping[str, str] | None = None) -> Upstreams:
@@ -145,14 +203,23 @@ def load_upstreams(path: Path, environ: Mapping[str, str] | None = None) -> Upst
         document = yaml.safe_load(path.read_text()) or {}
     except yaml.YAMLError as error:
         raise UpstreamConfigError(f"{path}: {error}") from error
-    entries = document.get("upstreams") if isinstance(document, dict) else None
+    if not isinstance(document, dict):
+        raise UpstreamConfigError(f"{path}: expected a mapping with 'upstreams' / 'mcp_servers'")
+    entries = document.get("upstreams", [])
     if not isinstance(entries, list):
         raise UpstreamConfigError(f"{path}: 'upstreams' must be a list")
+    servers = document.get("mcp_servers", [])
+    if not isinstance(servers, list):
+        raise UpstreamConfigError(f"{path}: 'mcp_servers' must be a list")
     upstreams = [_parse(entry, env) for entry in entries]
-    names = [u.name for u in upstreams]
-    if len(names) != len(set(names)):
-        raise UpstreamConfigError(f"{path}: upstream names must be unique")
-    return Upstreams(upstreams)
+    mcp_servers = [_parse_mcp(entry, env) for entry in servers]
+    for kind, names in (
+        ("upstream", [u.name for u in upstreams]),
+        ("MCP server", [s.name for s in mcp_servers]),
+    ):
+        if len(names) != len(set(names)):
+            raise UpstreamConfigError(f"{path}: {kind} names must be unique")
+    return Upstreams(upstreams, mcp_servers)
 
 
 def _parse(entry: Any, env: Mapping[str, str]) -> Upstream:
@@ -181,16 +248,7 @@ def _parse(entry: Any, env: Mapping[str, str]) -> Upstream:
     auth = entry.get("auth", DEFAULT_AUTH[dialect] if key_env else "none")
     if auth not in AUTH_STYLES:
         raise UpstreamConfigError(f"upstream {name}: auth must be one of {sorted(AUTH_STYLES)}")
-    if client_auth not in CLIENT_AUTH:
-        raise UpstreamConfigError(
-            f"upstream {name}: client_auth must be one of {sorted(CLIENT_AUTH)}"
-        )
-    if not isinstance(headers, dict) or not all(
-        isinstance(k, str) and isinstance(v, str) for k, v in headers.items()
-    ):
-        raise UpstreamConfigError(f"upstream {name}: headers must map names to strings")
-    if CREDENTIAL_HEADERS & {k.lower() for k in headers}:
-        raise UpstreamConfigError(f"upstream {name}: put credentials in key_env, not headers")
+    _check_common(f"upstream {name}", client_auth, headers)
     value = env.get(key_env) if key_env else None
     return Upstream(
         name=name,
@@ -204,3 +262,49 @@ def _parse(entry: Any, env: Mapping[str, str]) -> Upstream:
         headers={k.lower(): v for k, v in headers.items()},
         client_auth=CLIENT_AUTH[client_auth],
     )
+
+
+def _parse_mcp(entry: Any, env: Mapping[str, str]) -> McpServer:
+    if not isinstance(entry, dict):
+        raise UpstreamConfigError("each MCP server must be a mapping")
+    name = entry.get("name")
+    if not isinstance(name, str) or not MCP_NAME.match(name):
+        raise UpstreamConfigError(f"MCP server needs a name matching {MCP_NAME.pattern}")
+    url = entry.get("url")
+    location = entry.get("location", "unknown")
+    key_env = entry.get("key_env")
+    headers = entry.get("headers", {})
+    client_auth = entry.get("client_auth", "replace")
+    where = f"MCP server {name}"
+    if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+        raise UpstreamConfigError(f"{where}: url must be http(s)")
+    if location not in LOCATIONS:
+        raise UpstreamConfigError(f"{where}: location must be one of {sorted(LOCATIONS)}")
+    if key_env is not None and (not isinstance(key_env, str) or not key_env):
+        raise UpstreamConfigError(f"{where}: key_env must be a variable name")
+    auth = entry.get("auth", "bearer" if key_env else "none")
+    if auth not in MCP_AUTH_STYLES:
+        raise UpstreamConfigError(f"{where}: auth must be one of {sorted(MCP_AUTH_STYLES)}")
+    _check_common(where, client_auth, headers)
+    value = env.get(key_env) if key_env else None
+    return McpServer(
+        name=name,
+        url=url,
+        location=location,
+        auth=auth,
+        key_env=key_env,
+        key=SecretStr(value) if value else None,
+        headers={k.lower(): v for k, v in headers.items()},
+        client_auth=CLIENT_AUTH[client_auth],
+    )
+
+
+def _check_common(where: str, client_auth: Any, headers: Any) -> None:
+    if client_auth not in CLIENT_AUTH:
+        raise UpstreamConfigError(f"{where}: client_auth must be one of {sorted(CLIENT_AUTH)}")
+    if not isinstance(headers, dict) or not all(
+        isinstance(k, str) and isinstance(v, str) for k, v in headers.items()
+    ):
+        raise UpstreamConfigError(f"{where}: headers must map names to strings")
+    if CREDENTIAL_HEADERS & {k.lower() for k in headers}:
+        raise UpstreamConfigError(f"{where}: put credentials in key_env, not headers")

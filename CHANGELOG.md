@@ -5,6 +5,11 @@ follows Semantic Versioning once 1.0.0 is reached.
 
 ## [Unreleased]
 
+### Added
+
+- Recorder MCP proxy for Streamable HTTP servers: `POST`, `GET` and `DELETE /mcp/<name>`, servers listed under `mcp_servers` in the upstreams file (URL, `key_env` with `auth` `bearer` / `x-api-key` / `api-key`, static headers, `client_auth: passthrough`, location). Both MCP eras pass through unchanged: 2026-07-28 (stateless, `Mcp-Method` / `Mcp-Name` / `Mcp-Param-*` headers) and 2025-03-26 to 2025-11-25 (`initialize`, `Mcp-Session-Id`, GET stream, DELETE). JSON and SSE replies are relayed chunk by chunk with `X-Accel-Buffering: no`; cross-site browser calls are refused. `tools/call`, `resources/read`, `prompts/get` and `tools/list` accepted by the server become `tool_call` records in the same runs as the LLM calls (`X-SealedRun-Run`); a JSON-RPC error or `isError` gives outcome `error`, `resultType: input_required` gives `pending`, a stream that ends before the response is `truncated`. `tools/list` is recorded once per run, server and cursor until its result changes. Tested with the MCP Python SDK 2.2 and 1.30 in both eras, Claude Code (MCP 2026-07-28) and Codex (MCP 2025-06-18, model on Ollama).
+- `sealedrun.mcp` gains `protocol_version`, `result_type` and `session` (a SHA-256 of the session id); `sealedrun.proxy.dialect` gains `mcp`.
+
 ## [0.2.0] - 2026-09-26
 
 Stage 1: the recorder as a live LLM proxy. Every model call made through it becomes a signed record

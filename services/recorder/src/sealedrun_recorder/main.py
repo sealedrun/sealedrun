@@ -20,6 +20,7 @@ from sealedrun_recorder.keystore import load_identity
 from sealedrun_recorder.live import LiveRuns
 from sealedrun_recorder.proxy import RunGrouper
 from sealedrun_recorder.proxy import router as proxy_router
+from sealedrun_recorder.proxy.mcp import ListSeen
 from sealedrun_recorder.settings import Settings, load_settings
 from sealedrun_recorder.upstreams import load_upstreams
 
@@ -39,6 +40,7 @@ async def lifespan(app: FastAPI) -> Any:
     app.state.live = LiveRuns(app.state.sessions, load_identity(settings.data_dir))
     app.state.runs = RunGrouper(app.state.live, settings.proxy_run_idle_seconds)
     app.state.upstreams = load_upstreams(settings.upstreams_file)
+    app.state.mcp_lists = ListSeen()
     app.state.http = httpx.AsyncClient(transport=app.state.http_transport, follow_redirects=False)
     yield
     await app.state.http.aclose()

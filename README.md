@@ -171,6 +171,47 @@ Coding agents on Ollama send prompts of 10k tokens and more, while Ollama may ru
 smaller context and cut the prompt silently, tool definitions included. Raise it with
 `OLLAMA_CONTEXT_LENGTH` or a model alias with `PARAMETER num_ctx 16384`.
 
+### MCP servers
+
+MCP servers that speak Streamable HTTP go behind the same recorder, listed under `mcp_servers` in
+the upstreams file and reached at `/mcp/<name>`:
+
+```yaml
+mcp_servers:
+  - name: github
+    url: https://api.githubcopilot.com/mcp/
+    key_env: GITHUB_MCP_TOKEN # sent as a bearer token unless auth says otherwise
+    location: cloud
+```
+
+`tools/call`, `resources/read`, `prompts/get` and `tools/list` become `tool_call` records in the
+same run as the model calls when they carry the same `X-SealedRun-Run` label (or none).
+`tools/list` is recorded once per run and server until its result changes. Everything else passes
+through unrecorded: notifications, `initialize`, `server/discover`, `subscriptions/listen`, GET
+streams, DELETE, and requests the server refused. Both protocol eras pass through unchanged: the
+stateless 2026-07-28 one and the session-based 2025-03-26 to 2025-11-25 one.
+
+```bash
+claude mcp add --transport http github http://127.0.0.1:8080/mcp/github \
+  --header "X-SealedRun-Token: $SEALEDRUN_API_TOKEN" --header "X-SealedRun-Run: my-task"
+```
+
+```toml
+# ~/.codex/config.toml
+[mcp_servers.github]
+url = "http://127.0.0.1:8080/mcp/github"
+bearer_token_env_var = "SEALEDRUN_TOKEN"
+http_headers = { "X-SealedRun-Run" = "my-task" }
+default_tools_approval_mode = "approve" # codex exec cannot ask; interactive Codex can
+```
+
+Servers that log users in with OAuth cannot do that through the proxy: their tokens are bound to
+the server's own URL, and clients refuse the discovery answer for a different address. Give such
+a server a static token (`key_env`, for example a GitHub personal access token), or mark it
+`client_auth: passthrough` and let the client send its own `Authorization` header next to
+`X-SealedRun-Token`. Otherwise connect the client to the server directly; those calls are not
+recorded.
+
 ## Development
 
 ```bash
