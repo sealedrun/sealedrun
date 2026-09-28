@@ -5,8 +5,9 @@ from typing import Any
 
 import httpx
 import pytest
+from fastapi import Request
 from fastapi.testclient import TestClient
-from sealedrun_recorder.proxy.a2a import card_url, rewrite_card
+from sealedrun_recorder.proxy.a2a import card_url, rewrite_card, safe_path
 from sealedrun_recorder.upstreams import UpstreamConfigError, load_upstreams
 
 SSE_TYPE = "text/event-stream"
@@ -404,7 +405,16 @@ def test_rest_operations_are_recorded_and_others_are_not(
         get = _rpc("GetTask", 5)
         upstream.routes["/keyed/"] = _result({"task": TASK_DONE}, 5)
         assert client.post("/a2a/keyed", content=get, headers=auth).status_code == 200
+        upstream.routes["/rpc"] = _result({"task": TASK_DONE}, 5)
+        assert client.post("/a2a/planner", content=get, headers=auth).status_code == 200
+        upstream.routes["/rpc"] = _result({"tasks": []}, 6)
+        assert (
+            client.post("/a2a/planner", content=_rpc("ListTasks", 6), headers=auth).status_code
+            == 200
+        )
         records = _tool_calls(proxy_records(client))
+        for record in records:
+            validate_extensions(record["extensions"])
     assert [
         (
             r["extensions"]["sealedrun.a2a"]["method"],
@@ -415,9 +425,98 @@ def test_rest_operations_are_recorded_and_others_are_not(
     ] == [
         ("SendMessage", "rest", "success"),
         ("CancelTask", "rest", "error"),
+        ("GetTask", "jsonrpc", "success"),
     ]
     assert records[0]["extensions"]["sealedrun.a2a"]["message_id"] == "m-9"
     assert records[1]["extensions"]["sealedrun.a2a"]["task_id"] == "t-1"
+    assert records[2]["target"]["name"] == "keyed/GetTask"
+    assert len(upstream.calls) == 7
+
+
+def test_a2a_03_method_names_are_recorded(
+    make_proxy: Callable[..., TestClient], upstream: Any, auth: dict[str, str], proxy_records: Any
+) -> None:
+    upstream.routes["/rpc"] = _result({"task": TASK_DONE})
+    with make_proxy(CONFIG) as client:
+        assert (
+            client.post("/a2a/planner", content=_rpc("message/send"), headers=auth).status_code
+            == 200
+        )
+        assert (
+            client.post("/a2a/planner", content=_rpc("tasks/cancel"), headers=auth).status_code
+            == 200
+        )
+        assert (
+            client.post("/a2a/planner", content=_rpc("tasks/get"), headers=auth).status_code == 200
+        )
+        records = _tool_calls(proxy_records(client))
+    assert [(r["extensions"]["sealedrun.a2a"]["method"], r["target"]["name"]) for r in records] == [
+        ("message/send", "planner/message"),
+        ("tasks/cancel", "planner/cancel"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [b"[]", b"[" + _rpc() + b"]", _rpc(rid=1.5), _rpc(rid=None), _rpc("CancelTask", rid=True)],  # type: ignore[arg-type]
+)
+def test_batches_and_bad_ids_are_refused_for_local_agents_too(
+    make_proxy: Callable[..., TestClient], upstream: Any, auth: dict[str, str], body: bytes
+) -> None:
+    with make_proxy(CONFIG) as client:
+        reply = client.post("/a2a/planner", content=body, headers=auth)
+    assert reply.status_code == 400, body
+    assert reply.json()["error"]["code"] == 40000
+    assert upstream.calls == []
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "../other/message:send",
+        "tasks/../../admin",
+        "./message:send",
+        "tasks//t-1",
+        "a?b",
+        "a#b",
+        "..;/admin",
+        "tasks/t-1;x=1",
+        "%2e%2e/admin",
+        "%252e%252e/admin",
+        "a b",
+    ],
+)
+def test_dot_segments_are_refused_before_any_client_normalisation(path: str) -> None:
+    scope = {"type": "http", "raw_path": f"/a2a/keyed/{path}".encode(), "headers": []}
+    assert not safe_path(Request(scope), path)
+    plain = {"type": "http", "raw_path": b"/a2a/keyed/tasks/t-1:cancel", "headers": []}
+    assert safe_path(Request(plain), "tasks/t-1:cancel")
+    assert safe_path(Request(plain), "")
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/a2a/keyed/%2e%2e/other",
+        "/a2a/keyed/%2E%2E/other",
+        "/a2a/keyed/tasks%2f..%2fadmin",
+        "/a2a/keyed/message:send%3fkey=1",
+        "/a2a/keyed/message:send%23x",
+        "/a2a/keyed/tasks//t-1",
+        "/a2a/keyed/tasks%5c..",
+        "/a2a/keyed/%252e%252e/%252e%252e/admin",
+        "/a2a/keyed/..;/admin",
+        "/a2a/keyed/tasks%2Ft-1:cancel",
+    ],
+)
+def test_path_escapes_are_refused(
+    make_proxy: Callable[..., TestClient], upstream: Any, auth: dict[str, str], path: str
+) -> None:
+    with make_proxy(CONFIG) as client:
+        reply = client.post(path, content=b"{}", headers=auth)
+        assert reply.status_code == 400, path
+        assert client.get(path, headers=auth).status_code == 400
+    assert upstream.calls == []
 
 
 def test_agent_error_status_is_not_recorded(

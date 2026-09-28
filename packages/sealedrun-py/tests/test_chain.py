@@ -158,3 +158,23 @@ def test_receipt_digest_must_match(run: RunWriter, delegation: dict[str, Any], a
         },
     )
     _expect(writer.records, delegation, "anchor", 3)
+
+
+def test_revert_takes_back_the_last_record_only(
+    agent: PrivateKeySet, delegation: dict[str, Any]
+) -> None:
+    run = RunWriter(agent, delegation)
+    run.start()
+    before = (run.seq, run.head, len(run.records))
+    record = run.append("note", target={"type": "none", "name": "lost"})
+    with pytest.raises(ValueError, match="last sealed"):
+        run.revert(run.records[0])
+    run.revert(record)
+    assert (run.seq, run.head, len(run.records)) == before
+    ended = run.end()
+    assert run.closed
+    run.revert(ended)
+    assert not run.closed and (run.seq, run.head) == before[:2]
+    run.append("note", target={"type": "none", "name": "kept"})
+    run.end()
+    verify_run(run.records, {delegation["delegation_id"]: delegation})

@@ -97,11 +97,11 @@ class Clock:
 class Ids:
     """Deterministic id factory: UUID-shaped strings with a counter in the last group."""
 
-    def __init__(self) -> None:
-        self.n = 0
+    def __init__(self, start: int = 0) -> None:
+        self.n = start
 
     def __call__(self) -> str:
-        """Return the next id, counting from 1."""
+        """Return the next id, counting from `start` + 1."""
         self.n += 1
         return f"{UUID_PREFIX}{self.n:012x}"
 
@@ -473,7 +473,23 @@ def negative_chains(
     broken[4]["prev_hash"] = "f" * len(broken[4]["prev_hash"])
     cases["broken-prev-hash"] = (broken, {"check": "chain", "seq": 4})
 
-    late = RunWriter(agent, delegation, run_id=RUN_ID, clock=Clock(), id_factory=Ids())
+    # A record that reuses an earlier record_id, re-sealed by the agent so that only the
+    # id check can catch it (a reader keyed by record_id would lose one of the two).
+    twin = RunWriter(agent, delegation, run_id=RUN_ID, clock=Clock(), id_factory=Ids(len(base)))
+    twin.records = list(base[:3])
+    twin.append("note", target={"type": "none", "name": "twin"})
+    duplicated = list(twin.records)
+    duplicated[3] = seal(
+        {
+            **{k: v for k, v in duplicated[3].items() if k not in ("hash", "signatures")},
+            "record_id": duplicated[1]["record_id"],
+        },
+        DOMAIN_RECORD,
+        agent,
+    )
+    cases["duplicate-record-id"] = (duplicated, {"check": "record_id", "seq": 3})
+
+    late = RunWriter(agent, delegation, run_id=RUN_ID, clock=Clock(), id_factory=Ids(len(base)))
     late.records = list(base)
     late.append("note", target={"type": "none", "name": "after-end"})
     cases["record-after-run-end"] = (late.records, {"check": "run_end", "seq": len(base)})
@@ -487,7 +503,7 @@ def negative_chains(
         {"check": "delegation", "seq": 3, "delegation": expired},
     )
 
-    anchored = RunWriter(agent, delegation, run_id=RUN_ID, clock=Clock(), id_factory=Ids())
+    anchored = RunWriter(agent, delegation, run_id=RUN_ID, clock=Clock(), id_factory=Ids(len(base)))
     anchored.records = list(base[:3])
     anchored.append(
         "anchor",
@@ -504,7 +520,9 @@ def negative_chains(
     )
     cases["bad-anchor"] = (anchored.records, {"check": "anchor", "seq": 3})
 
-    malformed = RunWriter(agent, delegation, run_id=RUN_ID, clock=Clock(), id_factory=Ids())
+    malformed = RunWriter(
+        agent, delegation, run_id=RUN_ID, clock=Clock(), id_factory=Ids(len(base))
+    )
     malformed.records = list(base[:3])
     malformed.append(
         "anchor",
@@ -517,7 +535,9 @@ def negative_chains(
             }
         },
     )
-    mismatched = RunWriter(agent, delegation, run_id=RUN_ID, clock=Clock(), id_factory=Ids())
+    mismatched = RunWriter(
+        agent, delegation, run_id=RUN_ID, clock=Clock(), id_factory=Ids(len(base))
+    )
     mismatched.records = list(base[:3])
     mismatched.append(
         "anchor",

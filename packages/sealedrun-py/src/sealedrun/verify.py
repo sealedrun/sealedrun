@@ -65,6 +65,14 @@ def verify_run(
     if not records:
         raise VerificationError("empty", "run has no records")
     run_id = records[0]["run_id"]
+    for edge in (records[0], records[-1]):
+        if not isinstance(edge, dict):
+            raise VerificationError("schema", "record is not a JSON object")
+        errors = validate("record.json", edge, first_only=True)
+        if errors:
+            raise VerificationError(
+                "schema", "; ".join(errors), edge.get("run_id"), edge.get("seq")
+            )
     hash_alg = records[0]["hash_alg"]
     first_seq = records[0]["seq"]
     prev_hash = expected_prev_hash if expected_prev_hash is not None else zero_hash(hash_alg)
@@ -74,6 +82,7 @@ def verify_run(
     delegation = _delegation_for_run(records[0], delegations, run_id)
     agent_keys = KeySet.from_json(delegation["agent_keys"])
     report = RunReport(run_id, len(records), first_seq, records[-1]["hash"], False)
+    seen_ids: set[str] = set()
     ended = False
 
     for index, record in enumerate(records):
@@ -88,6 +97,9 @@ def verify_run(
             raise VerificationError("run", "record belongs to another run", run_id, seq)
         if record["seq"] != seq:
             raise VerificationError("seq", f"expected seq {seq}, got {record['seq']}", run_id, seq)
+        if record["record_id"] in seen_ids:
+            raise VerificationError("record_id", "record_id repeats within the run", run_id, seq)
+        seen_ids.add(record["record_id"])
         if record["hash_alg"] != hash_alg:
             raise VerificationError("hash_alg", "hash algorithm changed within run", run_id, seq)
         if len(record["hash"]) != digest_size(hash_alg) * 2:

@@ -5,8 +5,10 @@ from __future__ import annotations
 from collections.abc import Collection
 from dataclasses import asdict
 from datetime import UTC, datetime
+from typing import Any
 
 from sealedrun import Bundle, BundleReport, read_bundle, verify_bundle
+from sealedrun.bundle import MAX_TOTAL_BYTES
 from sealedrun.errors import VerificationError
 from sealedrun.hashing import payload_digest
 from sqlalchemy.orm import Session
@@ -15,12 +17,18 @@ from sealedrun_recorder.db import BundleRow, DelegationRow, PayloadRow, RecordRo
 
 
 def import_bundle(
-    session: Session, archive: bytes, trusted_principals: Collection[str] | None = None
+    session: Session,
+    archive: bytes,
+    trusted_principals: Collection[str] | None = None,
+    *,
+    max_total_bytes: int = MAX_TOTAL_BYTES,
 ) -> BundleRow:
     """Verify the archive and store its bundle, delegations, runs, records and payloads.
 
     Nothing is written unless the whole bundle verifies. Importing a stored bundle again returns
-    the existing row, and runs already stored from another bundle are skipped. Every payload
+    the existing row, and runs already stored from another bundle are skipped. A delegation
+    already stored under the same id with a different document, for example the recorder's own
+    (its id is public), fails the import: a stored delegation is never overwritten. Every payload
     body in the archive is checked against its digest, including bodies no record references.
 
     Raises:
@@ -28,7 +36,7 @@ def import_bundle(
             digest, or a digest is already stored with a different body.
 
     """
-    bundle = read_bundle(archive)
+    bundle = read_bundle(archive, max_total_bytes=max_total_bytes)
     report = verify_bundle(bundle, trusted_principals)
     existing = session.get(BundleRow, bundle.manifest["bundle_id"])
     if existing is not None:
@@ -36,7 +44,16 @@ def import_bundle(
     row = _bundle_row(bundle, report, archive)
     session.add(row)
     for delegation in bundle.delegations.values():
-        session.merge(
+        known = session.get(DelegationRow, delegation["delegation_id"])
+        if known is not None:
+            if known.document != delegation:
+                raise VerificationError(
+                    "delegation",
+                    f"delegation {delegation['delegation_id']} is already stored with a "
+                    "different document",
+                )
+            continue
+        session.add(
             DelegationRow(
                 delegation_id=delegation["delegation_id"],
                 principal_id=delegation["principal_id"],
@@ -63,6 +80,7 @@ def import_bundle(
             complete=run_report.complete,
             anchors=run_report.anchors,
             labels_sent_to_cloud=run_report.labels_sent_to_cloud,
+            labels_self_reported=_self_reported_labels(records),
         )
         run_row.records = [_record_row(r) for r in records]
         session.add(run_row)
@@ -81,6 +99,19 @@ def import_bundle(
             )
     session.commit()
     return row
+
+
+def _self_reported_labels(records: list[dict[str, Any]]) -> dict[str, int]:
+    """Count the labels of cloud-target records that were self-reported steps."""
+    counts: dict[str, int] = {}
+    for record in records:
+        if record["target"].get("location") != "cloud":
+            continue
+        if "sealedrun.step" not in record.get("extensions", {}):
+            continue
+        for label in record.get("data_labels", []):
+            counts[label] = counts.get(label, 0) + 1
+    return counts
 
 
 def _bundle_row(bundle: Bundle, report: BundleReport, archive: bytes) -> BundleRow:

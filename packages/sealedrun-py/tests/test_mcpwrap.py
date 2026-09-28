@@ -156,6 +156,19 @@ def test_arguments_and_environment_defaults(monkeypatch: pytest.MonkeyPatch) -> 
     )
 
 
+def test_token_comes_from_a_file_never_from_the_command_line(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("SEALEDRUN_TOKEN", "env-tok")
+    token_file = tmp_path / "token"
+    token_file.write_text("file-tok\n")
+    assert parse_args(["--token-file", str(token_file), "--", "srv"]).token == "file-tok"
+    with pytest.raises(SystemExit):
+        parse_args(["--token", "tok", "--", "srv"])
+    with pytest.raises(SystemExit):
+        parse_args(["--token-file", str(tmp_path / "missing"), "--", "srv"])
+
+
 def test_parse_message_accepts_objects_only() -> None:
     assert parse_message(b'{"jsonrpc": "2.0", "id": 1}\n') == {"jsonrpc": "2.0", "id": 1}
     assert parse_message(b"[1, 2]\n") is None

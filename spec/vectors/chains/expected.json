@@ -7,6 +7,10 @@
     "check": "chain",
     "seq": 4
   },
+  "duplicate-record-id.jsonl": {
+    "check": "record_id",
+    "seq": 3
+  },
   "expired-delegation.jsonl": {
     "check": "delegation",
     "delegation": "expired-delegation.delegation.json",

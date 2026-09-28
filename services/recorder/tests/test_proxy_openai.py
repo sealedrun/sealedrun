@@ -277,7 +277,8 @@ def test_missing_upstream_key_refused_without_forwarding(
 ) -> None:
     response = _chat(proxy, auth, model="nokey-1")
     assert response.status_code == 503
-    assert "SEALEDRUN_TEST_UNSET_KEY" in response.json()["error"]["message"]
+    assert "SEALEDRUN_TEST_UNSET_KEY" not in response.text
+    assert "not configured" in response.json()["error"]["message"]
     assert upstream.calls == []
 
 

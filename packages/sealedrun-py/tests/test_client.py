@@ -186,3 +186,27 @@ def test_no_token_or_label_sends_no_such_headers(fake: FakeRecorder) -> None:
 def test_bad_url_is_refused() -> None:
     with pytest.raises(ValueError, match="http"):
         Recorder("ftp://x")
+
+
+def test_redirects_are_never_followed(fake: FakeRecorder, recorder: Recorder) -> None:
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    class Redirecting(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            self.send_response(307)
+            self.send_header("Location", f"{fake.url}/api/steps")
+            self.end_headers()
+
+        def log_message(self, *args: Any) -> None:
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Redirecting)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        lure = Recorder(f"http://127.0.0.1:{server.server_port}", token="tok", run="job-1")
+        with pytest.raises(RecorderError, match="redirected"):
+            lure.record("note", name="x")
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert fake.posts == []

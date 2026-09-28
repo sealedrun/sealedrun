@@ -72,8 +72,6 @@ def _spawn(url: str, *args: str, env: dict[str, str] | None = None) -> subproces
             "job-9",
             "--url",
             url,
-            "--token",
-            "tok",
             *args,
             "--",
             sys.executable,
@@ -82,7 +80,7 @@ def _spawn(url: str, *args: str, env: dict[str, str] | None = None) -> subproces
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        env={**os.environ, **(env or {})},
+        env={**os.environ, "SEALEDRUN_TOKEN": "tok", **(env or {})},
     )
 
 
@@ -139,14 +137,11 @@ def test_tool_call_is_posted_before_the_reply_is_delivered(recorder: FakeRecorde
         "tool": "add",
         "protocol_version": "2026-07-28",
     }
-    proxy = step["extensions"]["sealedrun.proxy"]
-    assert (proxy["upstream"], proxy["dialect"], proxy["operation"]) == (
-        "calc",
-        "mcp",
-        "tools/call",
-    )
-    assert proxy["latency_ms"] >= 0
-    assert "truncated" not in proxy
+    marker = step["extensions"]["sealedrun.step"]
+    assert (marker["source"], marker["via"]) == ("self_reported", "sealedrun-mcp-wrap")
+    assert marker["latency_ms"] >= 0
+    assert "truncated" not in marker
+    assert "sealedrun.proxy" not in step["extensions"]
     assert json.loads(step["request"])["id"] == 5
     assert json.loads(step["response"]) == reply
     assert step["request_media_type"] == step["response_media_type"] == "application/json"
@@ -216,7 +211,7 @@ def test_cancelled_and_abandoned_requests_are_truncated(recorder: FakeRecorder) 
     assert [s["extensions"]["sealedrun.mcp"]["request_id"] for s in steps] == [1, 2]
     for step in steps:
         assert step["outcome"] == "error"
-        assert step["extensions"]["sealedrun.proxy"]["truncated"] is True
+        assert step["extensions"]["sealedrun.step"]["truncated"] is True
         assert "response" not in step
     assert proc.returncode == 9
 
@@ -287,7 +282,7 @@ def test_concurrent_requests_are_matched_by_id(recorder: FakeRecorder) -> None:
     for rid, step in by_id.items():
         assert json.loads(step["request"])["id"] == rid
         assert json.loads(step["response"])["id"] == rid
-    assert by_id["slow"]["extensions"]["sealedrun.proxy"]["latency_ms"] >= 500
+    assert by_id["slow"]["extensions"]["sealedrun.step"]["latency_ms"] >= 500
 
 
 def test_signal_during_call_records_truncation(recorder: FakeRecorder) -> None:
@@ -299,7 +294,7 @@ def test_signal_during_call_records_truncation(recorder: FakeRecorder) -> None:
     proc.send_signal(signal.SIGTERM)
     proc.wait(timeout=10)
     [step] = recorder.steps()
-    assert step["extensions"]["sealedrun.proxy"]["truncated"] is True
+    assert step["extensions"]["sealedrun.step"]["truncated"] is True
 
 
 def test_child_does_not_inherit_the_recorder_settings(recorder: FakeRecorder) -> None:
@@ -309,7 +304,7 @@ def test_child_does_not_inherit_the_recorder_settings(recorder: FakeRecorder) ->
         "import os; print(sorted(k for k in os.environ if k.startswith('SEALEDRUN')))",
     ]
     proc = subprocess.run(
-        [*WRAP, "--url", recorder.url, "--token", "tok", "--run", "r", "--", *probe],
+        [*WRAP, "--url", recorder.url, "--run", "r", "--", *probe],
         input=b"",
         capture_output=True,
         timeout=10,
@@ -327,8 +322,8 @@ def test_duplicate_request_id_truncates_the_first_call(recorder: FakeRecorder) -
     _finish(proc)
     steps = recorder.steps()
     assert len(steps) == 2
-    assert steps[0]["extensions"]["sealedrun.proxy"].get("truncated") is True
-    assert "truncated" not in steps[1]["extensions"]["sealedrun.proxy"]
+    assert steps[0]["extensions"]["sealedrun.step"].get("truncated") is True
+    assert "truncated" not in steps[1]["extensions"]["sealedrun.step"]
 
 
 def test_batch_is_relayed_with_a_warning(recorder: FakeRecorder) -> None:
@@ -340,3 +335,35 @@ def test_batch_is_relayed_with_a_warning(recorder: FakeRecorder) -> None:
     err = _finish(proc)
     assert b"batch relayed without recording" in err
     assert recorder.steps() == []
+
+
+def test_integral_float_ids_match_and_strict_withholds_unmatchable_replies(
+    recorder: FakeRecorder, tmp_path: Any
+) -> None:
+    token_file = tmp_path / "token"
+    token_file.write_text("tok\n")
+    proc = _spawn(
+        recorder.url, "--strict", "--token-file", str(token_file), env={"SEALEDRUN_TOKEN": ""}
+    )
+    _send(proc, _request("tools/call", 1, name="add", arguments={"a": 1}))
+    first = _readline(proc)
+    _send(proc, _request("tools/call", 2, name="add", arguments={"reply_id": 2.0}))
+    second = _readline(proc)
+    _send(proc, _request("tools/call", 3, name="add", arguments={"reply_id": 3.5}))
+    third = _readline(proc)
+    _send(proc, _request("tools/call", 4, name="add", arguments={"batch": True}))
+    fourth = _readline(proc)
+    err = _finish(proc)
+    assert first["id"] == 1 and recorder.headers[0]["authorization"] == "Bearer tok"
+    assert second["id"] == 2.0 and "error" not in second
+    assert third["id"] is None and third["error"]["code"] == 1001
+    assert fourth["id"] is None and fourth["error"]["code"] == 1001
+    assert b"unmatchable id withheld" in err and b"batch from the server withheld" in err
+    recorded = {s["extensions"]["sealedrun.mcp"]["request_id"] for s in recorder.steps()}
+    assert recorded == {1, 2, 3, 4}
+    truncated = {
+        s["extensions"]["sealedrun.mcp"]["request_id"]
+        for s in recorder.steps()
+        if s["extensions"]["sealedrun.step"].get("truncated")
+    }
+    assert truncated == {3, 4}

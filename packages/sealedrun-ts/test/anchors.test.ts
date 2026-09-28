@@ -20,6 +20,7 @@ import {
   type Witness,
   witnessCovers,
 } from "../src/index.js";
+import { type WitnessJson, witnessFromJson } from "../src/trust.js";
 
 const SPEC = join(import.meta.dirname, "..", "..", "..", "spec");
 const VECTORS = join(SPEC, "vectors");
@@ -82,7 +83,11 @@ describe("captured receipt vectors", () => {
     const noTime = { ...doc.receipt };
     delete noTime.integrated_time;
     delete noTime.signed_entry_timestamp;
-    expect(await verifyRekor(noTime, doc.witness, shippedWitnesses())).toBe(true);
+    expect(await verifyRekor(noTime, doc.witness, shippedWitnesses())).toBe(false);
+    for (const bad of [0, -5, 1e18, 4_102_444_800, 1.5]) {
+      const receipt = { ...doc.receipt, integrated_time: bad };
+      expect(await verifyRekor(receipt, doc.witness, shippedWitnesses())).toBe(false);
+    }
     const rsaKey = { ...doc.receipt, public_key: doc.receipt.public_key.replace("MFkw", "MFkx") };
     expect(await verifyRekor(rsaKey, doc.witness, shippedWitnesses())).toBe(false);
     const cosigned = {
@@ -117,6 +122,19 @@ describe("captured receipt vectors", () => {
     const garbage = { ...digicert.receipt, token: "MAA=" };
     expect(await verifyRfc3161(garbage, DIGICERT, shippedWitnesses())).toBe(false);
   });
+});
+
+describe("hostile receipt vectors", () => {
+  const doc = readJson<{ trust: WitnessJson[]; cases: Case[] }>("anchors", "hostile.json");
+  const trust = doc.trust.map(witnessFromJson);
+  test.each(doc.cases.map((c) => [c.name, c] as const))(
+    "%s",
+    async (_name, c) => {
+      const receipt = c.receipt as Rfc3161Receipt;
+      expect(await verifyRfc3161(receipt, c.witness, trust)).toBe(c.verified);
+    },
+    10_000,
+  );
 });
 
 describe("reference run", () => {

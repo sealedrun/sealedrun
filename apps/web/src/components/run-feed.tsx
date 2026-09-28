@@ -4,7 +4,16 @@ import type { SealedRunRecord } from "@sealedrun/core";
 import { ChevronDown, Download } from "lucide-react";
 import { useState } from "react";
 
-import { anchorInfo, decodePayload, describeTarget, summarize } from "@/lib/inspect";
+import {
+  anchorInfo,
+  capText,
+  decodePayload,
+  describeTarget,
+  isSelfReported,
+  recordKey,
+  summarize,
+  type WitnessVerdict,
+} from "@/lib/inspect";
 
 /**
  * Downloads a payload from the recorder. Left undefined for a local bundle, which has no server
@@ -22,6 +31,7 @@ const TAG_TONES: Record<string, string> = {
   block: "bg-bad-soft text-bad",
   redirect: "bg-warn-soft text-warn",
   require_approval: "bg-warn-soft text-warn",
+  "self-reported": "bg-line text-ink-soft",
 };
 
 /**
@@ -39,12 +49,14 @@ export function RunFeed({
   records: SealedRunRecord[];
   payloads?: Map<string, Uint8Array> | undefined;
   onDownload?: OnDownload;
-  /** Per anchor record id, whether its receipt verified against a trusted witness. */
-  witness?: Map<string, boolean> | undefined;
+  /** Per anchor record (see `recordKey`), whether its receipt verified against a trusted witness. */
+  witness?: Map<string, WitnessVerdict> | undefined;
 }) {
   const [open, setOpen] = useState<string | null>(null);
   const summary = summarize(records);
-  const verified = witness ? [...witness.values()].filter(Boolean).length : undefined;
+  const verified = witness
+    ? records.filter((r) => r.kind === "anchor" && witness.get(recordKey(r))?.verified).length
+    : undefined;
   const facts: [number, string, string?][] = [
     [summary.steps, "steps recorded"],
     [summary.cloudCalls, "left the host", summary.cloudCalls > 0 ? "text-warn" : undefined],
@@ -80,7 +92,7 @@ export function RunFeed({
             onToggle={() => setOpen(open === record.record_id ? null : record.record_id)}
             payloads={payloads}
             onDownload={onDownload}
-            witness={witness?.get(record.record_id)}
+            witness={witness?.get(recordKey(record))}
           />
         ))}
       </ol>
@@ -133,7 +145,7 @@ function Step({
   onToggle: () => void;
   payloads?: Map<string, Uint8Array> | undefined;
   onDownload?: OnDownload;
-  witness?: boolean | undefined;
+  witness?: WitnessVerdict | undefined;
 }) {
   const location = record.target.location;
   const decision = record.policy?.decision;
@@ -141,6 +153,7 @@ function Step({
     ...(location ? [location] : []),
     ...(decision && decision !== "allow" ? [decision] : []),
     ...(record.outcome !== "success" ? [record.outcome] : []),
+    ...(isSelfReported(record) ? ["self-reported"] : []),
   ];
   return (
     <li className="relative pl-8">
@@ -229,20 +242,21 @@ function Detail({
   record: SealedRunRecord;
   payloads?: Map<string, Uint8Array> | undefined;
   onDownload?: OnDownload;
-  witness?: boolean | undefined;
+  witness?: WitnessVerdict | undefined;
 }) {
   const stored = record.payload?.storage === "bundle" || record.payload?.storage === "inline";
-  const anchor = anchorInfo(record);
+  const anchor = anchorInfo(record, witness);
   const proof =
     witness === undefined
       ? "not checked here"
-      : witness
+      : witness.verified
         ? "verified offline against a trusted witness"
         : "not verified: witness outside the trust list or proof invalid";
   const rows: [string, string | undefined, boolean][] = [
     ["Record id", record.record_id, true],
     ["Time", record.occurred_at, true],
     ["Witness", anchor?.witness, true],
+    ["Witness root", anchor?.subject, false],
     ["Witness time", anchor?.time, true],
     ["Witness proof", anchor ? `${anchor.type ?? "unknown"} receipt, ${proof}` : undefined, false],
     ["Log index", anchor?.logIndex !== undefined ? String(anchor.logIndex) : undefined, true],
@@ -305,7 +319,7 @@ function Detail({
       {record.extensions && (
         <div className="mt-4">
           <h4 className="text-sm font-semibold">Extensions</h4>
-          <Code>{JSON.stringify(record.extensions, null, 2)}</Code>
+          <Code>{capText(JSON.stringify(record.extensions, null, 2))}</Code>
         </div>
       )}
     </div>

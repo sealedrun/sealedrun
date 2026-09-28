@@ -10,11 +10,17 @@ while the rule is off carry no policy object at all.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
 RULE_PREFIX = "recorder/no-"
 DEFAULT_ALLOW = "default/allow"
+LABEL = re.compile(r"^[a-z0-9_-]+(:[a-z0-9_-]+)?$")
+
+
+class PolicyConfigError(ValueError):
+    """The configured rule cannot be applied as written; the message says why."""
 
 
 @dataclass(frozen=True)
@@ -40,6 +46,14 @@ class Rule:
     """Labels that must not be sent to a `cloud` target; empty means the rule is off."""
 
     block_to_cloud: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        """Refuse a label outside the SPEC 5.6 pattern: it could never match and never block."""
+        for label in self.block_to_cloud:
+            if not LABEL.match(label):
+                raise PolicyConfigError(
+                    f"SEALEDRUN_POLICY_BLOCK_TO_CLOUD: label {label!r} must match {LABEL.pattern}"
+                )
 
     @property
     def active(self) -> bool:

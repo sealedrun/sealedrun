@@ -155,7 +155,8 @@ def test_mcp_missing_key_is_503(
             json={},
         )
     assert reply.status_code == 503
-    assert "TEST_MISSING_KEY" in reply.json()["error"]["message"]
+    assert "TEST_MISSING_KEY" not in reply.text
+    assert "not configured" in reply.json()["error"]["message"]
     assert passthrough.status_code == 404  # reached the fake server, which has no route
 
 

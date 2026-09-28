@@ -3,10 +3,12 @@ import {
   type Bundle,
   type BundleReport,
   readBundle,
+  selectWitnesses,
   shippedWitnesses,
   VerificationError,
   verifyBundleAsync,
   verifyReceipt,
+  type Witness,
 } from "@sealedrun/core";
 
 /**
@@ -56,15 +58,30 @@ export async function verifyLocally(
   }
 }
 
+/** Most characters of one body or extension block the page renders; the rest is downloadable. */
+export const DISPLAY_CAP = 256 * 1024;
+
+/** Cuts `text` at `cap` characters with a note on what was left out. */
+export function capText(text: string, cap = DISPLAY_CAP): string {
+  if (text.length <= cap) return text;
+  return `${text.slice(0, cap)}\n… ${text.length - cap} more characters not shown; download the body for all of it`;
+}
+
 /**
  * Payload bytes as display text: pretty-printed when they parse as JSON, otherwise decoded as
- * lenient UTF-8.
+ * lenient UTF-8. Bodies past {@link DISPLAY_CAP} are cut rather than pretty-printed, so one
+ * huge body cannot freeze the tab.
  */
-export function decodePayload(bytes: Uint8Array | undefined): string {
+export function decodePayload(bytes: Uint8Array | undefined, cap = DISPLAY_CAP): string {
   if (!bytes) return "";
-  const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+  const decoder = new TextDecoder("utf-8", { fatal: false });
+  if (bytes.length > cap) {
+    const head = decoder.decode(bytes.subarray(0, cap));
+    return `${head}\n… ${bytes.length - cap} more bytes not shown; download the body for all of it`;
+  }
+  const text = decoder.decode(bytes);
   try {
-    return JSON.stringify(JSON.parse(text), null, 2);
+    return capText(JSON.stringify(JSON.parse(text), null, 2), cap);
   } catch {
     return text;
   }
@@ -74,6 +91,14 @@ export function decodePayload(bytes: Uint8Array | undefined): string {
 export function describeTarget(record: SealedRunRecord): string {
   const { target } = record;
   return target.endpoint ? `${target.name} @ ${target.endpoint}` : target.name;
+}
+
+/**
+ * Whether the record is the caller's own account of a step (`sealedrun.step`), as opposed to
+ * something the recorder saw itself through a proxy or a trace receiver.
+ */
+export function isSelfReported(record: SealedRunRecord): boolean {
+  return record.extensions?.["sealedrun.step"] !== undefined;
 }
 
 /**
@@ -93,11 +118,29 @@ export function summarize(records: SealedRunRecord[]) {
   };
 }
 
+/** What the offline witness check found for one anchor record. */
+export interface WitnessVerdict {
+  verified: boolean;
+  /** The trust entry that verified the receipt: its endpoint and the root's subject. */
+  witness?: string;
+  subject?: string;
+}
+
+/** The key of a record in a bundle-wide map; record ids are unique per run only. */
+export function recordKey(record: Pick<SealedRunRecord, "run_id" | "record_id">): string {
+  return `${record.run_id}/${record.record_id}`;
+}
+
 /**
  * Anchor record metadata for display: the witness, the receipt time, the anchor type and, for a
  * transparency log entry, its index and a link to the public entry.
+ *
+ * Only what the offline check authenticated is shown as the witness's word: for a verified
+ * receipt the witness name and the link come from the trust entry that verified it, never from
+ * the record. A `rekor` time is the log's `integrated_time`; `gen_time` is trusted only for an
+ * `rfc3161` receipt, where the verifier checks it against the signed token.
  */
-export function anchorInfo(record: SealedRunRecord) {
+export function anchorInfo(record: SealedRunRecord, verdict?: WitnessVerdict) {
   const anchor = record.extensions?.["sealedrun.anchor"] as
     | {
         type?: string;
@@ -106,39 +149,73 @@ export function anchorInfo(record: SealedRunRecord) {
           gen_time?: string;
           integrated_time?: number;
           log_index?: number;
-          log_url?: string;
         };
       }
     | undefined;
   if (record.kind !== "anchor" || !anchor) return null;
   const receipt = anchor.receipt ?? {};
   const time =
-    receipt.gen_time ??
-    (receipt.integrated_time !== undefined
-      ? new Date(receipt.integrated_time * 1000).toISOString()
-      : undefined);
+    anchor.type === "rekor"
+      ? receipt.integrated_time !== undefined
+        ? new Date(receipt.integrated_time * 1000).toISOString()
+        : undefined
+      : receipt.gen_time;
   const logIndex = receipt.log_index;
+  const verified = verdict?.verified === true && verdict.witness !== undefined;
   let entryUrl: string | undefined;
-  if (logIndex !== undefined && receipt.log_url) {
+  if (verified && anchor.type === "rekor" && Number.isInteger(logIndex)) {
+    const logUrl = trimSlashes(verdict.witness ?? "");
     entryUrl =
-      receipt.log_url === "https://rekor.sigstore.dev"
+      logUrl === "https://rekor.sigstore.dev"
         ? `https://search.sigstore.dev/?logIndex=${logIndex}`
-        : `${receipt.log_url}/api/v1/log/entries?logIndex=${logIndex}`;
+        : `${logUrl}/api/v1/log/entries?logIndex=${logIndex}`;
   }
-  return { type: anchor.type, witness: anchor.witness, time, logIndex, entryUrl };
+  const witness = verified ? verdict.witness : anchor.witness;
+  return {
+    type: anchor.type,
+    witness,
+    subject: verified ? verdict.subject : undefined,
+    time,
+    logIndex,
+    entryUrl,
+  };
+}
+
+function trimSlashes(text: string): string {
+  let end = text.length;
+  while (end > 0 && text[end - 1] === "/") end -= 1;
+  return text.slice(0, end);
 }
 
 /**
- * Per anchor record, whether its receipt verifies offline against the shipped witness trust
- * list (SPEC 8.4). Unknown witnesses and receipt types the verifier does not know give false.
+ * Per anchor record (keyed by {@link recordKey}), whether its receipt verifies offline against
+ * the shipped witness trust list (SPEC 8.4) and which entry verified it. Unknown witnesses and
+ * receipt types the verifier does not know give an unverified verdict.
  */
-export async function witnessResults(records: SealedRunRecord[]): Promise<Map<string, boolean>> {
+export async function witnessResults(
+  records: SealedRunRecord[],
+): Promise<Map<string, WitnessVerdict>> {
   const trust = shippedWitnesses();
-  const results = new Map<string, boolean>();
+  const results = new Map<string, WitnessVerdict>();
   for (const record of records) {
     if (record.kind !== "anchor") continue;
     const anchor = record.extensions?.["sealedrun.anchor"] as Record<string, unknown> | undefined;
-    results.set(record.record_id, anchor ? await verifyReceipt(anchor, trust) : false);
+    results.set(recordKey(record), anchor ? await verdictFor(anchor, trust) : { verified: false });
   }
   return results;
+}
+
+async function verdictFor(
+  anchor: Record<string, unknown>,
+  trust: Witness[],
+): Promise<WitnessVerdict> {
+  const receipt = anchor["receipt"] as { log_id?: unknown } | undefined;
+  const logId = typeof receipt?.log_id === "string" ? receipt.log_id : undefined;
+  const entries = selectWitnesses(trust, String(anchor["type"]), String(anchor["witness"]), logId);
+  for (const entry of entries) {
+    if (await verifyReceipt(anchor, [entry])) {
+      return { verified: true, witness: entry.uri, subject: entry.subject };
+    }
+  }
+  return { verified: false };
 }

@@ -456,6 +456,29 @@
           "$ref": "../common.json#/$defs/base64"
         }
       }
+    },
+    "sealedrun.step": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source"],
+      "properties": {
+        "source": {
+          "type": "string",
+          "enum": ["self_reported"]
+        },
+        "via": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "latency_ms": {
+          "type": "number",
+          "minimum": 0
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      }
     }
   }
 }

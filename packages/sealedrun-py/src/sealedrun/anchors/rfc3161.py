@@ -17,6 +17,7 @@ from typing import Any
 
 from asn1crypto import cms, core, tsp
 from cryptography import x509
+from cryptography.exceptions import InvalidSignature, UnsupportedAlgorithm
 from cryptography.hazmat.primitives.serialization import Encoding
 from rfc3161_client import (
     HashAlgorithm,
@@ -143,20 +144,54 @@ def _verify_with(receipt: dict[str, Any], entry: Witness) -> bool:
     roots = [x509.load_pem_x509_certificate(pem.encode()) for pem in entry.roots]
     for root in roots:
         builder = builder.add_root_certificate(root)
-    root_der = {root.public_bytes(Encoding.DER) for root in roots}
-    for pem in receipt.get("chain", []):
-        certificate = x509.load_pem_x509_certificate(pem.encode())
-        if certificate.public_bytes(Encoding.DER) in root_der:
-            continue
-        if _self_signed(certificate):
-            continue
+    offered = [x509.load_pem_x509_certificate(pem.encode()) for pem in receipt.get("chain", [])]
+    for certificate in _issued_under(roots, offered):
         builder = builder.add_intermediate_certificate(certificate)
     return bool(builder.build().verify(decoded, imprint(receipt["digest"])))
 
 
-def _self_signed(certificate: x509.Certificate) -> bool:
-    """Tell whether a certificate is self-signed; such a one from a receipt would act as a root."""
-    return certificate.issuer == certificate.subject
+def _issued_under(
+    roots: list[x509.Certificate], offered: list[x509.Certificate]
+) -> list[x509.Certificate]:
+    """Return the CA certificates of `offered` whose signatures lead back to one of `roots`.
+
+    The verifier library trusts every certificate it is given, so a receipt may only add
+    certificates that a trust-list root (directly or through another accepted one) really
+    signed. Anything else, including a self-issued authority under any spelling of its name, is
+    dropped rather than trusted.
+    """
+    accepted = list(roots)
+    accepted_der = {c.public_bytes(Encoding.DER) for c in accepted}
+    pending = [c for c in offered if c.public_bytes(Encoding.DER) not in accepted_der and _is_ca(c)]
+    added: list[x509.Certificate] = []
+    progress = True
+    while pending and progress:
+        progress = False
+        for certificate in list(pending):
+            if any(_signed_by(certificate, issuer) for issuer in accepted):
+                pending.remove(certificate)
+                accepted.append(certificate)
+                added.append(certificate)
+                progress = True
+    return added
+
+
+def _is_ca(certificate: x509.Certificate) -> bool:
+    try:
+        constraints = certificate.extensions.get_extension_for_class(x509.BasicConstraints)
+    except x509.ExtensionNotFound:
+        return False
+    return bool(constraints.value.ca)
+
+
+def _signed_by(certificate: x509.Certificate, issuer: x509.Certificate) -> bool:
+    if certificate.issuer != issuer.subject:
+        return False
+    try:
+        certificate.verify_directly_issued_by(issuer)
+    except (InvalidSignature, ValueError, TypeError, UnsupportedAlgorithm):
+        return False
+    return True
 
 
 def _tst_info(token: cms.ContentInfo) -> tsp.TSTInfo:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import threading
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 from typing import Any
 
 from sealedrun import RunWriter, payload_ref
@@ -14,6 +14,9 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from sealedrun_recorder.db import DelegationRow, PayloadRow, RecordRow, RunRow
 from sealedrun_recorder.keystore import Identity
+
+MAX_WRITERS = 4096
+TARGET_LIMITS = {"type": 16, "name": 256, "location": 16, "endpoint": 2048, "provider": 256}
 
 
 class LiveRunError(Exception):
@@ -36,7 +39,7 @@ class LiveRuns:
     def __init__(self, sessions: sessionmaker[Session], identity: Identity):
         self._sessions = sessions
         self._identity = identity
-        self._writers: dict[str, RunWriter] = {}
+        self._writers: OrderedDict[str, RunWriter] = OrderedDict()
         self._locks: dict[str, threading.Lock] = defaultdict(threading.Lock)
         self._registry_lock = threading.Lock()
         self._store_delegation()
@@ -68,13 +71,27 @@ class LiveRuns:
                         complete=False,
                         anchors=0,
                         labels_sent_to_cloud={},
+                        labels_self_reported={},
                         run_label=_run_label(extensions),
                     )
                 )
                 session.add(_record_row(record))
                 session.commit()
-            self._writers[writer.run_id] = writer
+            self._remember(writer)
         return record
+
+    def _remember(self, writer: RunWriter) -> None:
+        """Keep the writer in memory, forgetting the least recently used past `MAX_WRITERS`.
+
+        A forgotten writer costs one database read when its run is next appended to: the run is
+        resumed from its stored head, exactly as after a restart.
+        """
+        with self._registry_lock:
+            self._writers[writer.run_id] = writer
+            self._writers.move_to_end(writer.run_id)
+            while len(self._writers) > MAX_WRITERS:
+                dropped, _ = self._writers.popitem(last=False)
+                self._locks.pop(dropped, None)
 
     def append(
         self,
@@ -107,6 +124,7 @@ class LiveRuns:
                     request_media_type=request_media_type,
                     response_media_type=response_media_type,
                 )
+            _check_target(target)
             try:
                 doc = writer.preview(kind, target=target, payload=payload, **fields)
                 if check:
@@ -116,21 +134,29 @@ class LiveRuns:
                 record = writer.seal(doc)
             except ValueError as error:
                 raise LiveRunError(str(error)) from error
-            with self._sessions() as session:
-                run = session.get(RunRow, run_id)
-                if run is None:
-                    raise LiveRunError("run not found")
-                for body in (request, response):
-                    if body is not None:
-                        _store_payload(session, writer.hash_alg, body)
-                session.add(_record_row(record))
-                run.record_count += 1
-                run.last_hash = record["hash"]
-                _count_cloud_labels(run, record)
-                if kind == "anchor":
-                    run.anchors += 1
-                    run.last_anchor_at = record["occurred_at"]
-                session.commit()
+            try:
+                with self._sessions() as session:
+                    run = session.get(RunRow, run_id)
+                    if run is None:
+                        raise LiveRunError("run not found")
+                    for body in (request, response):
+                        if body is not None:
+                            _store_payload(session, writer.hash_alg, body)
+                    session.add(_record_row(record))
+                    run.record_count += 1
+                    run.last_hash = record["hash"]
+                    _count_cloud_labels(run, record)
+                    if kind == "anchor":
+                        run.anchors += 1
+                        run.last_anchor_at = record["occurred_at"]
+                    session.commit()
+            except Exception as error:
+                # The record never reached the store: take it back so the head in memory
+                # stays the head on disk, else every later record would chain to a ghost.
+                writer.revert(record)
+                if isinstance(error, LiveRunError):
+                    raise
+                raise LiveRunError(f"record not stored: {type(error).__name__}") from error
             return record
 
     def head(self, run_id: str) -> tuple[int, str, str]:
@@ -167,17 +193,25 @@ class LiveRuns:
                 record = writer.end(**fields)
             except ValueError as error:
                 raise LiveRunError(str(error)) from error
-            with self._sessions() as session:
-                run = session.get(RunRow, run_id)
-                if run is None:
-                    raise LiveRunError("run not found")
-                session.add(_record_row(record))
-                run.record_count += 1
-                run.last_hash = record["hash"]
-                run.ended_at = record["occurred_at"]
-                run.complete = True
-                session.commit()
-            self._writers.pop(run_id, None)
+            try:
+                with self._sessions() as session:
+                    run = session.get(RunRow, run_id)
+                    if run is None:
+                        raise LiveRunError("run not found")
+                    session.add(_record_row(record))
+                    run.record_count += 1
+                    run.last_hash = record["hash"]
+                    run.ended_at = record["occurred_at"]
+                    run.complete = True
+                    session.commit()
+            except Exception as error:
+                writer.revert(record)
+                if isinstance(error, LiveRunError):
+                    raise
+                raise LiveRunError(f"run_end not stored: {type(error).__name__}") from error
+            with self._registry_lock:
+                self._writers.pop(run_id, None)
+                self._locks.pop(run_id, None)
             return record
 
     def _writer(self, run_id: str) -> RunWriter:
@@ -209,7 +243,7 @@ class LiveRuns:
             seq=last.seq + 1,
             head=last.hash,
         )
-        self._writers[run_id] = writer
+        self._remember(writer)
         return writer
 
     def _lock(self, run_id: str) -> threading.Lock:
@@ -230,6 +264,14 @@ class LiveRuns:
             session.commit()
 
 
+def _check_target(target: dict[str, Any]) -> None:
+    """Refuse a target whose text fields would not fit the record row's columns."""
+    for key, limit in TARGET_LIMITS.items():
+        value = target.get(key)
+        if isinstance(value, str) and len(value) > limit:
+            raise LiveRunError(f"target.{key} longer than {limit} characters")
+
+
 def _schema_problems(doc: dict[str, Any]) -> list[str]:
     """Return the schema violations of an unsigned document, ignoring its missing signatures."""
     placeholder = {**doc, "hash": "0" * 64, "signatures": {}}
@@ -243,7 +285,21 @@ def _store_payload(session: Session, hash_alg: str, body: bytes) -> None:
 
 
 def _count_cloud_labels(run: RunRow, record: dict[str, Any]) -> None:
-    if record["target"].get("location") != "cloud" or record["outcome"] == "blocked":
+    """Keep the run's label counters: what the recorder saw leave, and what was only reported.
+
+    `labels_sent_to_cloud` counts labels on non-blocked cloud-target records the recorder made
+    itself. A self-reported step (`sealedrun.step`) is the caller's own account, so its labels
+    go to `labels_self_reported` instead, whatever outcome the caller stated.
+    """
+    if record["target"].get("location") != "cloud":
+        return
+    if "sealedrun.step" in record.get("extensions", {}):
+        counts = dict(run.labels_self_reported)
+        for label in record["data_labels"]:
+            counts[label] = counts.get(label, 0) + 1
+        run.labels_self_reported = counts
+        return
+    if record["outcome"] == "blocked":
         return
     counts = dict(run.labels_sent_to_cloud)
     for label in record["data_labels"]:

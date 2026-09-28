@@ -153,13 +153,15 @@ def test_verify_checkpoint_signature_and_cosignatures(log: FakeRekor) -> None:
     )
 
 
-def test_verify_without_time_needs_no_set(log: FakeRekor) -> None:
+def test_verify_needs_a_plausible_log_time(log: FakeRekor) -> None:
     receipt = submit(log)
+    good = dict(receipt)
+    assert rekor.verify(good, URL, trust_for(log)) is True
     del receipt["integrated_time"]
     del receipt["signed_entry_timestamp"]
-    assert rekor.verify(receipt, URL, trust_for(log)) is True
-    receipt["integrated_time"] = 1_790_000_000
     assert rekor.verify(receipt, URL, trust_for(log)) is False
+    for bad in (0, -5, 10**18, 4_102_444_800, 1.5, True, "1700000000"):
+        assert rekor.verify({**good, "integrated_time": bad}, URL, trust_for(log)) is False
 
 
 def test_captured_public_log_entry() -> None:

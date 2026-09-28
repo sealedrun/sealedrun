@@ -10,12 +10,14 @@ import {
   parsePrincipals,
   verifyLocally,
   witnessResults,
+  type WitnessVerdict,
 } from "@/lib/inspect";
 import { isGrowing, POLL_MS, runBadge, shouldPoll } from "@/lib/recorder-view";
 import { trustedStore } from "@/lib/trusted-store";
 
 import { DropZone } from "./dropzone";
 import { Logo } from "./logo";
+import { ErrorBoundary } from "@/components/error-boundary";
 import { RunFeed } from "./run-feed";
 import { ThemeToggle } from "./theme-toggle";
 import { Verdict } from "./verdict";
@@ -37,7 +39,7 @@ export function Inspector() {
   const [view, setView] = useState<View>("bundle");
   const [local, setLocal] = useState<LocalVerification | null>(null);
   const [localRun, setLocalRun] = useState<string | null>(null);
-  const [witness, setWitness] = useState<Map<string, boolean> | null>(null);
+  const [witness, setWitness] = useState<Map<string, WitnessVerdict> | null>(null);
   const [lastFile, setLastFile] = useState<File | null>(null);
   const [recorder, setRecorder] = useState<Recorder>({ state: "loading" });
   const [serverRun, setServerRun] = useState<RunSummary | null>(null);
@@ -249,11 +251,13 @@ export function Inspector() {
               {localRecords.length > 0 && (
                 <section>
                   <h2 className="mb-4 text-xl font-semibold tracking-tight">What the agent did</h2>
-                  <RunFeed
-                    records={localRecords}
-                    payloads={local.bundle?.payloads}
-                    witness={witness ?? undefined}
-                  />
+                  <ErrorBoundary title="The steps could not be shown">
+                    <RunFeed
+                      records={localRecords}
+                      payloads={local.bundle?.payloads}
+                      witness={witness ?? undefined}
+                    />
+                  </ErrorBoundary>
                 </section>
               )}
             </div>
@@ -329,7 +333,9 @@ export function Inspector() {
                   </div>
                 )}
                 {serverRun && serverRecords.length > 0 ? (
-                  <RunFeed records={serverRecords} onDownload={downloadPayload} />
+                  <ErrorBoundary title="The steps could not be shown">
+                    <RunFeed records={serverRecords} onDownload={downloadPayload} />
+                  </ErrorBoundary>
                 ) : (
                   <p className="text-ink-soft">Pick a run to see its steps.</p>
                 )}

@@ -94,6 +94,7 @@ export function verifyRun(
     labelsSentToCloud: {},
   };
   let ended = false;
+  const seenIds = new Set<string>();
 
   records.forEach((record, index) => {
     const seq = firstSeq + index;
@@ -109,6 +110,10 @@ export function verifyRun(
     if (record.seq !== seq) {
       throw new VerificationError("seq", `expected seq ${seq}, got ${record.seq}`, runId, seq);
     }
+    if (seenIds.has(record.record_id)) {
+      throw new VerificationError("record_id", "record_id repeats within the run", runId, seq);
+    }
+    seenIds.add(record.record_id);
     if (record.hash_alg !== hashAlg) {
       throw new VerificationError("hash_alg", "hash algorithm changed within run", runId, seq);
     }

@@ -164,8 +164,26 @@ def read_bundle(
     data.seek(0)
     try:
         return _read_archive(data, max_entry_bytes, max_total_bytes)
-    except (zipfile.BadZipFile, UnicodeDecodeError, json.JSONDecodeError, EOFError) as error:
+    except (
+        zipfile.BadZipFile,
+        UnicodeDecodeError,
+        ValueError,
+        EOFError,
+        RecursionError,
+        KeyError,
+        TypeError,
+        AttributeError,
+    ) as error:
         raise VerificationError("bundle", "malformed archive") from error
+
+
+def _json(content: bytes | str) -> Any:
+    """Parse strict JSON: NaN and Infinity are refused, as RFC 8785 cannot represent them."""
+
+    def constant(name: str) -> Any:
+        raise ValueError(f"{name} is not JSON")
+
+    return json.loads(content, parse_constant=constant)
 
 
 def _read_archive(data: BinaryIO, max_entry_bytes: int, max_total_bytes: int) -> Bundle:
@@ -185,7 +203,7 @@ def _read_archive(data: BinaryIO, max_entry_bytes: int, max_total_bytes: int) ->
         names = {i.filename for i in infos}
         if MANIFEST not in names:
             raise VerificationError("bundle", "manifest.json missing")
-        manifest = json.loads(_read_entry(zf, MANIFEST, min(max_entry_bytes, MAX_MANIFEST_BYTES)))
+        manifest = _json(_read_entry(zf, MANIFEST, min(max_entry_bytes, MAX_MANIFEST_BYTES)))
         errors = validate("bundle.json", manifest, first_only=True)
         if errors:
             raise VerificationError("schema", "; ".join(errors))
@@ -202,18 +220,33 @@ def _read_archive(data: BinaryIO, max_entry_bytes: int, max_total_bytes: int) ->
             if payload_digest(manifest["hash_alg"], content) != expected:
                 raise VerificationError("bundle", f"digest mismatch for {path}")
             if path.startswith("delegations/"):
-                doc = json.loads(content)
+                doc = _json(content)
+                _must_match("delegation.json", doc, path)
                 bundle.delegations[doc["delegation_id"]] = doc
             elif path.startswith("runs/"):
-                records = [json.loads(line) for line in content.decode().splitlines() if line]
-                bundle.runs[path.removeprefix("runs/").removesuffix(".jsonl")] = records
+                records = [_json(line) for line in content.decode().splitlines() if line]
+                run_id = path.removeprefix("runs/").removesuffix(".jsonl")
+                for edge in (records[:1] + records[-1:]) if records else []:
+                    _must_match("record.json", edge, path)
+                    if edge["run_id"] != run_id:
+                        raise VerificationError(
+                            "run", f"{path} holds records of run {edge['run_id']}", run_id
+                        )
+                bundle.runs[run_id] = records
             elif path.startswith("payloads/"):
                 bundle.payloads[_payload_key(path, content, manifest["hash_alg"])] = content
             elif path.startswith("anchors/"):
-                bundle.anchors[path.removeprefix("anchors/").removesuffix(".json")] = json.loads(
-                    content
-                )
+                bundle.anchors[path.removeprefix("anchors/").removesuffix(".json")] = _json(content)
     return bundle
+
+
+def _must_match(schema: str, doc: Any, path: str) -> None:
+    """Refuse a document that does not satisfy `schema` before any field is read."""
+    if not isinstance(doc, dict):
+        raise VerificationError("schema", f"{path}: not a JSON object")
+    errors = validate(schema, doc, first_only=True)
+    if errors:
+        raise VerificationError("schema", f"{path}: {errors[0]}")
 
 
 def _payload_key(path: str, content: bytes, hash_alg: str) -> str:
@@ -289,6 +322,10 @@ def verify_bundle(
         if report.complete != entry["complete"] or report.first_seq != entry["first_seq"]:
             raise VerificationError(
                 "manifest", "run entry flags do not match records", entry["run_id"]
+            )
+        if records[0]["hash_alg"] != manifest["hash_alg"]:
+            raise VerificationError(
+                "hash_alg", "run hash algorithm differs from the manifest", entry["run_id"]
             )
         reports.append(report)
     _check_anchor_files(bundle)

@@ -15,6 +15,9 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sealedrun.schema import validate_extensions, validator
 
+from sealedrun_recorder.limits import parse_json
+from sealedrun_recorder.live import TARGET_LIMITS
+
 SELF_REPORTED_KINDS = frozenset(
     {
         "llm_call",
@@ -27,6 +30,18 @@ SELF_REPORTED_KINDS = frozenset(
     }
 )
 OUTCOMES = frozenset({"success", "error", "blocked", "pending", "timeout"})
+STEP_EXTENSION = "sealedrun.step"
+RESERVED_EXTENSIONS = frozenset(
+    {
+        "sealedrun.proxy",
+        "sealedrun.otel",
+        "sealedrun.anchor",
+        "sealedrun.delegation",
+        "sealedrun.imported",
+        "sealedrun.tombstone",
+    }
+)
+STEP_LABEL_SOURCES = frozenset({"manual", "header"})
 
 
 class StepError(ValueError):
@@ -107,7 +122,7 @@ class Step(BaseModel):
 def parse_step(body: bytes) -> Step:
     """Parse and check a posted step; raises StepError with the first problem found."""
     try:
-        data = json.loads(body)
+        data = parse_json(body)
     except ValueError as error:
         raise StepError("body must be JSON") from error
     if not isinstance(data, dict):
@@ -122,6 +137,10 @@ def parse_step(body: bytes) -> Step:
         raise StepError(f"kind must be one of {', '.join(sorted(SELF_REPORTED_KINDS))}")
     if step.outcome not in OUTCOMES:
         raise StepError(f"outcome must be one of {', '.join(sorted(OUTCOMES))}")
+    for key, limit in TARGET_LIMITS.items():
+        value = step.target.get(key)
+        if isinstance(value, str) and len(value) > limit:
+            raise StepError(f"target/{key}: longer than {limit} characters")
     for name, value in (("target", step.target), ("policy", step.policy)):
         if value is None:
             continue
@@ -130,6 +149,7 @@ def parse_step(body: bytes) -> Step:
             raise StepError(f"{name}/{errors[0]}")
     if not all(isinstance(label, str) and label for label in step.data_labels):
         raise StepError("data_labels must be non-empty strings")
+    step.extensions = _mark_self_reported(step.extensions)
     errors = validate_extensions(step.extensions, first_only=True)
     if errors:
         raise StepError(errors[0])
@@ -144,6 +164,29 @@ def parse_step(body: bytes) -> Step:
             except (binascii.Error, ValueError) as error:
                 raise StepError(f"{side}_base64 is not valid base64") from error
     return step
+
+
+def _mark_self_reported(extensions: dict[str, Any]) -> dict[str, Any]:
+    """Stamp `sealedrun.step.source = self_reported`; refuse extensions only a recorder writes.
+
+    A step is the caller's own account of what happened. It must not look like something the
+    recorder saw itself (`sealedrun.proxy`, `sealedrun.otel`), a witness receipt, a delegation
+    binding or an import, and a label on a step can only have been asserted by the caller
+    (`manual`, `header`), never found by a classifier.
+    """
+    reserved = sorted(RESERVED_EXTENSIONS & extensions.keys())
+    if reserved:
+        raise StepError(f"extensions/{reserved[0]}: written by the recorder, not by a step")
+    labels = extensions.get("sealedrun.labels")
+    if isinstance(labels, dict):
+        for label, provenance in labels.items():
+            source = provenance.get("source") if isinstance(provenance, dict) else None
+            if source not in STEP_LABEL_SOURCES:
+                allowed = ", ".join(sorted(STEP_LABEL_SOURCES))
+                raise StepError(f"extensions/sealedrun.labels/{label}: source must be {allowed}")
+    own = extensions.get(STEP_EXTENSION)
+    marker = {**(own if isinstance(own, dict) else {}), "source": "self_reported"}
+    return {**extensions, STEP_EXTENSION: marker}
 
 
 def _validate_def(name: str, value: Any) -> list[str]:

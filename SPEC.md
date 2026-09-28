@@ -252,7 +252,8 @@ add namespaced labels (`acme:customer-tier-1`). The origin of a label is recorde
 ```
 
 `source` is one of `classifier`, `regex`, `source` (the data's origin system), `manual` or
-`header` (asserted by the caller on the request, see 10.3).
+`header` (asserted by the caller on the request, see 10.3). On a self-reported step (10.5) only
+`manual` and `header` are allowed.
 
 ### 5.7 Policy
 
@@ -416,7 +417,8 @@ The anchoring key is a P-256 ECDSA key held by the recorder next to its Agent ke
 only because the log rejects signature schemes without a prehash (pure Ed25519, ML-DSA) and it
 carries no identity claim, the chain does. All members are REQUIRED except `signed_entry_timestamp`
 and `integrated_time`, which logs that give no time (Rekor v2) omit; then the anchor MUST be
-accompanied by an `rfc3161` anchor for time. `hashes` and `root_hash` are hex as the log returns
+accompanied by an `rfc3161` anchor for time, and a verifier does not count the timeless receipt
+as witness-verified (it stays bound to the chain). `hashes` and `root_hash` are hex as the log returns
 them; `inclusion_proof.log_index` is the leaf index inside the log's current shard and may
 differ from `log_index`, the log-wide index. `body` decodes to the canonical entry whose
 `spec.data.hash.value` is `digest` and whose `spec.signature.publicKey.content` is `public_key`.
@@ -461,7 +463,8 @@ match it MUST:
   keys are ignored), require its origin to name the log, its tree size to equal `tree_size` and
   its root to equal `root_hash`; verify `signature` with `public_key` of the receipt taking
   `digest` as the prehashed message; decode `body` and require its digest and public key to be
-  `digest` and `public_key`; require `integrated_time`, when present, to lie within `valid_for`.
+  `digest` and `public_key`; require `integrated_time` to be present, a plausible Unix time,
+  and to lie within `valid_for`.
 
 A verified anchor proves that the chain head `anchored_hash` existed no later than the witness
 time. The report MUST give both counts (`anchors`, `anchors_witness_verified`); a relying party
@@ -484,6 +487,7 @@ verification failure. Registered:
 | `sealedrun.proxy`      | 10.3    | Recorder proxy call details      |
 | `sealedrun.a2a`        | 10.4    | A2A task delegation details      |
 | `sealedrun.otel`       | 11      | OpenTelemetry trace and span ids |
+| `sealedrun.step`       | 10.5    | Self-reported step provenance    |
 
 ### 9.1 Compatibility with MCP SEP-3004 and IETF AAT
 
@@ -539,7 +543,10 @@ For dialect `mcp`, `upstream` is the MCP server and `operation` the JSON-RPC met
 means the stream ended before the response to the request. Dialect `a2a` follows the same rules
 with the agent as `upstream`. A recorder proxy MAY accept data labels from the caller in the
 request header `X-SealedRun-Labels` (comma-separated SPEC 5.6 labels, never forwarded upstream);
-they are written to `data_labels` with `sealedrun.labels[label].source = "header"`.
+they are written to `data_labels` with `sealedrun.labels[label].source = "header"`. Errors a
+recorder proxy generates itself on a JSON-RPC dialect (`mcp`, `a2a`) SHOULD use application
+error codes outside `-32768..-32000`; this specification uses `40000` for a proxy error and
+`40003` for a call the policy rule refused.
 
 ```json
 { "upstream": "openai", "dialect": "openai" | "anthropic" | "ollama" | "gemini" | "mcp", "operation": "chat",
@@ -556,11 +563,29 @@ they are written to `data_labels` with `sealedrun.labels[label].source = "header
 
 A delegation to another agent over A2A is a `tool_call` record with `target.type: tool`,
 `target.provider: a2a:<agent>` and this extension. `agent` and `method` are required; `method` is
-the JSON-RPC method (`SendMessage`, `SendStreamingMessage`, `CancelTask`) or the REST operation
-mapped to it. `state` is the last task state seen in the reply; the outcome follows it:
+the JSON-RPC method (`SendMessage`, `SendStreamingMessage`, `CancelTask`, or the A2A 0.3 names
+`message/send`, `message/stream`, `tasks/cancel`), the REST operation mapped to it, or, for any
+other request a recorder governs, the method name or `<HTTP verb> /<sub-path>` as sent. `state` is the last task state seen in the reply; the outcome follows it:
 `TASK_STATE_COMPLETED` or a direct message -> `success`; `TASK_STATE_FAILED`, `_REJECTED`,
 `_CANCELED` or a JSON-RPC error -> `error`; `_INPUT_REQUIRED`, `_AUTH_REQUIRED`, `_WORKING`,
 `_SUBMITTED` -> `pending`. `protocol_version` is the `A2A-Version` header the client sent.
+
+### 10.5 `sealedrun.step`
+
+```json
+{ "source": "self_reported", "via": "sealedrun-mcp-wrap", "latency_ms": 12.5, "truncated": true }
+```
+
+A record the recorder sealed from a caller's own account of a step (an SDK hook, a stdio
+wrapper, any client of a self-report endpoint) MUST carry this extension with `source:
+self_reported`, so that a reader never mistakes it for something the recorder observed itself.
+`via` names the reporting software; `latency_ms` and `truncated` have the meaning they have in
+10.3. A self-reported step MUST NOT carry `sealedrun.proxy`, `sealedrun.otel`,
+`sealedrun.anchor`, `sealedrun.delegation`, `sealedrun.imported` or `sealedrun.tombstone`, and
+its `sealedrun.labels` sources are limited to `manual` and `header`: a recorder refuses such
+steps. Run summaries a recorder serves count the labels of self-reported cloud-target records
+separately (`labels_self_reported`) from `labels_sent_to_cloud`, which counts only records the
+recorder made itself.
 
 ## 11. Mapping to OpenTelemetry GenAI semantic conventions
 

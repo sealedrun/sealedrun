@@ -39,3 +39,18 @@ describe("api.export", () => {
     await expect(api.export("run-3")).rejects.toThrow("recorder requires a token");
   });
 });
+
+describe("api.records", () => {
+  test("encodes the run id and refuses malformed records", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal("fetch", async (input: string) => {
+      calls.push(input);
+      return new Response(JSON.stringify([{ record_id: "r", seq: 0 }]), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    await expect(api.records("../x?y")).rejects.toThrow("malformed record");
+    expect(calls[0]).toContain("/api/runs/..%2Fx%3Fy/records");
+  });
+});

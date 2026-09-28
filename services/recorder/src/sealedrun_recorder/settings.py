@@ -45,7 +45,7 @@ class Settings(BaseSettings):
     ui_dir: Path | None = None
     host: str = "127.0.0.1"
     port: int = 8080
-    max_bundle_bytes: int = 256 * 1024 * 1024
+    max_bundle_bytes: int = 64 * 1024 * 1024
     api_token: SecretStr | None = None
     allowed_hosts: list[str] = ["127.0.0.1", "localhost"]
     trusted_principals: list[str] = []

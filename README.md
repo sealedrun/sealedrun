@@ -109,9 +109,13 @@ verifies it. "Store in recorder" keeps it on the server.
 > from anyone else. Without it a report says `principal_trusted: false`: integrity, not origin.
 >
 > The recorder answers only to the Host names in `SEALEDRUN_ALLOWED_HOSTS` (default
-> `["127.0.0.1", "localhost"]`; add your public name when you expose it). Uploads are accepted from
-> the Inspector's own origin, or from a script that presents the token; a request a foreign web page
-> makes your browser send is refused.
+> `["127.0.0.1", "localhost"]`; add your public name when you expose it; a proxy in front of it
+> must forward the browser's name in `X-Forwarded-Host`, which is held to the same list).
+> Uploads are accepted from the Inspector's own origin (`Sec-Fetch-Site: same-origin`; a sibling subdomain does not count),
+> or from a script that presents the token; a request a foreign web page makes your browser send
+> is refused. Errors the proxy returns to a client never name the upstream, its key variable or
+> the failure class; that detail goes to the recorder's log, and the access log drops query
+> strings, so a `?key=` token never lands in a log line.
 
 ## Record live traffic and export it (unreleased, on `main`)
 
@@ -143,7 +147,8 @@ from the mounted inode, so replace its content in place rather than swapping the
 `run.zip` verifies with `verify_bundle`, `verifyBundle` or the Inspector like any bundle; the
 recorder's `principal_id` is at `/api/identity`. Anthropic, Ollama and Gemini SDKs use their own
 base-URL setting (`ANTHROPIC_BASE_URL`, `OLLAMA_HOST`, Gemini `http_options.base_url`). Calls
-that send the same `X-SealedRun-Run` header share a run; the Inspector's "Runs in the recorder"
+that send the same `X-SealedRun-Run` header share a run until it has been idle for
+`SEALEDRUN_PROXY_RUN_IDLE_SECONDS` (900), like the unlabelled run; the Inspector's "Runs in the recorder"
 tab lists live runs as they grow and has the Export buttons. Details in `CHANGELOG.md`.
 
 Claude Code on a Pro/Max login needs no API key: mark the Anthropic upstream
@@ -191,7 +196,11 @@ same run as the model calls when they carry the same `X-SealedRun-Run` label (or
 `tools/list` is recorded once per run and server until its result changes. Everything else passes
 through unrecorded: notifications, `initialize`, `server/discover`, `subscriptions/listen`, GET
 streams, DELETE, and requests the server refused. Both protocol eras pass through unchanged: the
-stateless 2026-07-28 one and the session-based 2025-03-26 to 2025-11-25 one.
+stateless 2026-07-28 one and the session-based 2025-03-26 to 2025-11-25 one. Three shapes are
+refused with 400 and never forwarded, because they could slip a call past the record and the
+policy rule: a JSON-RPC batch, a request whose `id` is not a string or an integer, and a recorded
+method sent without an `id`. Errors the proxy itself generates are JSON-RPC error objects with
+the application code `40000` (`40003` when the policy rule refused the call).
 
 ```bash
 claude mcp add --transport http github http://127.0.0.1:8080/mcp/github \
@@ -214,10 +223,14 @@ comes with `pip install sealedrun`, starts the real server, relays its stdin and
 and posts each `tools/call`, `resources/read`, `prompts/get` and `tools/list` to the recorder as a
 `tool_call` record (`transport: stdio`) before the reply reaches the client. The rules are the
 ones of the HTTP proxy; the server's stderr and exit code pass through. The recorder address and
-token come from `--url` / `--token` or `SEALEDRUN_URL` / `SEALEDRUN_TOKEN`; `--run` (or
+token come from `--url` / `SEALEDRUN_URL` and `SEALEDRUN_TOKEN` or `--token-file` (never a
+command-line token: `/proc` shows it to every local user); `--run` (or
 `SEALEDRUN_RUN`) is the same label as `X-SealedRun-Run`, so the tool calls land in the run of the
 model calls. A recorder that cannot be reached does not stop the call: the reply is delivered and
-a warning goes to stderr; with `--strict` the client gets a JSON-RPC error instead. POSIX only.
+a warning goes to stderr; with `--strict` the client gets a JSON-RPC error instead. The wrapper
+keeps at most 1024 open requests (older ones are recorded as truncated), relays a line above 16 MB
+in pieces without recording it (warning), and gives a recorder post up to `--timeout` seconds in
+total before it gives up. POSIX only.
 
 ```bash
 claude mcp add --env SEALEDRUN_TOKEN=$SEALEDRUN_API_TOKEN --transport stdio fs -- \
@@ -236,7 +249,13 @@ Any integration can post its own steps the same way: `POST /api/steps` (bearer t
 `X-SealedRun-Run`) or `POST /api/runs/<id>/steps` takes a JSON body with `kind`, `target`,
 `actor`, `outcome`, `policy`, `data_labels`, `extensions` and the payload bodies as `request` /
 `response` text or `request_base64` / `response_base64`, validates the whole record against the
-schema before sealing it and returns the signed record; the recorder sets `occurred_at`.
+schema before sealing it and returns the signed record; the recorder sets `occurred_at`. Every
+such record carries `extensions["sealedrun.step"] = {"source": "self_reported"}` (SPEC 10.5): it is
+the caller's own account, and the Inspector tags it "self-reported". A step cannot carry the
+extensions only the recorder writes (`sealedrun.proxy`, `sealedrun.otel`, `sealedrun.anchor`,
+`sealedrun.delegation`, ...) and its label sources are limited to `manual` and `header`; run
+summaries count the labels of self-reported cloud steps in `labels_self_reported`, apart from
+`labels_sent_to_cloud`, which only counts what the recorder itself saw leave.
 
 ### A2A agents
 
@@ -249,8 +268,15 @@ rewrite, so verify the original directly when that matters. `SendMessage`, `Send
 and `CancelTask` (and the REST `message:send`, `message:stream`, `tasks/{id}:cancel`) become
 `tool_call` records with `sealedrun.a2a` (task, context and message ids, last task state); the
 outcome follows the task state (`COMPLETED` success, `FAILED` / `REJECTED` / `CANCELED` error,
-`INPUT_REQUIRED` and other open states pending). `GetTask`, `ListTasks`, `SubscribeToTask` and
-push-notification configs pass through unrecorded.
+`INPUT_REQUIRED` and other open states pending). The A2A 0.3 names `message/send`,
+`message/stream` and `tasks/cancel` are recorded the same way. To a `local` agent, `GetTask`,
+`ListTasks`, `SubscribeToTask` and push-notification configs pass through unrecorded. To a
+`cloud` agent every POST, PUT and PATCH is recorded and governed by the policy rule, whatever its
+method or sub-path (the record names it, for example `GetTask` or `PUT /tasks/t-1/
+pushNotificationConfigs/c-1`), so no body can leave for a cloud agent unseen; a cloud request the
+proxy cannot read (not a JSON object, a batch, an `id` that is not a string or an integer) is
+refused with 400. A sub-path with `.` or `..` segments or percent-encoded delimiters is refused
+for every agent. Proxy-generated JSON-RPC errors carry the application code `40000`.
 
 ```yaml
 a2a_agents:
@@ -411,7 +437,7 @@ SEALEDRUN_POLICY_BLOCK_TO_CLOUD=["nda","secret"]   # labels that must not reach 
 
 A call that carries one of those labels to an upstream, MCP server or A2A agent whose
 `location` is `cloud` is refused before any byte reaches it: the LLM proxy answers 403 in the
-SDK's own error shape, the MCP proxy a JSON-RPC error `-32003`, the A2A proxy the same or a
+SDK's own error shape, the MCP proxy a JSON-RPC error `40003`, the A2A proxy the same or a
 `PERMISSION_DENIED` status on the REST binding, each naming the rule. The chain keeps the
 evidence: a record with `outcome: blocked`, `policy: {rule_id: "recorder/no-nda-to-cloud",
 decision: block, reason: "target.location=cloud and labels contain nda"}` and the digest of the
@@ -419,7 +445,8 @@ request that was not sent (SPEC 5.7). A labelled cloud call the rule lets throug
 `policy: {rule_id: "default/allow", decision: allow, ...}`, so the reader sees that the rule was
 consulted; local targets and unconfigured recorders write no policy object. The Inspector counts
 the blocked steps and shows the rule and reason on each. The rule covers `tools/call`,
-`resources/read`, `prompts/get`, `SendMessage` and `SendStreamingMessage`; it cannot cover the
+`resources/read`, `prompts/get`, and every POST, PUT or PATCH to a cloud A2A agent; a configured
+label outside the SPEC 5.6 pattern stops the recorder at start. It cannot cover the
 stdio wrapper (a stdio server has no known location) or self-reported steps (the caller states
 its own outcome), and it decides on stated labels only. Classifiers that find labels in the
 payload, redirecting a call to a local model and approval flows are deliberately not here yet.

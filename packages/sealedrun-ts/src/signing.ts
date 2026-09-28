@@ -42,7 +42,12 @@ export function protectedPart(obj: { [key: string]: Json }): { [key: string]: Js
 /** Recomputes the hash of the protected part. An unsupported `hash_alg` gives `false`. */
 export function checkHash(obj: Sealed): boolean {
   if (!isHashAlg(obj.hash_alg)) return false;
-  return objectHash(obj.hash_alg as HashAlg, protectedPart(obj)) === obj.hash;
+  try {
+    return objectHash(obj.hash_alg as HashAlg, protectedPart(obj)) === obj.hash;
+  } catch {
+    // A value the canonical form cannot express (non-finite number, too deep) hashes to nothing.
+    return false;
+  }
 }
 
 /**

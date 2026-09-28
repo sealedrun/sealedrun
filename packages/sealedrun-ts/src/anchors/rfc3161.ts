@@ -8,6 +8,7 @@ import { selectWitnesses, type Witness, witnessCovers } from "../trust.js";
 const ID_CT_TSTINFO = "1.2.840.113549.1.9.16.1.4";
 const ID_SHA256 = "2.16.840.1.101.3.4.2.1";
 const ID_CE_EXT_KEY_USAGE = "2.5.29.37";
+const ID_CE_BASIC_CONSTRAINTS = "2.5.29.19";
 const ID_KP_TIME_STAMPING = "1.3.6.1.5.5.7.3.8";
 const ID_SIGNED_DATA = "1.2.840.113549.1.7.2";
 
@@ -36,9 +37,10 @@ export interface Rfc3161Receipt {
  * token or in `chain`, carries the critical time-stamping extended key usage, and its CMS
  * signature over the signed attributes verifies; a chain from it through the token's and the
  * receipt's certificates reaches a root of a matching trust entry, all valid at `genTime`;
- * `genTime` lies within the entry's validity. Self-signed certificates offered by the receipt
- * are dropped so they can never act as roots, as are cross-signed copies of a trust root. pkijs
- * recognises the TSTInfo content type and
+ * `genTime` lies within the entry's validity. The signer is matched byte for byte the way pkijs
+ * does, and the certificate pkijs actually verified must be that signer. Only authorities whose
+ * signatures lead back to a trust root take part in path building, so a receipt can neither
+ * smuggle in a root nor make path building loop. pkijs recognises the TSTInfo content type and
  * re-checks the imprint against the raw digest bytes passed as `data`.
  *
  * @returns False when no trust entry matches the witness or any check fails; never throws on
@@ -95,20 +97,18 @@ async function verifyWith(receipt: Rfc3161Receipt, entry: Witness): Promise<bool
 
   const roots = entry.roots.map((pem) => pkijs.Certificate.fromBER(pemDecode(pem)));
   const rootDer = new Set(roots.map(der));
-  const rootKeys = new Set(roots.map(subjectKey));
-  const usable = (c: pkijs.Certificate): boolean =>
-    !rootDer.has(der(c)) && !c.issuer.isEqual(c.subject) && !rootKeys.has(subjectKey(c));
   const offered = receipt.chain.map((pem) => pkijs.Certificate.fromBER(pemDecode(pem)));
   const embedded = (signed.certificates ?? []).filter(
     (c): c is pkijs.Certificate => c instanceof pkijs.Certificate,
   );
-  const candidates = [...embedded, ...offered].filter(usable);
+  const candidates = [...embedded, ...offered];
+  if (candidates.length > MAX_CERTIFICATES) return false;
   const leaf = candidates.find(
-    (c) =>
-      c.issuer.isEqual(sid.issuer) && c.serialNumber.toBigInt() === sid.serialNumber.toBigInt(),
+    (c) => c.issuer.isEqual(sid.issuer) && c.serialNumber.isEqual(sid.serialNumber),
   );
   if (!leaf || !hasTimeStampingUsage(leaf)) return false;
-  signed.certificates = candidates;
+  const authorities = await issuedUnder(roots, candidates.filter(isAuthority));
+  signed.certificates = [leaf, ...authorities];
 
   const result = await signed.verify({
     signer: 0,
@@ -119,10 +119,63 @@ async function verifyWith(receipt: Rfc3161Receipt, entry: Witness): Promise<bool
     extendedMode: true,
   });
   if (result.signatureVerified !== true || result.signerCertificateVerified !== true) return false;
+  if (!result.signerCertificate || der(result.signerCertificate) !== der(leaf)) return false;
   const path = result.certificatePath;
   const top = path[path.length - 1];
   if (!top || !rootDer.has(der(top))) return false;
   return true;
+}
+
+/** More certificates than any real token plus its published chain carry. */
+const MAX_CERTIFICATES = 16;
+
+/**
+ * The authorities among `offered` whose signatures lead back to one of `roots`, directly or
+ * through another accepted one. Everything else is dropped before path building: a self-issued
+ * authority under any spelling of its name, a pair that issued each other, and a cross-signed
+ * copy of a trust root (DigiCert ships one inside its tokens) that would lead the path away from
+ * the trusted self-signed copy.
+ */
+async function issuedUnder(
+  roots: pkijs.Certificate[],
+  offered: pkijs.Certificate[],
+): Promise<pkijs.Certificate[]> {
+  const accepted = [...roots];
+  const acceptedDer = new Set(roots.map(der));
+  const acceptedKeys = new Set(roots.map(subjectKey));
+  let pending = offered.filter((c) => !acceptedDer.has(der(c)) && !acceptedKeys.has(subjectKey(c)));
+  const added: pkijs.Certificate[] = [];
+  let progress = true;
+  while (pending.length > 0 && progress) {
+    progress = false;
+    for (const certificate of pending) {
+      const issuer = accepted.find((a) => a.subject.isEqual(certificate.issuer));
+      if (!issuer || !(await signedBy(certificate, issuer))) continue;
+      pending = pending.filter((c) => c !== certificate);
+      accepted.push(certificate);
+      acceptedDer.add(der(certificate));
+      added.push(certificate);
+      progress = true;
+    }
+  }
+  return added;
+}
+
+async function signedBy(
+  certificate: pkijs.Certificate,
+  issuer: pkijs.Certificate,
+): Promise<boolean> {
+  try {
+    return await certificate.verify(issuer);
+  } catch {
+    return false;
+  }
+}
+
+function isAuthority(certificate: pkijs.Certificate): boolean {
+  const extension = certificate.extensions?.find((e) => e.extnID === ID_CE_BASIC_CONSTRAINTS);
+  const constraints = extension?.parsedValue as pkijs.BasicConstraints | undefined;
+  return constraints?.cA === true;
 }
 
 function der(certificate: pkijs.Certificate): string {

@@ -226,9 +226,13 @@ def test_background_loop_anchors_open_runs(
         assert tsa.requests == 1
         client.app.state.live.append(run_id, "tool_call", target={"type": "tool", "name": "x"})
         deadline = time.monotonic() + 5
-        while time.monotonic() < deadline and tsa.requests < 2:
+        while time.monotonic() < deadline:
+            summary = client.get(f"/api/runs/{run_id}", headers=AUTH).json()
+            if summary["anchors"] == 2:
+                break
             time.sleep(0.05)
-        assert client.get(f"/api/runs/{run_id}", headers=AUTH).json()["anchors"] == 2
+        assert summary["anchors"] == 2
+        assert tsa.requests == 2
 
 
 def test_head_reports_last_record(make_proxy: Any) -> None:
@@ -258,3 +262,23 @@ def test_anchor_receipt_file_in_zip(
             receipt = json.loads(zf.read(names[0]))
             assert receipt["imprint_alg"] == "sha256" and receipt["token"]
     assert asyncio  # the loop task is cancelled on shutdown without errors
+
+
+def test_oversize_witness_reply_is_a_failed_attempt(
+    make_proxy: Any, upstream: FakeUpstream, authority: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    from sealedrun_recorder.anchoring import WITNESS_REPLY_BYTES
+
+    tsa = FakeTsa(authority)
+    mount(upstream, tsa)
+    upstream.routes["/api/v1/timestamp"] = lambda r: httpx.Response(
+        200, content=b"\x30" * (WITNESS_REPLY_BYTES + 1)
+    )
+    client = make_proxy(CONFIG, anchor_tsa_url=TSA, anchor_interval_seconds=3600)
+    with client:
+        run_id = start_run(client)
+        with caplog.at_level("WARNING", logger="sealedrun.anchoring"):
+            bundle = export(client, run_id, end=True)
+    assert [r["kind"] for r in records_of(bundle, run_id)] == ["run_start", "tool_call", "run_end"]
+    assert "exceeds size limit" in caplog.text
+    assert client.app.state.anchoring._busy == {}  # type: ignore[attr-defined]

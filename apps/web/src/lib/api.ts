@@ -1,4 +1,4 @@
-import type { SealedRunRecord } from "@sealedrun/core";
+import { assertRecord, type SealedRunRecord } from "@sealedrun/core";
 
 /** One run as listed by the recorder's `GET /api/runs`. Field names follow the JSON response. */
 export interface RunSummary {
@@ -17,6 +17,8 @@ export interface RunSummary {
   complete: boolean;
   anchors: number;
   labels_sent_to_cloud: Record<string, number>;
+  /** Labels on cloud-target steps the caller reported itself; absent on older recorders. */
+  labels_self_reported?: Record<string, number>;
   /** X-SealedRun-Run label of a live run opened through the proxy, else null. */
   run_label?: string | null;
 }
@@ -88,11 +90,21 @@ export const api = {
   /** Every record of a run, fetched page by page until a short page ends the list. */
   records: async (runId: string) => {
     const records: SealedRunRecord[] = [];
+    const id = encodeURIComponent(runId);
     for (;;) {
-      const page = await getJson<SealedRunRecord[]>(
-        `/api/runs/${runId}/records?limit=${PAGE_SIZE}&offset=${records.length}`,
+      const page = await getJson<unknown>(
+        `/api/runs/${id}/records?limit=${PAGE_SIZE}&offset=${records.length}`,
       );
-      records.push(...page);
+      if (!Array.isArray(page)) throw new Error("recorder returned a malformed record list");
+      for (const item of page) {
+        try {
+          assertRecord(item);
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          throw new Error(`recorder returned a malformed record: ${detail}`);
+        }
+        records.push(item);
+      }
       if (page.length < PAGE_SIZE) return records;
     }
   },
@@ -107,7 +119,9 @@ export const api = {
   },
   /** Fetches a stored request or response body and saves it through a temporary download link. */
   downloadPayload: async (recordId: string, side: "request" | "response") => {
-    const response = await request(`/api/records/${recordId}/payload/${side}`);
+    const response = await request(
+      `/api/records/${encodeURIComponent(recordId)}/payload/${encodeURIComponent(side)}`,
+    );
     if (!response.ok) throw new Error(`payload: ${response.status}`);
     saveFile(await response.blob(), `${recordId}-${side}`);
   },
@@ -117,7 +131,8 @@ export const api = {
    * recorder's own error text on refusal.
    */
   export: async (runId: string, end = false): Promise<File> => {
-    const response = await request(`/api/runs/${runId}/export${end ? "?end=true" : ""}`, {
+    const path = `/api/runs/${encodeURIComponent(runId)}/export${end ? "?end=true" : ""}`;
+    const response = await request(path, {
       method: "POST",
     });
     if (!response.ok) throw new Error(describeError(await response.json()));

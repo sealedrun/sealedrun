@@ -28,13 +28,17 @@ class TestAuthority:
 
     __test__ = False
 
-    def __init__(self, name: str = "Test TSA", *, leaf_eku: bool = True) -> None:
+    def __init__(
+        self, name: str = "Test TSA", *, leaf_eku: bool = True, root_issuer: str | None = None
+    ) -> None:
         self.root_key = ec.generate_private_key(ec.SECP256R1())
         self.ca_key = ec.generate_private_key(ec.SECP256R1())
         self.leaf_key = ec.generate_private_key(ec.SECP256R1())
-        self.root = _certificate(f"{name} Root", self.root_key, None, None, ca=True)
-        self.ca = _certificate(f"{name} CA", self.ca_key, self.root, self.root_key, ca=True)
-        self.leaf = _certificate(
+        self.root = certificate(
+            f"{name} Root", self.root_key, None, None, ca=True, issuer_name=root_issuer
+        )
+        self.ca = certificate(f"{name} CA", self.ca_key, self.root, self.root_key, ca=True)
+        self.leaf = certificate(
             f"{name} Signer", self.leaf_key, self.ca, self.ca_key, ca=False, eku=leaf_eku
         )
 
@@ -54,7 +58,7 @@ class TestAuthority:
         nonce: int | None = None,
         imprint: bytes | None = None,
         include: str = "leaf",
-        prepend: list[x509.Certificate] | None = None,
+        prepend: list[x509.Certificate | ax509.Certificate] | None = None,
         status: str = "granted",
     ) -> bytes:
         """Answer a TimeStampReq with DER TimeStampResp bytes.
@@ -120,9 +124,7 @@ class TestAuthority:
             "none": [],
         }[include]
         bag = [
-            cms.CertificateChoices(
-                {"certificate": ax509.Certificate.load(c.public_bytes(serialization.Encoding.DER))}
-            )
+            cms.CertificateChoices({"certificate": _asn1(c)})
             for c in [*(prepend or []), *certificates]
         ]
         signed = cms.SignedData(
@@ -161,7 +163,13 @@ class TestAuthority:
         ).dump()
 
 
-def _certificate(
+def _asn1(certificate: x509.Certificate | ax509.Certificate) -> ax509.Certificate:
+    if isinstance(certificate, ax509.Certificate):
+        return certificate
+    return ax509.Certificate.load(certificate.public_bytes(serialization.Encoding.DER))
+
+
+def certificate(
     common_name: str,
     key: ec.EllipticCurvePrivateKey,
     issuer: x509.Certificate | None,
@@ -169,14 +177,27 @@ def _certificate(
     *,
     ca: bool,
     eku: bool = True,
+    issuer_name: str | None = None,
+    serial: int | None = None,
 ) -> x509.Certificate:
+    """Build a certificate.
+
+    `issuer_name` names an issuer that is not a certificate at hand (a root spelt differently,
+    or one half of an issuer cycle signed with `issuer_key`); `serial` fixes the serial number.
+    """
     subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, common_name)])
+    if issuer is not None:
+        issuer_dn = issuer.subject
+    elif issuer_name is not None:
+        issuer_dn = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, issuer_name)])
+    else:
+        issuer_dn = subject
     builder = (
         x509.CertificateBuilder()
         .subject_name(subject)
-        .issuer_name(issuer.subject if issuer is not None else subject)
+        .issuer_name(issuer_dn)
         .public_key(key.public_key())
-        .serial_number(x509.random_serial_number())
+        .serial_number(serial if serial is not None else x509.random_serial_number())
         .not_valid_before(NOT_BEFORE)
         .not_valid_after(NOT_AFTER)
         .add_extension(x509.BasicConstraints(ca=ca, path_length=None), critical=True)

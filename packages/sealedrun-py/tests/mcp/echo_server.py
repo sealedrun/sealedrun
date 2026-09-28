@@ -48,6 +48,13 @@ for raw in sys.stdin:
             reply({"jsonrpc": "2.0", "id": rid, "error": {"code": -32602, "message": "bad"}})
             continue
         result = {"content": [{"type": "text", "text": json.dumps(arguments)}]}
+        if "reply_id" in arguments:
+            reply({"jsonrpc": "2.0", "id": arguments["reply_id"], "result": result})
+            continue
+        if arguments.get("batch"):
+            sys.stdout.write(json.dumps([{"jsonrpc": "2.0", "id": rid, "result": result}]) + "\n")
+            sys.stdout.flush()
+            continue
         if arguments.get("is_error"):
             result["isError"] = True
         if arguments.get("input_required"):
