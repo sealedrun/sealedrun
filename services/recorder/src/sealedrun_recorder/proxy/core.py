@@ -32,6 +32,8 @@ from starlette.concurrency import run_in_threadpool
 from starlette.responses import StreamingResponse
 
 from sealedrun_recorder.live import LiveRunError, LiveRuns
+from sealedrun_recorder.policy import Decision, Rule
+from sealedrun_recorder.proxy.labels import LabelsError, header_labels, label_fields
 from sealedrun_recorder.upstreams import Upstream, Upstreams
 
 RUN_HEADER = "x-sealedrun-run"
@@ -239,6 +241,10 @@ async def forward(
     label = request.headers.get(RUN_HEADER)
     if label is not None and not RUN_LABEL.match(label):
         return error(dialect, 400, f"{RUN_HEADER} must match {RUN_LABEL.pattern}")
+    try:
+        labels = header_labels(request)
+    except LabelsError as problem:
+        return error(dialect, 400, str(problem))
     limit = settings.proxy_max_body_bytes
     declared = request.headers.get("content-length", "")
     if declared.isdigit() and int(declared) > limit:
@@ -270,7 +276,13 @@ async def forward(
     if not upstream.ready(client_credentials(request)):
         return error(dialect, 503, f"upstream {upstream.name}: {upstream.key_env} is not set")
 
-    exchange = Exchange(request, operation, upstream, label, model, call, body, streaming, path)
+    exchange = Exchange(
+        request, operation, upstream, label, model, call, body, streaming, path, labels
+    )
+    rule: Rule = request.app.state.policy
+    exchange.policy = rule.evaluate(upstream.location, labels)
+    if exchange.policy is not None and exchange.policy.blocked:
+        return await exchange.blocked()
     if streaming:
         return await exchange.stream()
     return await exchange.buffered()
@@ -289,6 +301,8 @@ class Exchange:
     body: bytes
     streaming: bool
     path: str | None = None
+    labels: list[str] | None = None
+    policy: Decision | None = None
 
     def __post_init__(self) -> None:
         settings = self.request.app.state.settings
@@ -317,6 +331,13 @@ class Exchange:
     def _unreachable(self, failure: httpx.HTTPError) -> tuple[int, bytes]:
         reason = f"upstream {self.upstream.name} unreachable: {type(failure).__name__}"
         return 502, self.operation.dialect.error_body(502, reason)
+
+    async def blocked(self) -> Response:
+        """Refuse a call the policy rule blocks: nothing is sent, the refusal is recorded."""
+        assert self.policy is not None
+        message = f"blocked by policy {self.policy.rule_id}: {self.policy.reason}"
+        await self._record(403, None, JSON)
+        return error(self.operation.dialect, 403, message)
 
     async def buffered(self) -> Response:
         """Forward a plain call, record the reply and return it."""
@@ -384,8 +405,9 @@ class Exchange:
                 await self._record(reply.status_code, b"".join(received), media_type, truncated)
 
     async def _record(
-        self, status: int, answer: bytes, media_type: str, truncated: bool = False
+        self, status: int, answer: bytes | None, media_type: str, truncated: bool = False
     ) -> None:
+        """Seal the call; `answer` is None for a call that was never sent."""
         latency_ms = round((time.perf_counter() - self.started) * 1000, 1)
         operation = self.operation
         llm: dict[str, Any] = {
@@ -394,7 +416,10 @@ class Exchange:
             "stream": self.streaming,
         }
         llm.update(operation.sampling(self.call))
-        if self.streaming and status < 300 and operation.stream is not None:
+        blocked = answer is None
+        if answer is None:
+            failed = False
+        elif self.streaming and status < 300 and operation.stream is not None:
             summary = operation.stream(answer)
             llm.update(summary.llm)
             truncated = truncated and not summary.complete
@@ -413,6 +438,13 @@ class Exchange:
         }
         if truncated:
             proxy["truncated"] = True
+        fields = label_fields(self.labels or [], {"sealedrun.llm": llm, "sealedrun.proxy": proxy})
+        if self.policy is not None:
+            fields["policy"] = self.policy.document()
+        if blocked:
+            outcome = "blocked"
+        else:
+            outcome = "error" if failed else "success"
         await run_in_threadpool(
             self.request.app.state.runs.record,
             self.label,
@@ -427,9 +459,9 @@ class Exchange:
             request=self.body,
             response=answer,
             request_media_type=JSON,
-            response_media_type=media_type.partition(";")[0].strip() or None,
-            outcome="error" if failed else "success",
-            extensions={"sealedrun.llm": llm, "sealedrun.proxy": proxy},
+            response_media_type=None if blocked else media_type.partition(";")[0].strip() or None,
+            outcome=outcome,
+            **fields,
         )
 
 

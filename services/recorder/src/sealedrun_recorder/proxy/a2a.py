@@ -33,6 +33,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import StreamingResponse
 
+from sealedrun_recorder.policy import Decision, Rule
 from sealedrun_recorder.proxy.core import (
     JSON,
     RUN_HEADER,
@@ -43,7 +44,8 @@ from sealedrun_recorder.proxy.core import (
     require_proxy_token,
     sse_data,
 )
-from sealedrun_recorder.proxy.mcp import _relay_recorded, same_origin
+from sealedrun_recorder.proxy.labels import LabelsError, header_labels, label_fields
+from sealedrun_recorder.proxy.mcp import POLICY_ERROR, _relay_recorded, same_origin
 from sealedrun_recorder.upstreams import A2aAgent, Upstreams
 
 CARD_PATH = ".well-known/agent-card.json"
@@ -67,6 +69,7 @@ REPLY_HEADERS = (
 URL_KEYS = ("url",)
 INTERFACE_KEYS = ("supportedInterfaces", "additionalInterfaces", "interfaces")
 RECORDED_METHODS = frozenset({"SendMessage", "SendStreamingMessage", "CancelTask"})
+GOVERNED_METHODS = frozenset({"SendMessage", "SendStreamingMessage"})
 REST_OPERATIONS = {"message:send": "SendMessage", "message:stream": "SendStreamingMessage"}
 SUCCESS_STATES = frozenset({"TASK_STATE_COMPLETED"})
 ERROR_STATES = frozenset({"TASK_STATE_FAILED", "TASK_STATE_REJECTED", "TASK_STATE_CANCELED"})
@@ -91,6 +94,10 @@ async def a2a(agent: str, request: Request, path: str = "") -> Response:
     label = request.headers.get(RUN_HEADER)
     if label is not None and not RUN_LABEL.match(label):
         return error(400, f"{RUN_HEADER} must match {RUN_LABEL.pattern}")
+    try:
+        labels = header_labels(request)
+    except LabelsError as problem:
+        return error(400, str(problem))
     upstreams: Upstreams = request.app.state.upstreams
     target = upstreams.a2a(agent)
     if target is None:
@@ -108,6 +115,13 @@ async def a2a(agent: str, request: Request, path: str = "") -> Response:
         return error(413, "request body exceeds size limit")
     call = A2aCall.parse(request, path, body) if request.method == "POST" else None
     started = time.perf_counter()
+    policy = None
+    if call is not None and call.method in GOVERNED_METHODS:
+        rule: Rule = request.app.state.policy
+        policy = rule.evaluate(target.location, labels)
+    if call is not None and policy is not None and policy.blocked:
+        await _record(request, target, call, label, body, 403, None, "", started, labels, policy)
+        return policy_refusal(call, policy)
     http: httpx.AsyncClient = request.app.state.http
     try:
         reply = await http.send(_build(request, target, path, body), stream=True)
@@ -123,7 +137,17 @@ async def a2a(agent: str, request: Request, path: str = "") -> Response:
 
     async def finish(answer: bytes) -> None:
         await _record(
-            request, target, call, label, body, reply.status_code, answer, media_type, started
+            request,
+            target,
+            call,
+            label,
+            body,
+            reply.status_code,
+            answer,
+            media_type,
+            started,
+            labels,
+            policy,
         )
 
     if streamed:
@@ -275,13 +299,19 @@ async def _record(
     label: str | None,
     body: bytes,
     status: int,
-    answer: bytes,
+    answer: bytes | None,
     media_type: str,
     started: float,
+    labels: list[str],
+    policy: Decision | None = None,
 ) -> None:
+    """Seal the delegation; `answer` is None for one the policy rule kept from the agent."""
     latency_ms = round((time.perf_counter() - started) * 1000, 1)
-    results = call.results_in(answer, media_type)
+    blocked = answer is None
+    results = None if answer is None else call.results_in(answer, media_type)
     outcome, state, ids = outcome_of(call, results)
+    if blocked:
+        outcome = "blocked"
     a2a: dict[str, Any] = {
         "agent": target.name,
         "method": call.method,
@@ -306,8 +336,11 @@ async def _record(
         "status": status,
         "latency_ms": latency_ms,
     }
-    if results is None:
+    if results is None and not blocked:
         proxy["truncated"] = True
+    fields = label_fields(labels, {"sealedrun.a2a": a2a, "sealedrun.proxy": proxy})
+    if policy is not None:
+        fields["policy"] = policy.document()
     runs = request.app.state.runs
     await run_in_threadpool(
         runs.record,
@@ -325,8 +358,21 @@ async def _record(
         request_media_type=JSON,
         response_media_type=media_type.partition(";")[0].strip() or None,
         outcome=outcome,
-        extensions={"sealedrun.a2a": a2a, "sealedrun.proxy": proxy},
+        **fields,
     )
+
+
+def policy_refusal(call: A2aCall, policy: Decision) -> Response:
+    """Refuse a delegation in the shape of the binding it came in.
+
+    JSON-RPC gets an error object with the request's id; the REST binding gets the
+    `google.rpc.Status` body A2A uses for HTTP errors.
+    """
+    message = f"blocked by policy {policy.rule_id}: {policy.reason}"
+    if call.binding == "jsonrpc":
+        return error(403, message, code=POLICY_ERROR, request_id=call.id)
+    body = {"code": 7, "status": "PERMISSION_DENIED", "message": message}
+    return Response(json.dumps(body).encode(), status_code=403, media_type=JSON)
 
 
 async def agent_card(request: Request, target: A2aAgent) -> Response:
@@ -420,7 +466,9 @@ async def _relay(reply: httpx.Response) -> AsyncIterator[bytes]:
         await reply.aclose()
 
 
-def error(status: int, message: str) -> Response:
-    """Return a proxy-generated error as a JSON-RPC error object without an id."""
-    body = {"jsonrpc": "2.0", "id": None, "error": {"code": -32000, "message": message}}
+def error(
+    status: int, message: str, *, code: int = -32000, request_id: str | int | None = None
+) -> Response:
+    """Return a proxy-generated error as a JSON-RPC error object, without an id unless given."""
+    body = {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
     return Response(json.dumps(body).encode(), status_code=status, media_type=JSON)

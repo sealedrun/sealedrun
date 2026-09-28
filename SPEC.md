@@ -251,6 +251,9 @@ add namespaced labels (`acme:customer-tier-1`). The origin of a label is recorde
 }
 ```
 
+`source` is one of `classifier`, `regex`, `source` (the data's origin system), `manual` or
+`header` (asserted by the caller on the request, see 10.3).
+
 ### 5.7 Policy
 
 ```json
@@ -534,7 +537,9 @@ disconnect, upstream break or size cap); the record then holds the bytes deliver
 outcome is `error`. On a `run_start` record, `run_label` is the label the agent chose for the run.
 For dialect `mcp`, `upstream` is the MCP server and `operation` the JSON-RPC method; `truncated`
 means the stream ended before the response to the request. Dialect `a2a` follows the same rules
-with the agent as `upstream`.
+with the agent as `upstream`. A recorder proxy MAY accept data labels from the caller in the
+request header `X-SealedRun-Labels` (comma-separated SPEC 5.6 labels, never forwarded upstream);
+they are written to `data_labels` with `sealedrun.labels[label].source = "header"`.
 
 ```json
 { "upstream": "openai", "dialect": "openai" | "anthropic" | "ollama" | "gemini" | "mcp", "operation": "chat",
