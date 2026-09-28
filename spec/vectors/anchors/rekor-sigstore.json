@@ -1,0 +1,41 @@
+{
+  "$comment": "Captured 2026-09-28 from https://rekor.sigstore.dev for the reference run head (record seq 5). Not regenerated.",
+  "receipt": {
+    "body": "eyJhcGlWZXJzaW9uIjoiMC4wLjEiLCJraW5kIjoiaGFzaGVkcmVrb3JkIiwic3BlYyI6eyJkYXRhIjp7Imhhc2giOnsiYWxnb3JpdGhtIjoic2hhMjU2IiwidmFsdWUiOiIyZTVhZDg1MzA0YzY1ZjBhY2NmYWM2N2UwMmM1NmViYTc5NjQ3NmQ2ZTUzOGVlYzk4OTE0Mjg0NWFiN2E3NjUxIn19LCJzaWduYXR1cmUiOnsiY29udGVudCI6Ik1FWUNJUURvaWJJTDJxeDB6T25LQkREeTV1N3M3TWh0OEVFTm4zWmxSZkpZKzBDSStnSWhBSU5kQ2lNalFDM2JtWVduVXoxWGkyNXpJY2U3WUxJbUNucFFTaGNwWXAzSCIsInB1YmxpY0tleSI6eyJjb250ZW50IjoiTFMwdExTMUNSVWRKVGlCUVZVSk1TVU1nUzBWWkxTMHRMUzBLVFVacmQwVjNXVWhMYjFwSmVtb3dRMEZSV1VsTGIxcEplbW93UkVGUlkwUlJaMEZGWjJSV1VIUTRXbVF2V2tWU1FYaGxhWE01TUZsbVVuWjBWalJIWVFvNU1DOUdjalV5UTNKNVdWQmxWRGh6WkZKa2NXOVhibGxTZUVnd1NHSm1UREE1U2pFek1HTXlhbkV4VnpCRVJ6QXdXWGxyZFN0dWNXZFJQVDBLTFMwdExTMUZUa1FnVUZWQ1RFbERJRXRGV1MwdExTMHRDZz09In19fX0=",
+    "digest": "2e5ad85304c65f0accfac67e02c56eba796476d6e538eec989142845ab7a7651",
+    "inclusion_proof": {
+      "checkpoint": "rekor.sigstore.dev - 1193050959916656506\n2859749690\nMinoUQvZtn9zzP1rdsFh9bPyVztVcjjN6TSqzsM0f6k=\n\n\u2014 rekor.sigstore.dev wNI9ajBFAiEAoQM9jMBn0j2yeleKmGDyDGAe9IfLSag7GrGgPLtQsvsCIHPsBtuJ9cPy7tcEcIU0eMzFQeK9ecjciqDgHpKo/You\n",
+      "hashes": [
+        "02b914a5c4561adb394649b6a38dfecee2423d48b7a875f896ac237944f87e80",
+        "14aff2ff08f5c68d9d568c448ff2205168fc0e210d6c9fb6dcaa7068715c22e8",
+        "415965f5ffc316b2c4810a990bc597627e34d28b24fc7fe3e9dab463cca1ae55",
+        "cce1b6ca713b4b6b887f5581190f0aaf9dacdaa17745de00ad72e06c678261c9",
+        "c23ac38e479adcb640a51fa4e05066954ac14c0c356633cdce26ca2008345643",
+        "554600171c685c12b44fe5c524533dd6fe027437d909904ee0f608bb31858887",
+        "dcfbe359f822fa883a7740559ab33cd487f1a15dfa62af85be540fe64216ad46",
+        "98572eb3e9cf56a49e94f9319f085f7c078afbc39950168320140dfdb31b33b3",
+        "ce4600729f62feac31472a1230b0c8bbbe41915ea364beddefb9f9042ccc5fff",
+        "a87ff0ff3665e424d1c840cf8610b3f0cca16906a2eacafdfb3bfc38a8e8002e",
+        "7222b086bb296d4dd6e604907067df291dfea97cd03d010f28d02b9db12f98ff",
+        "ea60edccf8c519a5694ae14d4c0f88bf6e9a46714527f73c9ce4caeeaf729766",
+        "68225f7a2d7c9cb18522a9ffaaedf09d1e1e1bef5533ddddefe0f70fe2e43645",
+        "07563dead41a80d927a49f3fb9f34e0c03ca90e8ef04b2c22931092df6e2e6b5",
+        "b6da717744c9a6b394b5bffc59fe43788cf036d530ef64346275c4d8b14c219a",
+        "ab1cc76a7033cf9ed20dd9897b407b6c92bbd8d4c805bc043060412af0ce44ec",
+        "c47fc30ac78b1ebf5e2a8613f2ab0e4592bbcd5744198587b95b6c56b0fde706"
+      ],
+      "log_index": 2859749687,
+      "root_hash": "3229e8510bd9b67f73ccfd6b76c161f5b3f2573b557238cde934aacec3347fa9",
+      "tree_size": 2859749690
+    },
+    "integrated_time": 1790584611,
+    "log_id": "c0d23d6ad406973f9559f3ba2d1ca01f84147d8ffc5b8445c224f98b9591801d",
+    "log_index": 2981653949,
+    "log_url": "https://rekor.sigstore.dev",
+    "public_key": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEgdVPt8Zd/ZERAxeis90YfRvtV4Ga\n90/Fr52CryYPeT8sdRdqoWnYRxH0HbfL09J130c2jq1W0DG00Yyku+nqgQ==\n-----END PUBLIC KEY-----\n",
+    "signature": "MEYCIQDoibIL2qx0zOnKBDDy5u7s7Mht8EENn3ZlRfJY+0CI+gIhAINdCiMjQC3bmYWnUz1Xi25zIce7YLImCnpQShcpYp3H",
+    "signed_entry_timestamp": "MEUCIG3I+b1NE7ShDD6ItTB4IsjZ8gY9BNgMaAv9mkvym9HpAiEA433ZAO+tawtqE1A31pkBTG3zAwAAaJ4cJfHTObAT2Xk=",
+    "uuid": "108e9186e8c5677a70721fb02bb54e3e2efb1b9857a76691c63923a4340d7652bcf4ad635ba2a9dd"
+  },
+  "witness": "https://rekor.sigstore.dev"
+}

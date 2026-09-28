@@ -105,14 +105,14 @@ def run(agent: PrivateKeySet, delegation: dict[str, Any], payloads: dict[str, by
     )
     writer.append(
         "anchor",
-        target={"type": "witness", "name": "rekor"},
+        target={"type": "witness", "name": "example"},
         extensions={
             "sealedrun.anchor": {
-                "type": "rekor",
+                "type": "other",
                 "anchored_hash": writer.head,
                 "anchored_seq": 2,
                 "receipt": {"digest": writer.head, "log_index": 1},
-                "witness": "https://rekor.sigstore.dev",
+                "witness": "https://witness.example",
             }
         },
     )

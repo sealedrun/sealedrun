@@ -21,6 +21,7 @@ from sealedrun.keys import KeySet, PrivateKeySet
 from sealedrun.schema import validate
 from sealedrun.signing import DOMAIN_MANIFEST, check_hash, check_signatures, countersign, seal
 from sealedrun.timeutil import format_timestamp, now
+from sealedrun.trust import Witness
 from sealedrun.verify import RunReport, verify_run
 
 SPEC_VERSION = "0.1"
@@ -233,13 +234,18 @@ def _read_entry(zf: zipfile.ZipFile, name: str, limit: int) -> bytes:
 
 
 def verify_bundle(
-    bundle: Bundle, trusted_principals: Collection[str] | None = None
+    bundle: Bundle,
+    trusted_principals: Collection[str] | None = None,
+    *,
+    witnesses: list[Witness] | None = None,
+    strict_witness: bool = False,
 ) -> BundleReport:
     """Verify a bundle per SPEC 13.2.
 
     The keys inside a bundle are not a root of trust. Pass the principal ids obtained out of band
     as ``trusted_principals``; without them the report has ``principal_trusted=False`` and only
-    says the bundle is internally consistent.
+    says the bundle is internally consistent. ``witnesses`` and ``strict_witness`` go to
+    `verify_run` for the anchor receipts.
     """
     manifest = bundle.manifest
     if not check_hash(manifest):
@@ -271,7 +277,12 @@ def verify_bundle(
         records = bundle.runs[entry["run_id"]]
         expected_prev = entry["first_hash"] if entry["first_seq"] > 0 else None
         report = verify_run(
-            records, bundle.delegations, payloads=bundle.payloads, expected_prev_hash=expected_prev
+            records,
+            bundle.delegations,
+            payloads=bundle.payloads,
+            expected_prev_hash=expected_prev,
+            witnesses=witnesses,
+            strict_witness=strict_witness,
         )
         if report.record_count != entry["record_count"] or report.last_hash != entry["last_hash"]:
             raise VerificationError("manifest", "run entry does not match records", entry["run_id"])

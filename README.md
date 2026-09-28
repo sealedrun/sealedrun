@@ -83,6 +83,8 @@ show the provenance attestation that links a package to the commit and workflow 
 - Hash chain: SHA-256 by default, SHA-384 allowed (`hash_alg`).
 - Signatures: hybrid, every record carries both an Ed25519 and an ML-DSA-65 (FIPS 204) signature.
   Verifiers require both to be valid.
+- Anchors: chain heads time-stamped by an RFC 3161 authority and published to a Sigstore Rekor
+  transparency log; receipts are verified offline against a witness trust list (see Anchoring).
 
 ## Run with Docker
 
@@ -332,6 +334,58 @@ a server a static token (`key_env`, for example a GitHub personal access token),
 `client_auth: passthrough` and let the client send its own `Authorization` header next to
 `X-SealedRun-Token`. Otherwise connect the client to the server directly; those calls are not
 recorded.
+
+### Anchoring
+
+A run's own keys prove that nothing changed after signing. They cannot prove _when_ a record
+existed, or that the operator did not rewrite the whole run and sign it again. Anchoring closes
+that gap: every ten minutes, and again on export, the recorder sends the current chain head to a
+witness the operator does not control and stores the witness's receipt as a signed `anchor`
+record in the chain (SPEC 8). Two witness types are supported and can run together:
+
+- `rfc3161`: a time-stamp authority signs the head with the current time. The token is
+  verifiable offline against the authority's root certificate and carries the time.
+- `rekor`: the head is published to a Sigstore Rekor v1 transparency log, an append-only public
+  log; the receipt holds the entry, its inclusion proof and the log's signed checkpoint. The
+  recorder signs the head with a P-256 anchoring key it keeps next to its other keys
+  (`keys/anchor.pem`, public part in `GET /api/identity`); that key carries no identity claim,
+  the chain does.
+
+Anchoring is off by default. Turn it on with URLs:
+
+```bash
+SEALEDRUN_ANCHOR_TSA_URL=https://timestamp.sigstore.dev/api/v1/timestamp   # free, run by Sigstore
+SEALEDRUN_ANCHOR_TSA_FALLBACK_URL=http://timestamp.digicert.com            # tried when the first fails
+SEALEDRUN_ANCHOR_REKOR_URL=https://rekor.sigstore.dev                        # public transparency log
+SEALEDRUN_ANCHOR_INTERVAL_SECONDS=600                                        # default
+```
+
+A witness that is down never blocks a run: the recorder retries once, tries the fallback, then
+logs the failure and carries on; the next cycle anchors the head that moved. Run summaries show
+`last_anchor_at`. Note that the log is public: the chain head (a hash) and the anchoring public
+key become visible to anyone, nothing else does.
+
+Verifiers check the receipts offline. `verify_run` / `verify_bundle` (Python) and
+`verifyRunAsync` / `verifyBundleAsync` (TypeScript, the synchronous functions skip this step)
+report `anchors` (receipts bound to the chain) and `anchors_witness_verified` (receipts that
+verified against a witness in the trust list); the Inspector shows the witness, the witness
+time and the verdict per anchor. A verified anchor means: this chain head existed no later than
+the witness time. `python -m sealedrun run.zip` prints the same summary. A relying party that
+wants the strongest statement also re-queries the witness: for Rekor, search the public log by
+the head hash (`POST https://rekor.sigstore.dev/api/v1/index/retrieve {"hash":"sha256:<head>"}`
+or the Inspector's link to the entry); for a time-stamp, the token itself is the statement.
+
+The trust list ships in both packages as `witnesses.json` (Sigstore's time-stamp authority and
+Rekor log key from Sigstore's `trusted_root.json`, DigiCert Trusted Root G4). Pass your own with
+`witnesses=` / `witnesses:` to add a witness or to trust nobody (`[]`), and `strict_witness` /
+`strictWitness` to fail verification on an anchor that does not verify. To refresh the shipped
+list, take the `timestampAuthorities[].certChain` root and `validFor`, and the `tlogs[]` entry
+for `rekor.sigstore.dev` (`publicKey.rawBytes` as PEM, `logId.keyId` as hex), from
+`https://raw.githubusercontent.com/sigstore/root-signing/main/targets/trusted_root.json`, and
+DigiCert's root from `https://cacerts.digicert.com/DigiCertTrustedRootG4.crt.pem`; never take a
+certificate from a receipt. Regulated deployments that need a qualified time-stamp under eIDAS
+point `SEALEDRUN_ANCHOR_TSA_URL` at their qualified trust service provider and add its root to
+the trust list; the EU AI Act's logging duty (Art. 12) does not itself require one.
 
 ## Development
 

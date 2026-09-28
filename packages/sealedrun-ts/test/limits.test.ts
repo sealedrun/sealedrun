@@ -1,7 +1,13 @@
 import { zipSync } from "fflate";
 import { describe, expect, test } from "vitest";
 
-import { assertDelegation, assertRecord, readBundle, VerificationError } from "../src/index.js";
+import {
+  assertDelegation,
+  assertExtensions,
+  assertRecord,
+  readBundle,
+  VerificationError,
+} from "../src/index.js";
 import { isHashAlg } from "../src/hashing.js";
 
 const bomb = (size: number) =>
@@ -45,5 +51,55 @@ describe("bundle limits", () => {
     expect(run).toThrow(VerificationError);
     expect(run).toThrow(/malformed archive/);
     expect(() => readBundle(new Uint8Array([1, 2, 3]))).toThrow(/malformed archive/);
+  });
+});
+
+describe("anchor receipts", () => {
+  const anchor = (type: string, receipt: unknown) => ({
+    "sealedrun.anchor": {
+      type,
+      anchored_hash: "a".repeat(64),
+      anchored_seq: 3,
+      receipt,
+      witness: "https://w",
+    },
+  });
+  const rfc3161 = {
+    digest: "a".repeat(64),
+    imprint_alg: "sha256",
+    token: "MIIB",
+    chain: [],
+    nonce: "1",
+  };
+  const rekor = {
+    digest: "a".repeat(64),
+    log_url: "https://rekor.sigstore.dev",
+    uuid: "1".repeat(80),
+    log_index: 5,
+    log_id: "b".repeat(64),
+    body: "e30=",
+    inclusion_proof: {
+      log_index: 5,
+      root_hash: "c".repeat(64),
+      tree_size: 9,
+      hashes: [],
+      checkpoint: "x",
+    },
+    public_key: "-----BEGIN PUBLIC KEY-----",
+    signature: "MEUC",
+  };
+
+  test("both receipt shapes pass", () => {
+    expect(() => assertExtensions(anchor("rfc3161", rfc3161))).not.toThrow();
+    expect(() => assertExtensions(anchor("rekor", rekor))).not.toThrow();
+    expect(() => assertExtensions(anchor("other", { digest: "a".repeat(64) }))).not.toThrow();
+  });
+
+  test("missing members are schema failures", () => {
+    const noToken = { ...rfc3161, token: undefined };
+    expect(() => assertExtensions(anchor("rfc3161", noToken))).toThrow(VerificationError);
+    expect(() => assertExtensions(anchor("rekor", { ...rekor, inclusion_proof: {} }))).toThrow(
+      VerificationError,
+    );
   });
 });

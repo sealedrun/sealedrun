@@ -47,7 +47,9 @@
     "@noble/curves": "^2.4.0",
     "@noble/hashes": "^2.4.0",
     "@noble/post-quantum": "^0.7.1",
-    "fflate": "^0.8.3"
+    "asn1js": "^3.0.10",
+    "fflate": "^0.8.3",
+    "pkijs": "^3.4.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.30.0",

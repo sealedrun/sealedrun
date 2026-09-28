@@ -3,8 +3,10 @@ import {
   type Bundle,
   type BundleReport,
   readBundle,
+  shippedWitnesses,
   VerificationError,
-  verifyBundle,
+  verifyBundleAsync,
+  verifyReceipt,
 } from "@sealedrun/core";
 
 /**
@@ -26,20 +28,24 @@ export function parsePrincipals(text: string): string[] {
 
 /**
  * Reads and verifies a bundle without throwing: a failed check or a malformed archive is returned
- * as `failure`.
+ * as `failure`. Anchor receipts are checked offline against the trust list shipped with
+ * `@sealedrun/core` (SPEC 8.4).
  *
  * @param trustedPrincipals - Principal ids the user trusts. An empty list means "no trust anchor
  * given", not "trust nobody" (SPEC 13.2 step 2).
  */
-export function verifyLocally(
+export async function verifyLocally(
   fileName: string,
   data: Uint8Array,
   trustedPrincipals: string[] = [],
-): LocalVerification {
+): Promise<LocalVerification> {
   let bundle: Bundle | null = null;
   try {
     bundle = readBundle(data);
-    const report = verifyBundle(bundle, trustedPrincipals.length > 0 ? { trustedPrincipals } : {});
+    const report = await verifyBundleAsync(
+      bundle,
+      trustedPrincipals.length > 0 ? { trustedPrincipals } : {},
+    );
     return { fileName, sizeBytes: data.length, bundle, report, failure: null };
   } catch (error) {
     const failure =
@@ -85,4 +91,54 @@ export function summarize(records: SealedRunRecord[]) {
     labels: [...labels].sort(),
     anchors: records.filter((r) => r.kind === "anchor").length,
   };
+}
+
+/**
+ * Anchor record metadata for display: the witness, the receipt time, the anchor type and, for a
+ * transparency log entry, its index and a link to the public entry.
+ */
+export function anchorInfo(record: SealedRunRecord) {
+  const anchor = record.extensions?.["sealedrun.anchor"] as
+    | {
+        type?: string;
+        witness?: string;
+        receipt?: {
+          gen_time?: string;
+          integrated_time?: number;
+          log_index?: number;
+          log_url?: string;
+        };
+      }
+    | undefined;
+  if (record.kind !== "anchor" || !anchor) return null;
+  const receipt = anchor.receipt ?? {};
+  const time =
+    receipt.gen_time ??
+    (receipt.integrated_time !== undefined
+      ? new Date(receipt.integrated_time * 1000).toISOString()
+      : undefined);
+  const logIndex = receipt.log_index;
+  let entryUrl: string | undefined;
+  if (logIndex !== undefined && receipt.log_url) {
+    entryUrl =
+      receipt.log_url === "https://rekor.sigstore.dev"
+        ? `https://search.sigstore.dev/?logIndex=${logIndex}`
+        : `${receipt.log_url}/api/v1/log/entries?logIndex=${logIndex}`;
+  }
+  return { type: anchor.type, witness: anchor.witness, time, logIndex, entryUrl };
+}
+
+/**
+ * Per anchor record, whether its receipt verifies offline against the shipped witness trust
+ * list (SPEC 8.4). Unknown witnesses and receipt types the verifier does not know give false.
+ */
+export async function witnessResults(records: SealedRunRecord[]): Promise<Map<string, boolean>> {
+  const trust = shippedWitnesses();
+  const results = new Map<string, boolean>();
+  for (const record of records) {
+    if (record.kind !== "anchor") continue;
+    const anchor = record.extensions?.["sealedrun.anchor"] as Record<string, unknown> | undefined;
+    results.set(record.record_id, anchor ? await verifyReceipt(anchor, trust) : false);
+  }
+  return results;
 }

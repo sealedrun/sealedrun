@@ -97,6 +97,7 @@ def identity(request: Request) -> dict[str, Any]:
         "agent_id": live.identity.agent_id,
         "principal_keys": live.identity.principal.public.to_json(),
         "agent_keys": live.identity.agent.public.to_json(),
+        "anchor_public_key": live.identity.anchor_public_key,
         "delegation": live.identity.delegation,
     }
 
@@ -223,20 +224,25 @@ def get_run(run_id: str, request: Request, session: SessionDep) -> dict[str, Any
 
 
 @router.post("/runs/{run_id}/export")
-def export_run(run_id: str, request: Request, session: SessionDep, end: bool = False) -> Response:
+async def export_run(
+    run_id: str, request: Request, session: SessionDep, end: bool = False
+) -> Response:
     """Export a live run as a bundle archive signed by this recorder.
 
-    With `end=true` the run's `run_end` record is written first, so the bundle is complete;
+    When anchoring is on, the run's head is anchored first (SPEC 8.2), so an open run leaves
+    with a fresh receipt and a run ended here has its anchor right before `run_end`. With
+    `end=true` the run's `run_end` record is written first, so the bundle is complete;
     otherwise an open run is exported as it stands. Responds 404 for an unknown run, 409 for an
     imported run (download its original bundle) and 409 with `end=true` on a run that is
     already closed.
     """
+    await request.app.state.anchoring.anchor_run(run_id)
     if end:
         try:
             request.app.state.live.end(run_id)
         except LiveRunError as error:
             raise HTTPException(409, str(error)) from error
-        session.expire_all()
+    session.expire_all()
     try:
         archive = build_bundle(session, request.app.state.live.identity, run_id)
     except ExportError as error:
@@ -455,4 +461,5 @@ def _run_summary(row: RunRow, request: Request) -> dict[str, Any]:
         "anchors": row.anchors,
         "labels_sent_to_cloud": row.labels_sent_to_cloud,
         "run_label": row.run_label,
+        "last_anchor_at": row.last_anchor_at,
     }

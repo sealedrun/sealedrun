@@ -5,7 +5,12 @@ import { Download, KeyRound, Server } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { api, type RunSummary, saveFile, setToken, UnauthorizedError } from "@/lib/api";
-import { type LocalVerification, parsePrincipals, verifyLocally } from "@/lib/inspect";
+import {
+  type LocalVerification,
+  parsePrincipals,
+  verifyLocally,
+  witnessResults,
+} from "@/lib/inspect";
 import { isGrowing, POLL_MS, runBadge, shouldPoll } from "@/lib/recorder-view";
 import { trustedStore } from "@/lib/trusted-store";
 
@@ -32,6 +37,7 @@ export function Inspector() {
   const [view, setView] = useState<View>("bundle");
   const [local, setLocal] = useState<LocalVerification | null>(null);
   const [localRun, setLocalRun] = useState<string | null>(null);
+  const [witness, setWitness] = useState<Map<string, boolean> | null>(null);
   const [lastFile, setLastFile] = useState<File | null>(null);
   const [recorder, setRecorder] = useState<Recorder>({ state: "loading" });
   const [serverRun, setServerRun] = useState<RunSummary | null>(null);
@@ -93,8 +99,13 @@ export function Inspector() {
 
   const verify = useCallback(async (file: File, principals: string) => {
     const data = new Uint8Array(await file.arrayBuffer());
-    const verification = verifyLocally(file.name, data, parsePrincipals(principals));
+    const verification = await verifyLocally(file.name, data, parsePrincipals(principals));
     setLocal(verification);
+    setWitness(
+      verification.bundle
+        ? await witnessResults([...verification.bundle.runs.values()].flat())
+        : null,
+    );
     setLocalRun(verification.bundle ? ([...verification.bundle.runs.keys()][0] ?? null) : null);
     setNotice(null);
   }, []);
@@ -238,7 +249,11 @@ export function Inspector() {
               {localRecords.length > 0 && (
                 <section>
                   <h2 className="mb-4 text-xl font-semibold tracking-tight">What the agent did</h2>
-                  <RunFeed records={localRecords} payloads={local.bundle?.payloads} />
+                  <RunFeed
+                    records={localRecords}
+                    payloads={local.bundle?.payloads}
+                    witness={witness ?? undefined}
+                  />
                 </section>
               )}
             </div>

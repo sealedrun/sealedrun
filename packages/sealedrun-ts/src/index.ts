@@ -33,9 +33,28 @@ export {
   type Step,
   type StepOptions,
 } from "./client.js";
-export { assertDelegation, assertManifest, assertRecord } from "./structure.js";
+export { assertDelegation, assertExtensions, assertManifest, assertRecord } from "./structure.js";
 export type { SealedRunRecord, Delegation, Manifest, Payload, Target } from "./types.js";
-export { type RunReport, verifyRun, type VerifyRunOptions } from "./verify.js";
+export {
+  type RunReport,
+  verifyRun,
+  verifyReceipt,
+  verifyRunAsync,
+  type VerifyRunOptions,
+  verifyWitnesses,
+  type WitnessOptions,
+} from "./verify.js";
+export { type Rfc3161Receipt, verifyRfc3161 } from "./anchors/rfc3161.js";
+export { type RekorReceipt, verifyRekor } from "./anchors/rekor.js";
+export {
+  parseInstant,
+  selectWitnesses,
+  shippedWitnesses,
+  type Witness,
+  witnessCovers,
+  witnessFromJson,
+  type WitnessJson,
+} from "./trust.js";
 export {
   type Bundle,
   type BundleLimits,
@@ -46,4 +65,5 @@ export {
   MAX_TOTAL_BYTES,
   readBundle,
   verifyBundle,
+  verifyBundleAsync,
 } from "./bundle.js";

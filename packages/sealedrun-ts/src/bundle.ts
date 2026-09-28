@@ -7,7 +7,7 @@ import { type HashAlg, isHashAlg, payloadDigest } from "./hashing.js";
 import { assertDelegation, assertManifest, assertRecord } from "./structure.js";
 import { checkHash, checkSignatures, DOMAIN_MANIFEST } from "./signing.js";
 import type { SealedRunRecord, Delegation, Manifest } from "./types.js";
-import { type RunReport, verifyRun } from "./verify.js";
+import { type RunReport, verifyRun, verifyWitnesses, type WitnessOptions } from "./verify.js";
 
 /**
  * Parsed content of a bundle archive (SPEC 13). Parsing proves digests and structure, not signatures.
@@ -38,6 +38,24 @@ export interface BundleReport {
 export interface VerifyBundleOptions {
   /** Principal ids obtained out of band. The keys inside a bundle are not a root of trust. */
   trustedPrincipals?: Iterable<string>;
+}
+
+/**
+ * {@link verifyBundle}, then the anchor receipts of every run against the witness trust list
+ * (SPEC 8.4), filling `anchorsWitnessVerified` in each run report.
+ *
+ * @throws VerificationError as {@link verifyBundle}, plus check `witness` under `strictWitness`.
+ */
+export async function verifyBundleAsync(
+  bundle: Bundle,
+  options: VerifyBundleOptions & WitnessOptions = {},
+): Promise<BundleReport> {
+  const report = verifyBundle(bundle, options);
+  for (const run of report.runs) {
+    const records = bundle.runs.get(run.runId) ?? [];
+    run.anchorsWitnessVerified = await verifyWitnesses(records, options);
+  }
+  return report;
 }
 
 const MANIFEST = "manifest.json";

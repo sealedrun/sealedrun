@@ -22,6 +22,15 @@ class Settings(BaseSettings):
         upstreams_file: YAML file with the model providers the LLM proxy forwards to.
         proxy_run_idle_seconds: Proxy calls without an X-SealedRun-Run header join the current
             run until it has been idle this long; the next call then starts a new run.
+        anchor_tsa_url: RFC 3161 authority the chain heads are time-stamped at (SPEC 8); empty
+            turns anchoring off. Suggested: https://timestamp.sigstore.dev/api/v1/timestamp.
+        anchor_tsa_fallback_url: Second authority tried when the first fails, for example
+            http://timestamp.digicert.com.
+        anchor_rekor_url: Sigstore Rekor v1 log the heads are also published to (SPEC 8.1.2),
+            for example https://rekor.sigstore.dev; empty = off. The log gives transparency,
+            the authority gives time: use both.
+        anchor_interval_seconds: How often every open run whose head moved is anchored.
+        anchor_timeout_seconds: Time allowed for one authority call.
 
     """
 
@@ -40,6 +49,11 @@ class Settings(BaseSettings):
     proxy_timeout_seconds: float = 600.0
     proxy_max_body_bytes: int = 32 * 1024 * 1024
     proxy_run_idle_seconds: float = 900.0
+    anchor_tsa_url: str = ""
+    anchor_tsa_fallback_url: str = ""
+    anchor_rekor_url: str = ""
+    anchor_interval_seconds: float = 600.0
+    anchor_timeout_seconds: float = 20.0
 
     @property
     def trust_anchor(self) -> frozenset[str] | None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from sealedrun.anchors import rekor, rfc3161
 from sealedrun.delegation import covers, verify_delegation
 from sealedrun.errors import VerificationError
 from sealedrun.hashing import digest_size, payload_digest, zero_hash
@@ -12,6 +13,7 @@ from sealedrun.keys import KeySet
 from sealedrun.schema import validate, validate_extensions
 from sealedrun.signing import DOMAIN_RECORD, check_hash, check_signatures
 from sealedrun.timeutil import parse_timestamp
+from sealedrun.trust import Witness, load_witnesses
 
 
 @dataclass
@@ -23,8 +25,8 @@ class RunReport:
         last_hash: Hash of the last record, the value a continuation must chain from.
         complete: True when the run ends with `run_end`.
         anchors: Number of anchor records whose reference into the chain was checked.
-        anchors_witness_verified: Anchors whose witness proof was checked cryptographically.
-            Always 0 in 0.1 (TRUST.md).
+        anchors_witness_verified: Anchors whose receipt was verified offline against a witness
+            in the trust list (SPEC 8.4); `rfc3161` receipts in this version.
         labels_sent_to_cloud: Per data label, the count of non-blocked records with a cloud target.
     """
 
@@ -44,16 +46,22 @@ def verify_run(
     *,
     payloads: dict[str, bytes] | None = None,
     expected_prev_hash: str | None = None,
+    witnesses: list[Witness] | None = None,
+    strict_witness: bool = False,
 ) -> RunReport:
     """Verify schema, chain, hashes, delegation and signatures of one run, in record order.
 
     `delegations` maps `delegation_id` to the delegation object. When `payloads` (digest to body)
     is given, bodies stored in the bundle or inline are checked against their references. A run
     that starts above seq 0 chains from `expected_prev_hash` and takes the first delegation issued
-    to its agent, since it has no `run_start` to name one.
+    to its agent, since it has no `run_start` to name one. Anchor receipts are verified against
+    `witnesses` (the shipped trust list by default); an anchor that does not verify only lowers
+    `anchors_witness_verified`, unless `strict_witness` turns it into a `witness` failure.
 
     Raises VerificationError at the first failed check.
     """
+    if witnesses is None:
+        witnesses = load_witnesses()
     if not records:
         raise VerificationError("empty", "run has no records")
     run_id = records[0]["run_id"]
@@ -107,6 +115,10 @@ def verify_run(
         if record["kind"] == "anchor":
             _check_anchor(record, records, first_seq, run_id, seq)
             report.anchors += 1
+            if _witness_verified(record, witnesses):
+                report.anchors_witness_verified += 1
+            elif strict_witness:
+                raise VerificationError("witness", "anchor receipt not verified", run_id, seq)
         if record["kind"] == "run_end":
             ended = True
         if record["target"].get("location") == "cloud" and record.get("outcome") != "blocked":
@@ -164,7 +176,7 @@ def _check_anchor(
     """Check that an anchor points at an earlier record of this run and carries its hash.
 
     SPEC 8.1: the receipt digest is the digest the witness was given, so it must equal
-    `anchored_hash`. The witness signature is not checked in 0.1.
+    `anchored_hash`. Whether the receipt is genuine is settled by `_witness_verified`.
     """
     anchor = record["extensions"]["sealedrun.anchor"]
     index = anchor["anchored_seq"] - first_seq
@@ -176,3 +188,16 @@ def _check_anchor(
         raise VerificationError(
             "anchor", "receipt digest does not match anchored_hash", run_id, seq
         )
+
+
+def _witness_verified(record: dict[str, Any], witnesses: list[Witness]) -> bool:
+    """Verify the anchor's receipt offline against the trust list (SPEC 8.4).
+
+    `rfc3161` and `rekor` receipts are verified; other types count as bound, not verified.
+    """
+    anchor = record["extensions"]["sealedrun.anchor"]
+    if anchor["type"] == "rfc3161":
+        return rfc3161.verify(anchor["receipt"], anchor["witness"], witnesses)
+    if anchor["type"] == "rekor":
+        return rekor.verify(anchor["receipt"], anchor["witness"], witnesses)
+    return False

@@ -104,10 +104,10 @@ def test_bad_anchor(run: RunWriter, delegation: dict[str, Any], agent: PrivateKe
     writer.records = list(run.records[:3])
     writer.append(
         "anchor",
-        target={"type": "witness", "name": "rekor"},
+        target={"type": "witness", "name": "example"},
         extensions={
             "sealedrun.anchor": {
-                "type": "rekor",
+                "type": "other",
                 "anchored_hash": "f" * 64,
                 "anchored_seq": 2,
                 "receipt": {"digest": "f" * 64},
@@ -146,10 +146,10 @@ def test_receipt_digest_must_match(run: RunWriter, delegation: dict[str, Any], a
     writer.records = list(run.records[:3])
     writer.append(
         "anchor",
-        target={"type": "witness", "name": "rekor"},
+        target={"type": "witness", "name": "example"},
         extensions={
             "sealedrun.anchor": {
-                "type": "rekor",
+                "type": "other",
                 "anchored_hash": run.records[2]["hash"],
                 "anchored_seq": 2,
                 "receipt": {"digest": "f" * 64},

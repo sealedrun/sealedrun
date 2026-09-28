@@ -12,6 +12,8 @@ dependencies = [
   "rfc8785>=0.1",
   "jsonschema>=4.23",
   "referencing>=0.37.0",
+  "rfc3161-client>=1.0.9",
+  "asn1crypto>=1.5.1",
 ]
 classifiers = [
   "Development Status :: 3 - Alpha",

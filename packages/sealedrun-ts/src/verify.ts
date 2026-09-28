@@ -4,6 +4,9 @@ import { digestSize, type HashAlg, isHashAlg, payloadDigest, zeroHash } from "./
 import { assertRecord } from "./structure.js";
 import { checkHash, checkSignatures, DOMAIN_RECORD } from "./signing.js";
 import { parseTimestamp } from "./time.js";
+import { type RekorReceipt, verifyRekor } from "./anchors/rekor.js";
+import { verifyRfc3161, type Rfc3161Receipt } from "./anchors/rfc3161.js";
+import { shippedWitnesses, type Witness } from "./trust.js";
 import type { SealedRunRecord, Delegation } from "./types.js";
 
 /** Result of a successful {@link verifyRun}. */
@@ -17,7 +20,11 @@ export interface RunReport {
   complete: boolean;
   /** Anchor records whose `anchored_hash` and receipt digest matched the run. */
   anchors: number;
-  /** Anchors whose witness proof was checked cryptographically. Always 0 in 0.1 (TRUST.md). */
+  /**
+   * Anchors whose receipt was verified offline against a witness in the trust list (SPEC 8.4).
+   * Filled by {@link verifyRunAsync}; the synchronous {@link verifyRun} leaves it at 0 because
+   * WebCrypto is asynchronous.
+   */
   anchorsWitnessVerified: number;
   /** Per data label, the number of non-blocked records whose target location is `cloud`. */
   labelsSentToCloud: Record<string, number>;
@@ -32,6 +39,14 @@ export interface VerifyRunOptions {
   payloads?: Map<string, Uint8Array>;
   /** `prev_hash` the first record must carry when the slice does not start at seq 0. */
   expectedPrevHash?: string;
+}
+
+/** Optional inputs of {@link verifyRunAsync}, on top of {@link VerifyRunOptions}. */
+export interface WitnessOptions {
+  /** Witness trust list; the shipped one when omitted, an empty list trusts no witness. */
+  witnesses?: Witness[];
+  /** Fail with check `witness` on an anchor that does not verify instead of not counting it. */
+  strictWitness?: boolean;
 }
 
 /**
@@ -183,11 +198,71 @@ function checkPayload(
 }
 
 /**
+ * {@link verifyRun}, then the anchor receipts against the witness trust list (SPEC 8.4), filling
+ * `anchorsWitnessVerified`. `rfc3161` and `rekor` receipts are verified; other types count as
+ * bound, not verified.
+ *
+ * @throws VerificationError as {@link verifyRun}, plus check `witness` under `strictWitness`.
+ */
+export async function verifyRunAsync(
+  records: SealedRunRecord[],
+  delegations: Map<string, Delegation>,
+  options: VerifyRunOptions & WitnessOptions = {},
+): Promise<RunReport> {
+  const report = verifyRun(records, delegations, options);
+  report.anchorsWitnessVerified = await verifyWitnesses(records, options);
+  return report;
+}
+
+/**
+ * Counts the anchors of an already verified run whose receipt verifies against the trust list.
+ *
+ * @throws VerificationError with check `witness` under `strictWitness`.
+ */
+export async function verifyWitnesses(
+  records: SealedRunRecord[],
+  options: WitnessOptions = {},
+): Promise<number> {
+  const witnesses = options.witnesses ?? shippedWitnesses();
+  let verified = 0;
+  for (const record of records) {
+    if (record.kind !== "anchor") continue;
+    const anchor = record.extensions?.["sealedrun.anchor"] as Record<string, unknown>;
+    const ok = await verifyReceipt(anchor, witnesses);
+    if (ok) verified += 1;
+    else if (options.strictWitness) {
+      throw new VerificationError(
+        "witness",
+        "anchor receipt not verified",
+        record.run_id,
+        record.seq,
+      );
+    }
+  }
+  return verified;
+}
+
+/** Verifies one anchor's receipt by its type against the trust list (SPEC 8.4). */
+export async function verifyReceipt(
+  anchor: Record<string, unknown>,
+  witnesses: Witness[],
+): Promise<boolean> {
+  const witness = anchor["witness"] as string;
+  if (anchor["type"] === "rfc3161") {
+    return verifyRfc3161(anchor["receipt"] as Rfc3161Receipt, witness, witnesses);
+  }
+  if (anchor["type"] === "rekor") {
+    return verifyRekor(anchor["receipt"] as RekorReceipt, witness, witnesses);
+  }
+  return false;
+}
+
+/**
  * Checks that an anchor record points at an earlier record of the same run and that its receipt
  * carries the digest the witness was given (SPEC 8.1).
  *
  * @remarks
- * The witness signature is not checked in 0.1.
+ * Whether the receipt is genuine is settled by {@link verifyWitnesses}.
  */
 function checkAnchor(
   record: SealedRunRecord,
