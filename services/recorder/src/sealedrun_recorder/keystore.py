@@ -9,13 +9,17 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 from sealedrun import PrivateKeySet, covers, create_delegation, verify_delegation
+from sealedrun.anchors import rekor
 from sealedrun.hashing import b64url_decode, b64url_encode
 
 KEY_DIR = "keys"
 PRINCIPAL_FILE = "principal.json"
 AGENT_FILE = "agent.json"
 DELEGATION_FILE = "delegation.json"
+ANCHOR_FILE = "anchor.pem"
 
 
 @dataclass(frozen=True)
@@ -25,6 +29,7 @@ class Identity:
     principal: PrivateKeySet
     agent: PrivateKeySet
     delegation: dict[str, Any]
+    anchor_key: ec.EllipticCurvePrivateKey
 
     @property
     def principal_id(self) -> str:
@@ -36,13 +41,19 @@ class Identity:
         """Key id of the agent."""
         return self.agent.public.kid
 
+    @property
+    def anchor_public_key(self) -> str:
+        """PEM public key of the P-256 key that signs chain heads for a transparency log."""
+        return rekor.public_pem(self.anchor_key)
+
 
 def load_identity(data_dir: Path, *, agent_name: str = "sealedrun-recorder") -> Identity:
     """Load the keys under `data_dir/keys`, generating whatever is missing.
 
     Seeds are written with mode 0600 into a 0700 directory and never leave the file system.
     The delegation is reissued when its file is missing, fails verification, was issued for
-    other keys, or no longer covers the current time.
+    other keys, or no longer covers the current time. `anchor.pem` is the P-256 key for Rekor
+    anchors (SPEC 8.1.2), carrying no identity claim.
     """
     key_dir = data_dir / KEY_DIR
     key_dir.mkdir(parents=True, exist_ok=True)
@@ -55,7 +66,24 @@ def load_identity(data_dir: Path, *, agent_name: str = "sealedrun-recorder") -> 
         delegation = create_delegation(principal, agent.public, agent_name=agent_name)
         _write_private(delegation_path, json.dumps(delegation, indent=2).encode())
     assert delegation is not None
-    return Identity(principal, agent, delegation)
+    return Identity(principal, agent, delegation, _load_or_create_anchor_key(key_dir / ANCHOR_FILE))
+
+
+def _load_or_create_anchor_key(path: Path) -> ec.EllipticCurvePrivateKey:
+    if path.is_file():
+        key = serialization.load_pem_private_key(path.read_bytes(), password=None)
+        if isinstance(key, ec.EllipticCurvePrivateKey) and isinstance(key.curve, ec.SECP256R1):
+            return key
+    key = rekor.generate_key()
+    _write_private(
+        path,
+        key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        ),
+    )
+    return key
 
 
 def _load_or_create_keys(path: Path) -> PrivateKeySet:

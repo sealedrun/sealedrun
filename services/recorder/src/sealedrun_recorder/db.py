@@ -56,7 +56,8 @@ class RunRow(Base):
 
     `source` is `imported` or `live`. Live runs have no bundle and their figures are kept
     current on every append. `run_label` is the proxy's X-SealedRun-Run label when the run was
-    opened by a labelled proxy call.
+    opened by a labelled proxy call; `last_anchor_at` is the time of the run's latest anchor
+    record.
     """
 
     __tablename__ = "runs"
@@ -78,6 +79,7 @@ class RunRow(Base):
     anchors: Mapped[int]
     labels_sent_to_cloud: Mapped[dict[str, int]] = mapped_column(JSON)
     run_label: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    last_anchor_at: Mapped[str | None] = mapped_column(String(24), nullable=True)
 
     bundle: Mapped[BundleRow | None] = relationship(back_populates="runs")
     records: Mapped[list[RecordRow]] = relationship(

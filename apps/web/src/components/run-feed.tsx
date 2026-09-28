@@ -4,7 +4,7 @@ import type { SealedRunRecord } from "@sealedrun/core";
 import { ChevronDown, Download } from "lucide-react";
 import { useState } from "react";
 
-import { decodePayload, describeTarget, summarize } from "@/lib/inspect";
+import { anchorInfo, decodePayload, describeTarget, summarize } from "@/lib/inspect";
 
 /**
  * Downloads a payload from the recorder. Left undefined for a local bundle, which has no server
@@ -34,13 +34,17 @@ export function RunFeed({
   records,
   payloads,
   onDownload,
+  witness,
 }: {
   records: SealedRunRecord[];
   payloads?: Map<string, Uint8Array> | undefined;
   onDownload?: OnDownload;
+  /** Per anchor record id, whether its receipt verified against a trusted witness. */
+  witness?: Map<string, boolean> | undefined;
 }) {
   const [open, setOpen] = useState<string | null>(null);
   const summary = summarize(records);
+  const verified = witness ? [...witness.values()].filter(Boolean).length : undefined;
   const facts: [number, string, string?][] = [
     [summary.steps, "steps recorded"],
     [summary.cloudCalls, "left the host", summary.cloudCalls > 0 ? "text-warn" : undefined],
@@ -63,8 +67,7 @@ export function RunFeed({
             Data labels seen: <span className="text-ink">{summary.labels.join(", ")}</span>.{" "}
           </>
         )}
-        {summary.anchors > 0 &&
-          "Anchor receipts are tied to the chain here, but the witness proof is not checked: confirm it with the witness."}
+        {summary.anchors > 0 && witnessSummary(summary.anchors, verified)}
       </p>
       <ol className="mt-6">
         {records.map((record, index) => (
@@ -77,11 +80,25 @@ export function RunFeed({
             onToggle={() => setOpen(open === record.record_id ? null : record.record_id)}
             payloads={payloads}
             onDownload={onDownload}
+            witness={witness?.get(record.record_id)}
           />
         ))}
       </ol>
     </div>
   );
+}
+
+/** One sentence on how many anchor receipts were verified offline against a trusted witness. */
+function witnessSummary(anchors: number, verified: number | undefined): string {
+  if (verified === undefined) {
+    return "Anchor receipts are tied to the chain here; their witness proof is checked when a bundle is verified.";
+  }
+  if (verified === anchors) {
+    return anchors === 1
+      ? "The anchor receipt verified offline against a trusted witness: the chain head existed no later than the witness time."
+      : `All ${anchors} anchor receipts verified offline against trusted witnesses.`;
+  }
+  return `${verified} of ${anchors} anchor receipts verified against a trusted witness; the rest come from witnesses outside the trust list or did not check out.`;
 }
 
 /**
@@ -107,6 +124,7 @@ function Step({
   onToggle,
   payloads,
   onDownload,
+  witness,
 }: {
   record: SealedRunRecord;
   first: boolean;
@@ -115,6 +133,7 @@ function Step({
   onToggle: () => void;
   payloads?: Map<string, Uint8Array> | undefined;
   onDownload?: OnDownload;
+  witness?: boolean | undefined;
 }) {
   const location = record.target.location;
   const decision = record.policy?.decision;
@@ -178,7 +197,9 @@ function Step({
             className={`mt-1 size-4 shrink-0 text-ink-soft transition-transform ${open ? "rotate-180" : ""}`}
           />
         </button>
-        {open && <Detail record={record} payloads={payloads} onDownload={onDownload} />}
+        {open && (
+          <Detail record={record} payloads={payloads} onDownload={onDownload} witness={witness} />
+        )}
       </div>
     </li>
   );
@@ -203,15 +224,28 @@ function Detail({
   record,
   payloads,
   onDownload,
+  witness,
 }: {
   record: SealedRunRecord;
   payloads?: Map<string, Uint8Array> | undefined;
   onDownload?: OnDownload;
+  witness?: boolean | undefined;
 }) {
   const stored = record.payload?.storage === "bundle" || record.payload?.storage === "inline";
+  const anchor = anchorInfo(record);
+  const proof =
+    witness === undefined
+      ? "not checked here"
+      : witness
+        ? "verified offline against a trusted witness"
+        : "not verified: witness outside the trust list or proof invalid";
   const rows: [string, string | undefined, boolean][] = [
     ["Record id", record.record_id, true],
     ["Time", record.occurred_at, true],
+    ["Witness", anchor?.witness, true],
+    ["Witness time", anchor?.time, true],
+    ["Witness proof", anchor ? `${anchor.type ?? "unknown"} receipt, ${proof}` : undefined, false],
+    ["Log index", anchor?.logIndex !== undefined ? String(anchor.logIndex) : undefined, true],
     ["Actor", `${record.actor.type} ${record.actor.id}`, false],
     ["Hash", record.hash, true],
     ["Previous hash", record.prev_hash, true],
@@ -232,6 +266,18 @@ function Detail({
             ),
         )}
       </dl>
+      {anchor?.entryUrl && (
+        <p className="mt-3 text-sm">
+          <a
+            className="underline hover:text-ink"
+            href={anchor.entryUrl}
+            target="_blank"
+            rel="noreferrer"
+          >
+            Open the public log entry
+          </a>
+        </p>
+      )}
       {stored &&
         (["request", "response"] as const).map((side) => {
           if (!record.payload?.[`${side}_hash`]) return null;

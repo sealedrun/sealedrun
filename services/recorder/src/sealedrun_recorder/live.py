@@ -129,8 +129,35 @@ class LiveRuns:
                 _count_cloud_labels(run, record)
                 if kind == "anchor":
                     run.anchors += 1
+                    run.last_anchor_at = record["occurred_at"]
                 session.commit()
             return record
+
+    def head(self, run_id: str) -> tuple[int, str, str]:
+        """Return `(seq, hash, kind)` of the last record of an open live run.
+
+        Raises LiveRunError when the run is unknown, imported or closed.
+        """
+        with self._lock(run_id):
+            writer = self._writer(run_id)
+            with self._sessions() as session:
+                last = session.scalars(
+                    select(RecordRow)
+                    .where(RecordRow.run_id == run_id)
+                    .order_by(RecordRow.seq.desc())
+                    .limit(1)
+                ).one()
+            if last.hash != writer.head:
+                raise LiveRunError("run head does not match the stored records")
+            return last.seq, last.hash, last.kind
+
+    def open_runs(self) -> list[str]:
+        """Return the ids of live runs that are not complete."""
+        with self._sessions() as session:
+            rows = session.scalars(
+                select(RunRow.run_id).where(RunRow.source == "live", RunRow.complete.is_(False))
+            )
+            return list(rows)
 
     def end(self, run_id: str, **fields: Any) -> dict[str, Any]:
         """Write the `run_end` record, mark the run complete and drop its writer."""

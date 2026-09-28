@@ -340,22 +340,85 @@ rewrite of the chain is detectable.
     "anchored_hash": "<hash of record seq N>",
     "anchored_seq": N,
     "receipt": { "digest": "<the digest given to the witness>", "…": "witness-specific proof" },
-    "witness": "https://rekor.sigstore.dev"
+    "witness": "https://timestamp.sigstore.dev/api/v1/timestamp"
   }
 }
 ```
 
 The anchor record itself is chained after `seq N`. `receipt.digest` is REQUIRED: it is the digest
 that was submitted to the witness, in the same hex form as `anchored_hash`; every other member of
-`receipt` is witness-specific. A verifier MUST check that `anchored_hash` equals the hash of the
-record at `anchored_seq` and that `receipt.digest` equals `anchored_hash`, and fails with check
-`anchor` otherwise. When a bundle carries `anchors/<record_id>.json`, that file MUST be the
-`receipt` of the anchor record with that `record_id`.
+`receipt` is defined per `type` below. `witness` is the URL the receipt was obtained from. A
+verifier MUST check that `anchored_hash` equals the hash of the record at `anchored_seq` and that
+`receipt.digest` equals `anchored_hash`, and fails with check `anchor` otherwise. When a bundle
+carries `anchors/<record_id>.json`, that file MUST be the `receipt` of the anchor record with that
+`record_id`.
 
-These checks bind the receipt to the chain; they do not authenticate the witness. 0.1 defines no
-offline verification of the witness-specific proof, so a verifier MUST report how many anchors
-had their proof verified (always zero for a 0.1 verifier) and a relying party re-checks the
-receipt against the witness.
+These checks bind the receipt to the chain. Whether the receipt is genuine is settled by the
+witness proof (8.4). A verifier reports separately how many anchors it bound to the chain and how
+many of those it verified against a witness it trusts.
+
+#### 8.1.1 `rfc3161` receipt
+
+An RFC 3161 time-stamp token over the chain head.
+
+```json
+{
+  "digest": "<anchored_hash>",
+  "imprint_alg": "sha256",
+  "token": "<base64 DER TimeStampToken (CMS SignedData)>",
+  "chain": ["<PEM certificate>", "…"],
+  "nonce": "<decimal integer>",
+  "gen_time": "<RFC 3339 UTC>",
+  "policy": "<OID>"
+}
+```
+
+The message imprint of the token is `SHA-256` over the raw bytes of `digest` (32 bytes for a
+64-hex digest, 48 for a 96-hex one). `chain` is the certificate chain the witness published for
+its signing certificate, leaf first, kept as a snapshot because some authorities return only the
+leaf inside the token; it is NOT trusted on its own (8.4). `nonce` is the request nonce, `gen_time`
+and `policy` repeat the token's `TSTInfo` for display and MUST match it. `token`, `chain` and
+`nonce` are REQUIRED; `gen_time` and `policy` are OPTIONAL. `token` is strict DER: a recorder
+re-encodes an answer whose certificate set is not in DER order (some authorities send one)
+before storing it, which changes nothing the signature covers.
+
+#### 8.1.2 `rekor` receipt
+
+A Sigstore Rekor (v1 API) `hashedrekord` entry over the chain head, signed by an anchoring key
+of the recorder.
+
+```json
+{
+  "digest": "<anchored_hash>",
+  "log_url": "https://rekor.sigstore.dev",
+  "uuid": "<entry uuid, hex>",
+  "log_index": 123456789,
+  "log_id": "<hex SHA-256 of the log's DER public key>",
+  "integrated_time": 1790000000,
+  "body": "<base64 canonicalized entry>",
+  "signed_entry_timestamp": "<base64 signature>",
+  "inclusion_proof": {
+    "log_index": 123456789,
+    "root_hash": "<hex>",
+    "tree_size": 123456999,
+    "hashes": ["<hex>", "…"],
+    "checkpoint": "<signed note text>"
+  },
+  "public_key": "<PEM of the anchoring public key>",
+  "signature": "<base64 DER ECDSA signature, digest as the prehashed message>"
+}
+```
+
+The anchoring key is a P-256 ECDSA key held by the recorder next to its Agent keys; it exists
+only because the log rejects signature schemes without a prehash (pure Ed25519, ML-DSA) and it
+carries no identity claim, the chain does. All members are REQUIRED except `signed_entry_timestamp`
+and `integrated_time`, which logs that give no time (Rekor v2) omit; then the anchor MUST be
+accompanied by an `rfc3161` anchor for time. `hashes` and `root_hash` are hex as the log returns
+them; `inclusion_proof.log_index` is the leaf index inside the log's current shard and may
+differ from `log_index`, the log-wide index. `body` decodes to the canonical entry whose
+`spec.data.hash.value` is `digest` and whose `spec.signature.publicKey.content` is `public_key`.
+`signature` is ECDSA-P256 with `digest` taken as the already-hashed message (what the log
+verifies), so the entry attests the record whose hash the head is.
 
 ### 8.2 Cadence
 
@@ -365,6 +428,41 @@ Recorders SHOULD anchor at least every 10 minutes while a Run is active, and alw
 
 The Manifest hash is `HEX(H(JCS(protected_manifest)))`; it is signed by the exporting Agent and
 MAY additionally be signed by the Principal.
+
+### 8.4 Witness verification
+
+A verifier holds a witness trust list obtained out of band; the packages ship one built from the
+Sigstore trust root (`trusted_root.json`) and DigiCert's published roots and let the caller add
+entries. Each entry gives `type`, `uri`, `subject`, `valid_for` (`start`, optional `end`) and,
+per type, `roots` (PEM certificates, for `rfc3161`) or `public_key` with `log_id` (for `rekor`).
+
+For every anchor record the verifier selects the trust entries whose `type` and `uri` match the
+record's `type` and `witness` (or, for `rekor`, whose `log_id` matches `receipt.log_id`). With no
+match the anchor counts as bound but not witness-verified and the verifier continues. With a
+match it MUST:
+
+- `rfc3161`: decode `token` as a CMS `SignedData` carrying a `TSTInfo`; require a granted status
+  when the full `TimeStampResp` is present; check the message imprint equals `SHA-256` over the
+  raw bytes of `digest`, the nonce equals `receipt.nonce`, the signing certificate is the one
+  named by the `SignerInfo` signer identifier (issuer and serial number) and found in the token
+  or in `chain` (never simply the first certificate of the bag, which an attacker can prepend);
+  verify the CMS signature over the signed attributes with that certificate; build a chain from
+  it through `chain` and the token's certificates to a root in `roots`, valid at the token's
+  `genTime`, with the `id-kp-timeStamping` extended key usage on the leaf; require `genTime` to
+  lie within `valid_for`. Certificates carried in the receipt are never used as roots.
+- `rekor`: verify `signed_entry_timestamp` with `public_key` of the trust entry over the
+  canonical JSON `{"body", "integratedTime", "logID", "logIndex"}` when present; compute the leaf
+  hash `SHA-256(0x00 || body)` and the RFC 6962 path through `hashes` to `root_hash`; parse
+  `checkpoint` as a C2SP signed note, verify the log's signature line with the same key (key
+  hint = first 4 bytes of `SHA-256` of the log's DER public key, cosignature lines of unknown
+  keys are ignored), require its origin to name the log, its tree size to equal `tree_size` and
+  its root to equal `root_hash`; verify `signature` with `public_key` of the receipt taking
+  `digest` as the prehashed message; decode `body` and require its digest and public key to be
+  `digest` and `public_key`; require `integrated_time`, when present, to lie within `valid_for`.
+
+A verified anchor proves that the chain head `anchored_hash` existed no later than the witness
+time. The report MUST give both counts (`anchors`, `anchors_witness_verified`); a relying party
+that needs the strongest statement re-queries the witness as well.
 
 ## 9. Extensions
 
@@ -559,7 +657,8 @@ the bundle.
    signatures, delegation validity at `occurred_at`, `run_start` binding, absence of records after
    `run_end`.
 4. For each record with a payload present: recompute body digests.
-5. For each anchor record: check `anchored_hash` against the run; optionally re-query the witness.
+5. For each anchor record: check `anchored_hash` against the run; verify the witness proof as in
+   8.4 when the witness is in the trust list; optionally re-query the witness.
 6. Report: `ok`, or the first failing run, seq and check. The report MUST carry the manifest
    `principal_id`, the exporter `agent_id` and whether the Principal was matched against a trust
    anchor. A user interface MUST NOT present a bundle as verified without qualification when the

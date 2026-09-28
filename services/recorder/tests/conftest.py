@@ -229,3 +229,82 @@ def otlp_export() -> Callable[..., ExportTraceServiceRequest]:
 def otlp_value() -> Callable[[Any], AnyValue]:
     """Builder of OTLP `AnyValue`s from plain Python values."""
     return any_value
+
+
+def load_test_tsa() -> Any:
+    """Import the offline RFC 3161 authority shared with the `sealedrun` package tests."""
+    import importlib.util
+
+    path = Path(__file__).resolve().parents[3] / "packages" / "sealedrun-py" / "tests" / "tsa.py"
+    spec = importlib.util.spec_from_file_location("tsa", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class FakeTsa:
+    """An RFC 3161 endpoint on the fake upstream: real tokens from the offline test authority.
+
+    `fail` answers that many requests with 500 first; `include` is passed to the authority
+    (`leaf` with a published chain like Sigstore, `chain` without one like DigiCert).
+    """
+
+    def __init__(self, authority: Any, *, fail: int = 0, include: str = "leaf") -> None:
+        self.authority = authority
+        self.fail = fail
+        self.include = include
+        self.requests = 0
+        self.chain_requests = 0
+
+    def timestamp(self, request: httpx.Request) -> httpx.Response:
+        self.requests += 1
+        if self.fail > 0:
+            self.fail -= 1
+            return httpx.Response(500, text="try later")
+        assert request.headers["content-type"] == "application/timestamp-query"
+        body = self.authority.respond(request.content, include=self.include)
+        return httpx.Response(
+            200, content=body, headers={"content-type": "application/timestamp-reply"}
+        )
+
+    def certchain(self, request: httpx.Request) -> httpx.Response:
+        self.chain_requests += 1
+        if self.include != "leaf":
+            return httpx.Response(404, text="not found")
+        return httpx.Response(200, text="".join(self.authority.chain_pems))
+
+
+def load_fake_rekor() -> Any:
+    """Import the offline Rekor log shared with the `sealedrun` package tests."""
+    import importlib.util
+
+    path = (
+        Path(__file__).resolve().parents[3]
+        / "packages"
+        / "sealedrun-py"
+        / "tests"
+        / "rekor_fake.py"
+    )
+    spec = importlib.util.spec_from_file_location("rekor_fake", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class FakeRekorHttp:
+    """`POST /api/v1/log/entries` on the fake upstream, answered by an offline log."""
+
+    def __init__(self, log: Any, *, fail: int = 0) -> None:
+        self.log = log
+        self.fail = fail
+        self.requests = 0
+
+    def entries(self, request: httpx.Request) -> httpx.Response:
+        self.requests += 1
+        if self.fail > 0:
+            self.fail -= 1
+            return httpx.Response(500, text="try later")
+        assert request.method == "POST"
+        return httpx.Response(201, json=self.log.add(json.loads(request.content)))

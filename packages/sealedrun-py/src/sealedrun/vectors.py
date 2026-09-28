@@ -6,6 +6,7 @@ Keys, ids and timestamps are fixed, so the output is byte-for-byte reproducible.
 
 from __future__ import annotations
 
+import base64
 import copy
 import hashlib
 import io
@@ -262,24 +263,7 @@ def build_run(agent: PrivateKeySet, delegation: dict[str, Any]) -> RunWriter:
             "reason": "external delivery of nda-labelled content",
         },
     )
-    writer.append(
-        "anchor",
-        target={"type": "witness", "name": "rekor", "endpoint": "https://rekor.sigstore.dev"},
-        extensions={
-            "sealedrun.anchor": {
-                "type": "rekor",
-                "anchored_hash": writer.head,
-                "anchored_seq": writer.seq - 1,
-                "receipt": {
-                    "digest": writer.head,
-                    "log_index": 123456789,
-                    "integrated_time": 1789646406,
-                    "uuid": "24296fb24b8ad77a" + "0" * 48,
-                },
-                "witness": "https://rekor.sigstore.dev",
-            }
-        },
-    )
+    writer.append("anchor", **anchor_for(writer.head, writer.seq - 1))
     writer.append(
         "tombstone",
         target={"type": "none", "name": f"record:{llm['record_id']}"},
@@ -294,6 +278,162 @@ def build_run(agent: PrivateKeySet, delegation: dict[str, Any]) -> RunWriter:
     )
     writer.end()
     return writer
+
+
+def anchor_for(head: str, seq: int) -> dict[str, Any]:
+    """Return the anchor record fields for `head`.
+
+    The reference run gets the receipt captured from the Sigstore TSA for its head; any other
+    chain (the negative variants are built from other delegations) gets a placeholder witness.
+    """
+    captured = captured_receipt("rfc3161-sigstore")
+    if captured["receipt"]["digest"] == head:
+        return {
+            "target": {"type": "witness", "name": "sigstore-tsa", "endpoint": captured["witness"]},
+            "extensions": {
+                "sealedrun.anchor": {
+                    "type": "rfc3161",
+                    "anchored_hash": head,
+                    "anchored_seq": seq,
+                    "receipt": captured["receipt"],
+                    "witness": captured["witness"],
+                }
+            },
+        }
+    return {
+        "target": {"type": "witness", "name": "example", "endpoint": "https://witness.example"},
+        "extensions": {
+            "sealedrun.anchor": {
+                "type": "other",
+                "anchored_hash": head,
+                "anchored_seq": seq,
+                "receipt": {"digest": head, "note": "placeholder witness, not verifiable"},
+                "witness": "https://witness.example",
+            }
+        },
+    }
+
+
+def captured_receipt(name: str) -> dict[str, Any]:
+    """Load a receipt captured once from a public TSA (`spec/vectors/anchors`, kept as is)."""
+    path = Path(__file__).resolve().parents[3].parent / "spec" / "vectors" / "anchors"
+    document: dict[str, Any] = json.loads((path / f"{name}.json").read_text())
+    return document
+
+
+def anchor_cases() -> list[dict[str, Any]]:
+    """Receipt verification cases derived from the captured tokens (SPEC 8.4).
+
+    Each case gives the receipt, the witness URL and whether the shipped trust list verifies it.
+    """
+    cases: list[dict[str, Any]] = []
+    for name in ("sigstore", "digicert"):
+        good = captured_receipt(f"rfc3161-{name}")
+        receipt = good["receipt"]
+        cases.append(
+            {
+                "name": f"{name}-good",
+                "witness": good["witness"],
+                "receipt": receipt,
+                "verified": True,
+            }
+        )
+        token = bytearray(base64.b64decode(receipt["token"]))
+        token[-1] ^= 0x01
+        cases.append(
+            {
+                "name": f"{name}-tampered-token",
+                "witness": good["witness"],
+                "receipt": {**receipt, "token": base64.b64encode(bytes(token)).decode()},
+                "verified": False,
+            }
+        )
+        cases.append(
+            {
+                "name": f"{name}-wrong-nonce",
+                "witness": good["witness"],
+                "receipt": {**receipt, "nonce": str(int(receipt["nonce"]) + 1)},
+                "verified": False,
+            }
+        )
+        cases.append(
+            {
+                "name": f"{name}-wrong-digest",
+                "witness": good["witness"],
+                "receipt": {**receipt, "digest": "f" * 64},
+                "verified": False,
+            }
+        )
+        cases.append(
+            {
+                "name": f"{name}-wrong-gen-time",
+                "witness": good["witness"],
+                "receipt": {**receipt, "gen_time": "2020-01-01T00:00:00.000Z"},
+                "verified": False,
+            }
+        )
+        cases.append(
+            {
+                "name": f"{name}-unknown-witness",
+                "witness": "https://tsa.example/api/v1/timestamp",
+                "receipt": receipt,
+                "verified": False,
+            }
+        )
+    for case in cases:
+        case["type"] = "rfc3161"
+    cases.extend(rekor_cases())
+    other = captured_receipt("rfc3161-digicert")["witness"]
+    sigstore = captured_receipt("rfc3161-sigstore")
+    cases.append(
+        {
+            "name": "sigstore-token-other-witness",
+            "type": "rfc3161",
+            "witness": other,
+            "receipt": sigstore["receipt"],
+            "verified": False,
+        }
+    )
+    return cases
+
+
+def rekor_cases() -> list[dict[str, Any]]:
+    """Verification cases derived from the entry captured on the public Rekor log."""
+    good = captured_receipt("rekor-sigstore")
+    receipt = good["receipt"]
+    witness = good["witness"]
+
+    def case(name: str, verified: bool, **changes: Any) -> dict[str, Any]:
+        return {
+            "name": f"rekor-{name}",
+            "type": "rekor",
+            "witness": witness,
+            "receipt": {**receipt, **changes},
+            "verified": verified,
+        }
+
+    proof = receipt["inclusion_proof"]
+    hashes = list(proof["hashes"])
+    hashes[0] = "0" * 64
+    signature = bytearray(base64.b64decode(receipt["signature"]))
+    signature[-1] ^= 0x01
+    set_ = bytearray(base64.b64decode(receipt["signed_entry_timestamp"]))
+    set_[-1] ^= 0x01
+    checkpoint = proof["checkpoint"].replace(proof["checkpoint"].split("\n")[1], "1", 1)
+    return [
+        case("good", True),
+        case("tampered-proof", False, inclusion_proof={**proof, "hashes": hashes}),
+        case("wrong-root", False, inclusion_proof={**proof, "root_hash": "0" * 64}),
+        case("wrong-log-key", False, log_id="0" * 64),
+        case("body-digest-mismatch", False, digest="f" * 64),
+        case("set-mismatch", False, signed_entry_timestamp=base64.b64encode(bytes(set_)).decode()),
+        case("set-missing", False, signed_entry_timestamp=None),
+        case("signature-tampered", False, signature=base64.b64encode(bytes(signature)).decode()),
+        case("checkpoint-size", False, inclusion_proof={**proof, "checkpoint": checkpoint}),
+        case("integrated-before-log", False, integrated_time=1_500_000_000),
+        {**case("other-url-same-log", True), "witness": "https://mirror.example"},
+        {**case("unknown-log", False, log_id="1" * 64), "witness": "https://log.example"},
+    ]
 
 
 def negative_chains(
@@ -351,14 +491,14 @@ def negative_chains(
     anchored.records = list(base[:3])
     anchored.append(
         "anchor",
-        target={"type": "witness", "name": "rekor"},
+        target={"type": "witness", "name": "example"},
         extensions={
             "sealedrun.anchor": {
-                "type": "rekor",
+                "type": "other",
                 "anchored_hash": "e" * 64,
                 "anchored_seq": 2,
                 "receipt": {"digest": "e" * 64},
-                "witness": "https://rekor.sigstore.dev",
+                "witness": "https://witness.example",
             }
         },
     )
@@ -368,12 +508,12 @@ def negative_chains(
     malformed.records = list(base[:3])
     malformed.append(
         "anchor",
-        target={"type": "witness", "name": "rekor"},
+        target={"type": "witness", "name": "example"},
         extensions={
             "sealedrun.anchor": {
-                "type": "rekor",
+                "type": "other",
                 "receipt": {"digest": "e" * 64},
-                "witness": "https://rekor.sigstore.dev",
+                "witness": "https://witness.example",
             }
         },
     )
@@ -381,14 +521,14 @@ def negative_chains(
     mismatched.records = list(base[:3])
     mismatched.append(
         "anchor",
-        target={"type": "witness", "name": "rekor"},
+        target={"type": "witness", "name": "example"},
         extensions={
             "sealedrun.anchor": {
-                "type": "rekor",
+                "type": "other",
                 "anchored_hash": base[2]["hash"],
                 "anchored_seq": 2,
                 "receipt": {"digest": "e" * 64},
-                "witness": "https://rekor.sigstore.dev",
+                "witness": "https://witness.example",
             }
         },
     )
@@ -611,6 +751,8 @@ def generate(spec_dir: Path) -> None:
     vectors = spec_dir / "vectors"
     examples = spec_dir / "examples"
     for sub in ("keys.json", "signatures", "delegations", "records", "chains", "bundle"):
+        # `anchors/rfc3161-*.json` are captured from real witnesses and are kept; only
+        # `anchors/cases.json` is derived from them below.
         target = vectors / sub
         if target.is_dir():
             shutil.rmtree(target)
@@ -783,6 +925,8 @@ def generate(spec_dir: Path) -> None:
             "no-payloads.zip": {"ok": False, "check": "payload", "seq": 1},
         },
     )
+
+    dump(vectors / "anchors" / "cases.json", anchor_cases())
 
     examples.mkdir(parents=True)
     for record in run.records:

@@ -71,9 +71,44 @@
         },
         "witness": {
           "type": "string",
+          "format": "uri",
           "minLength": 1
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "rfc3161"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "receipt": {
+                "$ref": "#/$defs/rfc3161Receipt"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "rekor"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "receipt": {
+                "$ref": "#/$defs/rekorReceipt"
+              }
+            }
+          }
+        }
+      ]
     },
     "sealedrun.labels": {
       "type": "object",
@@ -298,6 +333,127 @@
         },
         "imported_at": {
           "$ref": "../common.json#/$defs/timestamp"
+        }
+      }
+    },
+    "rfc3161Receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["digest", "imprint_alg", "token", "chain", "nonce"],
+      "properties": {
+        "digest": {
+          "$ref": "../common.json#/$defs/digestHex"
+        },
+        "imprint_alg": {
+          "type": "string",
+          "enum": ["sha256"]
+        },
+        "token": {
+          "$ref": "../common.json#/$defs/base64"
+        },
+        "chain": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "string",
+            "pattern": "^-----BEGIN CERTIFICATE-----"
+          }
+        },
+        "nonce": {
+          "type": "string",
+          "pattern": "^[0-9]+$"
+        },
+        "gen_time": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "policy": {
+          "type": "string",
+          "pattern": "^[0-9]+(\\.[0-9]+)+$"
+        }
+      }
+    },
+    "rekorReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "digest",
+        "log_url",
+        "uuid",
+        "log_index",
+        "log_id",
+        "body",
+        "inclusion_proof",
+        "public_key",
+        "signature"
+      ],
+      "properties": {
+        "digest": {
+          "$ref": "../common.json#/$defs/digestHex"
+        },
+        "log_url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "uuid": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64,80}$"
+        },
+        "log_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "log_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "integrated_time": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "body": {
+          "$ref": "../common.json#/$defs/base64"
+        },
+        "signed_entry_timestamp": {
+          "$ref": "../common.json#/$defs/base64"
+        },
+        "inclusion_proof": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["log_index", "root_hash", "tree_size", "hashes", "checkpoint"],
+          "properties": {
+            "log_index": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "root_hash": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "tree_size": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "hashes": {
+              "type": "array",
+              "maxItems": 64,
+              "items": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            },
+            "checkpoint": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "public_key": {
+          "type": "string",
+          "pattern": "^-----BEGIN PUBLIC KEY-----"
+        },
+        "signature": {
+          "$ref": "../common.json#/$defs/base64"
         }
       }
     }

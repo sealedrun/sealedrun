@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
+import asyncio
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from sealedrun_recorder import __version__
+from sealedrun_recorder.anchoring import Anchoring
 from sealedrun_recorder.api import public_router, router
 from sealedrun_recorder.db import make_engine, session_factory
 from sealedrun_recorder.keystore import load_identity
@@ -32,7 +34,8 @@ async def lifespan(app: FastAPI) -> Any:
     """Open the database, load the signing keys and the upstreams, and close them on shutdown.
 
     Keys and the delegation are generated under `data_dir/keys` on the first start. A broken
-    upstreams file stops the start rather than leaving the proxy half configured.
+    upstreams file stops the start rather than leaving the proxy half configured. With an
+    anchoring authority configured, one background task anchors the open runs every interval.
     """
     settings: Settings = app.state.settings
     settings.data_dir.mkdir(parents=True, exist_ok=True)
@@ -45,7 +48,13 @@ async def lifespan(app: FastAPI) -> Any:
     app.state.mcp_lists = ListSeen()
     app.state.otel_seen = SpansSeen()
     app.state.http = httpx.AsyncClient(transport=app.state.http_transport, follow_redirects=False)
+    app.state.anchoring = Anchoring(app.state.live, app.state.http, settings)
+    task = asyncio.create_task(app.state.anchoring.loop()) if app.state.anchoring.enabled else None
     yield
+    if task is not None:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
     await app.state.http.aclose()
     engine.dispose()
 

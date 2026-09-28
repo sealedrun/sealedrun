@@ -78,6 +78,36 @@ const EXTENSIONS: Record<string, Shape> = {
   "sealedrun.imported": { source_format: "string" },
 };
 
+/** Required members of `sealedrun.anchor.receipt` per anchor type (SPEC 8.1.1, 8.1.2). */
+const RECEIPTS: Record<string, Shape> = {
+  rfc3161: {
+    digest: "string",
+    imprint_alg: "string",
+    token: "string",
+    chain: "strings",
+    nonce: "string",
+  },
+  rekor: {
+    digest: "string",
+    log_url: "string",
+    uuid: "string",
+    log_index: "integer",
+    log_id: "string",
+    body: "string",
+    inclusion_proof: "object",
+    public_key: "string",
+    signature: "string",
+  },
+};
+
+const INCLUSION_PROOF: Shape = {
+  log_index: "integer",
+  root_hash: "string",
+  tree_size: "integer",
+  hashes: "strings",
+  checkpoint: "string",
+};
+
 const EXTENSION_ENUMS: Record<string, Record<string, readonly string[]>> = {
   "sealedrun.anchor": { type: ["rekor", "rfc3161", "scitt", "other"] },
   "sealedrun.mcp": { transport: ["stdio", "http"] },
@@ -160,11 +190,16 @@ export function assertExtensions(value: unknown): void {
     if (ext === undefined) continue;
     check(ext, shape, `extensions/${key}`);
     if (key === "sealedrun.anchor") {
-      check(
-        (ext as Record<string, unknown>).receipt,
-        { digest: "string" },
-        `extensions/${key}/receipt`,
-      );
+      const anchor = ext as Record<string, unknown>;
+      const receiptShape = RECEIPTS[anchor.type as string] ?? { digest: "string" };
+      check(anchor.receipt, receiptShape, `extensions/${key}/receipt`);
+      if (anchor.type === "rekor") {
+        check(
+          (anchor.receipt as Record<string, unknown>).inclusion_proof,
+          INCLUSION_PROOF,
+          `extensions/${key}/receipt/inclusion_proof`,
+        );
+      }
     }
     for (const [field, allowed] of Object.entries(EXTENSION_ENUMS[key] ?? {})) {
       const actual = (ext as Record<string, unknown>)[field];

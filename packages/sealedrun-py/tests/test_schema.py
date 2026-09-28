@@ -159,3 +159,67 @@ def test_invalid_delegation_and_manifest() -> None:
     assert validate("delegation.json", _mutate(DELEGATION, agent_keys={"ed25519": B64})) != []
     assert validate("bundle.json", _mutate(MANIFEST, delegations=[])) != []
     assert validate("bundle.json", _mutate(MANIFEST, files={"manifest.json": B64})) != []
+
+
+RFC3161_RECEIPT = {
+    "digest": "a" * 64,
+    "imprint_alg": "sha256",
+    "token": "MIIB" + "A" * 20 + "==",
+    "chain": ["-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"],
+    "nonce": "123456789",
+    "gen_time": "2026-09-27T10:00:00Z",
+    "policy": "1.3.6.1.4.1.57264.2",
+}
+
+REKOR_RECEIPT = {
+    "digest": "a" * 64,
+    "log_url": "https://rekor.sigstore.dev",
+    "uuid": "1" * 80,
+    "log_index": 5,
+    "log_id": "b" * 64,
+    "integrated_time": 1790000000,
+    "body": "eyJhIjoxfQ==",
+    "signed_entry_timestamp": "MEUC" + "A" * 8,
+    "inclusion_proof": {
+        "log_index": 5,
+        "root_hash": "c" * 64,
+        "tree_size": 9,
+        "hashes": ["d" * 64],
+        "checkpoint": "rekor.sigstore.dev - 1\n9\nAAAA\n\n— rekor.sigstore.dev AAAA\n",
+    },
+    "public_key": "-----BEGIN PUBLIC KEY-----\nMFkw\n-----END PUBLIC KEY-----\n",
+    "signature": "MEUC" + "A" * 8,
+}
+
+
+def _anchor(kind: str, receipt: dict) -> dict:
+    return {
+        "sealedrun.anchor": {
+            "type": kind,
+            "anchored_hash": "a" * 64,
+            "anchored_seq": 3,
+            "receipt": receipt,
+            "witness": "https://witness.example",
+        }
+    }
+
+
+def test_witness_receipts_validate() -> None:
+    assert validate_extensions(_anchor("rfc3161", RFC3161_RECEIPT)) == []
+    assert validate_extensions(_anchor("rekor", REKOR_RECEIPT)) == []
+    assert validate_extensions(_anchor("other", {"digest": "a" * 64, "anything": 1})) == []
+
+
+@pytest.mark.parametrize(
+    "kind, receipt",
+    [
+        ("rfc3161", {k: v for k, v in RFC3161_RECEIPT.items() if k != "token"}),
+        ("rfc3161", {**RFC3161_RECEIPT, "nonce": "abc"}),
+        ("rfc3161", {**RFC3161_RECEIPT, "extra": 1}),
+        ("rekor", {k: v for k, v in REKOR_RECEIPT.items() if k != "inclusion_proof"}),
+        ("rekor", {**REKOR_RECEIPT, "inclusion_proof": {"checkpoint": "x"}}),
+        ("rekor", {**REKOR_RECEIPT, "log_id": "zz"}),
+    ],
+)
+def test_witness_receipts_rejected(kind: str, receipt: dict) -> None:
+    assert validate_extensions(_anchor(kind, receipt)) != []
