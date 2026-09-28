@@ -12,7 +12,6 @@ import sys
 from sealedrun.bundle import read_bundle, verify_bundle
 from sealedrun.errors import VerificationError
 
-
 CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
 
