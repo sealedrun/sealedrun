@@ -18,6 +18,7 @@ from sealedrun_recorder.export import ExportError, build_bundle
 from sealedrun_recorder.importer import import_bundle
 from sealedrun_recorder.live import InvalidRecordError, LiveRunError
 from sealedrun_recorder.proxy.core import RUN_HEADER, RUN_LABEL
+from sealedrun_recorder.proxy.labels import LabelsError, header_labels
 from sealedrun_recorder.steps import Step, StepError, parse_step
 
 SAFE_PAYLOAD_MEDIA_TYPES = frozenset({"application/json", "text/plain", "application/octet-stream"})
@@ -262,7 +263,8 @@ async def post_step(request: Request) -> Response | dict[str, Any]:
     """Seal a self-reported step onto the run named by `X-SealedRun-Run`, or the default run.
 
     Runs are joined exactly as for proxied calls: the same label shares a run with the LLM
-    proxy, no label means the shared idle-closed run. The body is checked against the record
+    proxy, no label means the shared idle-closed run. `X-SealedRun-Labels` supplies
+    `data_labels` when the body has none. The body is checked against the record
     schema before anything is sealed: 400 names the first problem, 413 is an oversize body.
     Returns the signed record.
     """
@@ -349,8 +351,15 @@ async def _read_step(request: Request) -> Step:
         raise HTTPException(413, "step exceeds size limit")
     try:
         step = parse_step(body)
-    except StepError as error:
+        labels = header_labels(request)
+    except (StepError, LabelsError) as error:
         raise HTTPException(400, str(error)) from error
+    if labels and not step.data_labels:
+        step.data_labels = labels
+        step.extensions = {
+            **step.extensions,
+            "sealedrun.labels": {label: {"source": "header"} for label in labels},
+        }
     return step
 
 

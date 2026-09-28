@@ -37,6 +37,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import StreamingResponse
 
+from sealedrun_recorder.policy import Decision, Rule
 from sealedrun_recorder.proxy.core import (
     JSON,
     RUN_HEADER,
@@ -47,9 +48,12 @@ from sealedrun_recorder.proxy.core import (
     require_proxy_token,
     sse_data,
 )
+from sealedrun_recorder.proxy.labels import LabelsError, header_labels, label_fields
 from sealedrun_recorder.upstreams import McpServer, Upstreams
 
 RECORDED = frozenset({"tools/call", "resources/read", "prompts/get", "tools/list"})
+GOVERNED = frozenset({"tools/call", "resources/read", "prompts/get"})
+POLICY_ERROR = -32003
 NAME_PARAM = {"tools/call": "name", "resources/read": "uri", "prompts/get": "name"}
 
 SAME_SITE = frozenset({"same-origin", "same-site", "none"})
@@ -89,6 +93,10 @@ async def mcp(server: str, request: Request) -> Response:
     label = request.headers.get(RUN_HEADER)
     if label is not None and not RUN_LABEL.match(label):
         return error(400, f"{RUN_HEADER} must match {RUN_LABEL.pattern}")
+    try:
+        labels = header_labels(request)
+    except LabelsError as problem:
+        return error(400, str(problem))
     upstreams: Upstreams = request.app.state.upstreams
     target = upstreams.mcp(server)
     if target is None:
@@ -105,6 +113,14 @@ async def mcp(server: str, request: Request) -> Response:
 
     call = McpCall.parse(request, body) if request.method == "POST" else None
     started = time.perf_counter()
+    policy = None
+    if call is not None and call.method in GOVERNED:
+        rule: Rule = request.app.state.policy
+        policy = rule.evaluate(target.location, labels)
+    if call is not None and policy is not None and policy.blocked:
+        await _record(request, target, call, label, body, 403, None, "", started, labels, policy)
+        message = f"blocked by policy {policy.rule_id}: {policy.reason}"
+        return error(403, message, code=POLICY_ERROR, request_id=call.id)
     http: httpx.AsyncClient = request.app.state.http
     try:
         reply = await http.send(_build(request, target, body), stream=True)
@@ -120,7 +136,17 @@ async def mcp(server: str, request: Request) -> Response:
 
     async def finish(answer: bytes) -> None:
         await _record(
-            request, target, call, label, body, reply.status_code, answer, media_type, started
+            request,
+            target,
+            call,
+            label,
+            body,
+            reply.status_code,
+            answer,
+            media_type,
+            started,
+            labels,
+            policy,
         )
 
     if streamed:
@@ -223,12 +249,16 @@ async def _record(
     label: str | None,
     body: bytes,
     status: int,
-    answer: bytes,
+    answer: bytes | None,
     media_type: str,
     started: float,
+    labels: list[str],
+    policy: Decision | None = None,
 ) -> None:
+    """Seal the call; `answer` is None for a call the policy rule kept from the server."""
     latency_ms = round((time.perf_counter() - started) * 1000, 1)
-    message = call.response_in(answer, media_type)
+    blocked = answer is None
+    message = None if answer is None else call.response_in(answer, media_type)
     result = mapping(message.get("result")) if message is not None else {}
     runs = request.app.state.runs
     seen: ListSeen = request.app.state.mcp_lists
@@ -238,8 +268,12 @@ async def _record(
         list_key = (run_id, target.name, "http", call.cursor)
         if not seen.changed(list_key, result):
             return
-    failed = message is None or "error" in message or result.get("isError") is True
-    if failed:
+    failed = not blocked and (
+        message is None or "error" in message or result.get("isError") is True
+    )
+    if blocked:
+        outcome = "blocked"
+    elif failed:
         outcome = "error"
     elif result.get("resultType") == "input_required":
         outcome = "pending"
@@ -267,10 +301,13 @@ async def _record(
         "status": status,
         "latency_ms": latency_ms,
     }
-    if message is None:
+    if message is None and not blocked:
         proxy["truncated"] = True
     if list_key is not None:
         seen.remember(list_key, result)
+    fields = label_fields(labels, {"sealedrun.mcp": mcp, "sealedrun.proxy": proxy})
+    if policy is not None:
+        fields["policy"] = policy.document()
     await run_in_threadpool(
         runs.record,
         label,
@@ -287,7 +324,7 @@ async def _record(
         request_media_type=JSON,
         response_media_type=media_type.partition(";")[0].strip() or None,
         outcome=outcome,
-        extensions={"sealedrun.mcp": mcp, "sealedrun.proxy": proxy},
+        **fields,
     )
 
 
@@ -368,7 +405,9 @@ async def _relay_recorded(
             await finish(b"".join(received))
 
 
-def error(status: int, message: str) -> Response:
-    """Return a proxy-generated error as a JSON-RPC error object without an id."""
-    body = {"jsonrpc": "2.0", "id": None, "error": {"code": -32000, "message": message}}
+def error(
+    status: int, message: str, *, code: int = -32000, request_id: str | int | None = None
+) -> Response:
+    """Return a proxy-generated error as a JSON-RPC error object, without an id unless given."""
+    body = {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
     return Response(json.dumps(body).encode(), status_code=status, media_type=JSON)

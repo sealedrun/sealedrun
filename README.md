@@ -387,6 +387,43 @@ certificate from a receipt. Regulated deployments that need a qualified time-sta
 point `SEALEDRUN_ANCHOR_TSA_URL` at their qualified trust service provider and add its root to
 the trust list; the EU AI Act's logging duty (Art. 12) does not itself require one.
 
+### Data labels and the first policy rule
+
+A record carries `data_labels` (SPEC 5.6: `pii`, `nda`, `secret`, `acme:tier-1`, ...) so that a
+reader can see which kind of data each step touched and which of it left the host. Through the
+proxies the caller states the labels itself, in a request header on every channel the recorder
+records (LLM, MCP HTTP, A2A, and `POST /api/steps` when the step body names none):
+
+```
+X-SealedRun-Labels: nda, pii
+```
+
+The header is checked (lowercase labels, at most 64; a bad one is a 400 and nothing is
+forwarded), never passed on to an upstream, and lands in the record as `data_labels` with
+`sealedrun.labels[label].source = "header"`, so a label the caller asserted is never mistaken
+for one a classifier found. Run summaries count `labels_sent_to_cloud` per label.
+
+On top of that sits one policy rule, off by default:
+
+```bash
+SEALEDRUN_POLICY_BLOCK_TO_CLOUD=["nda","secret"]   # labels that must not reach a cloud target
+```
+
+A call that carries one of those labels to an upstream, MCP server or A2A agent whose
+`location` is `cloud` is refused before any byte reaches it: the LLM proxy answers 403 in the
+SDK's own error shape, the MCP proxy a JSON-RPC error `-32003`, the A2A proxy the same or a
+`PERMISSION_DENIED` status on the REST binding, each naming the rule. The chain keeps the
+evidence: a record with `outcome: blocked`, `policy: {rule_id: "recorder/no-nda-to-cloud",
+decision: block, reason: "target.location=cloud and labels contain nda"}` and the digest of the
+request that was not sent (SPEC 5.7). A labelled cloud call the rule lets through carries
+`policy: {rule_id: "default/allow", decision: allow, ...}`, so the reader sees that the rule was
+consulted; local targets and unconfigured recorders write no policy object. The Inspector counts
+the blocked steps and shows the rule and reason on each. The rule covers `tools/call`,
+`resources/read`, `prompts/get`, `SendMessage` and `SendStreamingMessage`; it cannot cover the
+stdio wrapper (a stdio server has no known location) or self-reported steps (the caller states
+its own outcome), and it decides on stated labels only. Classifiers that find labels in the
+payload, redirecting a call to a local model and approval flows are deliberately not here yet.
+
 ## Development
 
 ```bash

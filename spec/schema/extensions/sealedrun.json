@@ -119,7 +119,7 @@
         "properties": {
           "source": {
             "type": "string",
-            "enum": ["classifier", "regex", "source", "manual"]
+            "enum": ["classifier", "regex", "source", "manual", "header"]
           },
           "confidence": {
             "type": "number",

@@ -22,6 +22,7 @@ from sealedrun_recorder.keystore import load_identity
 from sealedrun_recorder.live import LiveRuns
 from sealedrun_recorder.otlp import SpansSeen
 from sealedrun_recorder.otlp import router as otlp_router
+from sealedrun_recorder.policy import Rule
 from sealedrun_recorder.proxy import RunGrouper
 from sealedrun_recorder.proxy import router as proxy_router
 from sealedrun_recorder.proxy.mcp import ListSeen
@@ -45,6 +46,7 @@ async def lifespan(app: FastAPI) -> Any:
     app.state.live = LiveRuns(app.state.sessions, load_identity(settings.data_dir))
     app.state.runs = RunGrouper(app.state.live, settings.proxy_run_idle_seconds)
     app.state.upstreams = load_upstreams(settings.upstreams_file)
+    app.state.policy = Rule(tuple(settings.policy_block_to_cloud))
     app.state.mcp_lists = ListSeen()
     app.state.otel_seen = SpansSeen()
     app.state.http = httpx.AsyncClient(transport=app.state.http_transport, follow_redirects=False)

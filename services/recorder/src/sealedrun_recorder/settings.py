@@ -22,6 +22,10 @@ class Settings(BaseSettings):
         upstreams_file: YAML file with the model providers the LLM proxy forwards to.
         proxy_run_idle_seconds: Proxy calls without an X-SealedRun-Run header join the current
             run until it has been idle this long; the next call then starts a new run.
+        policy_block_to_cloud: Data labels that must never reach an upstream, MCP server or
+            agent whose `location` is `cloud`; a call carrying one is refused before any
+            upstream contact and recorded as blocked. Empty turns the rule off.
+            Env form: SEALEDRUN_POLICY_BLOCK_TO_CLOUD='["nda","secret"]'.
         anchor_tsa_url: RFC 3161 authority the chain heads are time-stamped at (SPEC 8); empty
             turns anchoring off. Suggested: https://timestamp.sigstore.dev/api/v1/timestamp.
         anchor_tsa_fallback_url: Second authority tried when the first fails, for example
@@ -49,6 +53,7 @@ class Settings(BaseSettings):
     proxy_timeout_seconds: float = 600.0
     proxy_max_body_bytes: int = 32 * 1024 * 1024
     proxy_run_idle_seconds: float = 900.0
+    policy_block_to_cloud: list[str] = []
     anchor_tsa_url: str = ""
     anchor_tsa_fallback_url: str = ""
     anchor_rekor_url: str = ""
