@@ -11,10 +11,18 @@ the wrapper are forwarded to the child. The wrapper exits with the child's exit 
 
 Recording follows the HTTP proxy's rules: `tools/call`, `resources/read`, `prompts/get` and
 `tools/list` requests become `tool_call` steps posted to `POST /api/steps` with the request line
-and the response line as payloads, before the response is delivered to the client. A recorder
+and the response line as payloads, before the response is delivered to the client. The steps
+carry `sealedrun.step` (`source: self_reported`, `via: sealedrun-mcp-wrap`, latency, truncation):
+a wrapper reports what it relayed, it is not a proxy the recorder runs. A recorder
 that cannot be reached does not stop the call: the response is delivered and a warning goes to
 stderr, unless `--strict` is set, in which case the client gets a JSON-RPC error instead. A
 request cancelled by the client or still open when the server exits is recorded as truncated.
+
+Three caps keep a hostile or broken peer from growing the wrapper: at most `MAX_PENDING`
+requests wait for a response (the oldest is recorded as truncated past that), a line longer than
+`MAX_LINE_BYTES` is relayed in pieces but not parsed or recorded (a warning says so), and a post
+to the recorder gives up after `timeout` seconds even when the recorder keeps the connection
+open, so the relay is never blocked for longer than that.
 
 Only POSIX is supported: signal forwarding and the termination ladder rely on it.
 """
@@ -24,6 +32,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import pathlib
 import signal
 import subprocess
 import sys
@@ -42,6 +51,8 @@ RECORDED = frozenset({"tools/call", "resources/read", "prompts/get", "tools/list
 NAME_PARAM = {"tools/call": "name", "resources/read": "uri", "prompts/get": "name"}
 META_VERSION = "io.modelcontextprotocol/protocolVersion"
 NOT_RECORDED_CODE = 1001
+MAX_PENDING = 1024
+MAX_LINE_BYTES = 16 * 1024 * 1024
 HIDDEN_ENV = frozenset({"SEALEDRUN_TOKEN", "SEALEDRUN_URL", "SEALEDRUN_RUN"})
 
 
@@ -62,6 +73,9 @@ class Observer:
 
     def closed(self, exit_code: int) -> None:
         """Observe the end of the child process."""
+
+    def oversize_line(self, source: str) -> None:
+        """Observe a line past `MAX_LINE_BYTES` that was relayed without being read."""
 
 
 def parse_message(line: bytes) -> dict[str, Any] | None:
@@ -151,14 +165,38 @@ class Recording(Observer):
                 started=time.perf_counter(),
                 protocol_version=version if isinstance(version, str) else self._legacy_version,
             )
+            overflow = []
+            while len(self._pending) > MAX_PENDING:
+                oldest = next(iter(self._pending))
+                overflow.append(self._pending.pop(oldest))
+        for pending in overflow:
+            self._warn(f"more than {MAX_PENDING} open requests; oldest recorded as truncated")
+            self._post(pending, None, truncated=True)
+
+    def oversize_line(self, source: str) -> None:
+        """Warn that a line past `MAX_LINE_BYTES` was relayed without being read."""
+        self._warn(f"{source} line longer than {MAX_LINE_BYTES} bytes relayed unrecorded")
 
     def server_line(self, line: bytes) -> bytes:
-        """Record the response to a pending request before it is delivered."""
+        """Record the response to a pending request before it is delivered.
+
+        A batch or a response whose id cannot be matched (a non-integral float, null) may hide
+        the answer to a recorded call; with `--strict` it is withheld and the open calls are
+        recorded as truncated when the server exits.
+        """
         message = parse_message(line)
-        if message is None or "method" in message:
+        if message is None:
+            if self.strict and line.lstrip().startswith(b"["):
+                self._warn("JSON-RPC batch from the server withheld (--strict)")
+                return _refusal(None, self.server)
+            return line
+        if "method" in message:
             return line
         if "result" not in message and "error" not in message:
             return line
+        if self.strict and _normal_id(message.get("id")) is None:
+            self._warn("server response with an unmatchable id withheld (--strict)")
+            return _refusal(None, self.server)
         result = message.get("result")
         if isinstance(result, dict) and isinstance(result.get("protocolVersion"), str):
             self._legacy_version = result["protocolVersion"]
@@ -178,10 +216,11 @@ class Recording(Observer):
             self._post(pending, None, truncated=True)
 
     def _take(self, request_id: Any) -> Pending | None:
-        if not _valid_id(request_id):
+        key = _normal_id(request_id)
+        if key is None:
             return None
         with self._lock:
-            return self._pending.pop(request_id, None)
+            return self._pending.pop(key, None)
 
     def _post(
         self,
@@ -192,14 +231,29 @@ class Recording(Observer):
         truncated: bool = False,
     ) -> bool:
         step = self._step(pending, line, message, truncated)
-        try:
-            post_step(self.url, step, token=self.token, run=self.run, timeout=self.timeout)
+        outcome: list[RecorderError | None] = []
+
+        def work() -> None:
+            try:
+                post_step(self.url, step, token=self.token, run=self.run, timeout=self.timeout)
+                outcome.append(None)
+            except RecorderError as error:
+                outcome.append(error)
+
+        # The socket timeout bounds each read, not the whole exchange; the join does.
+        worker = threading.Thread(target=work, daemon=True)
+        worker.start()
+        worker.join(self.timeout)
+        if not outcome:
+            self._warn(f"recorder did not answer within {self.timeout:g}s")
+            return False
+        error = outcome[0]
+        if error is None:
             return True
-        except RecorderError as error:
-            if error.status:
-                self._warn(f"recorder refused the {pending.method} record: {error.status}")
-            else:
-                self._warn(str(error))
+        if error.status:
+            self._warn(f"recorder refused the {pending.method} record: {error.status}")
+        else:
+            self._warn(str(error))
         return False
 
     def _step(
@@ -231,14 +285,15 @@ class Recording(Observer):
             mcp["result_type"] = result["resultType"]
         if pending.protocol_version:
             mcp["protocol_version"] = pending.protocol_version
-        proxy: dict[str, Any] = {
-            "upstream": self.server,
-            "dialect": "mcp",
-            "operation": pending.method,
+        # A wrapper is a self-reporter, not a proxy the recorder runs: the record carries
+        # `sealedrun.step`, never `sealedrun.proxy` (the recorder refuses that on a step).
+        marker: dict[str, Any] = {
+            "source": "self_reported",
+            "via": "sealedrun-mcp-wrap",
             "latency_ms": round((time.perf_counter() - pending.started) * 1000, 1),
         }
         if truncated:
-            proxy["truncated"] = True
+            marker["truncated"] = True
         step: dict[str, Any] = {
             "kind": "tool_call",
             "target": {
@@ -251,7 +306,7 @@ class Recording(Observer):
             "outcome": outcome,
             "request": pending.line.rstrip(b"\r\n").decode(errors="replace"),
             "request_media_type": "application/json",
-            "extensions": {"sealedrun.mcp": mcp, "sealedrun.proxy": proxy},
+            "extensions": {"sealedrun.mcp": mcp, "sealedrun.step": marker},
         }
         if line is not None:
             step["response"] = line.rstrip(b"\r\n").decode(errors="replace")
@@ -273,6 +328,15 @@ def _write_all(stream: IO[bytes], data: bytes) -> None:
 
 def _valid_id(value: Any) -> bool:
     return isinstance(value, str | int) and not _is_bool(value)
+
+
+def _normal_id(value: Any) -> str | int | None:
+    """Return the id a pending call is keyed by; an integral float such as `1.0` matches `1`."""
+    if _valid_id(value):
+        return value  # type: ignore[no-any-return]
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return None
 
 
 def _is_bool(value: object) -> bool:
@@ -303,10 +367,12 @@ class Wrapper:
         timeout: float = DEFAULT_TIMEOUT,
         stdin: IO[bytes] | None = None,
         stdout: IO[bytes] | None = None,
+        max_line_bytes: int = MAX_LINE_BYTES,
     ) -> None:
         self.command = list(command)
         self.observer = observer or Observer()
         self.timeout = timeout
+        self.max_line_bytes = max_line_bytes
         self._stdin = stdin if stdin is not None else sys.stdin.buffer
         self._stdout = stdout if stdout is not None else sys.stdout.buffer
         self._child: subprocess.Popen[bytes] | None = None
@@ -342,9 +408,13 @@ class Wrapper:
         assert child is not None and child.stdin is not None
         try:
             while True:
-                line = self._stdin.readline()
+                line, oversize = self._read_line(self._stdin)
                 if not line:
                     break
+                if oversize:
+                    self.observer.oversize_line("client")
+                    self._drain(self._stdin, child.stdin, line)
+                    continue
                 self.observer.client_line(line)
                 _write_all(child.stdin, line)
         except (OSError, ValueError):
@@ -358,12 +428,30 @@ class Wrapper:
         assert child is not None and child.stdout is not None
         try:
             while True:
-                line = child.stdout.readline()
+                line, oversize = self._read_line(child.stdout)
                 if not line:
                     break
+                if oversize:
+                    self.observer.oversize_line("server")
+                    self._drain(child.stdout, self._stdout, line)
+                    continue
                 _write_all(self._stdout, self.observer.server_line(line))
         except (OSError, ValueError):
             pass
+
+    def _read_line(self, stream: IO[bytes]) -> tuple[bytes, bool]:
+        """Read one line up to the cap; the flag says the line goes on past it."""
+        line = stream.readline(self.max_line_bytes)
+        return line, bool(line) and not line.endswith(b"\n") and len(line) >= self.max_line_bytes
+
+    def _drain(self, source: IO[bytes], sink: IO[bytes], first: bytes) -> None:
+        """Relay the rest of an oversize line piece by piece, up to its newline or EOF."""
+        piece = first
+        while piece:
+            _write_all(sink, piece)
+            if piece.endswith(b"\n"):
+                return
+            piece = source.readline(self.max_line_bytes)
 
     def _finish(self, child: subprocess.Popen[bytes]) -> None:
         """Wait for the child, escalating from stdin EOF to SIGTERM to SIGKILL."""
@@ -409,7 +497,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--server", help="server name in the records (default: command name)")
     parser.add_argument("--run", help="run label, joins the run of proxied LLM calls with it")
     parser.add_argument("--url", help=f"recorder URL (default {DEFAULT_URL} or SEALEDRUN_URL)")
-    parser.add_argument("--token", help="recorder token (default SEALEDRUN_TOKEN)")
+    parser.add_argument(
+        "--token-file",
+        help="file holding the recorder token (default: SEALEDRUN_TOKEN); never pass the "
+        "token on the command line, /proc shows it to every local user",
+    )
     parser.add_argument(
         "--strict",
         action="store_true",
@@ -439,7 +531,12 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     args.url = (args.url or os.environ.get("SEALEDRUN_URL") or DEFAULT_URL).rstrip("/")
     if not args.url.startswith(("http://", "https://")):
         build_parser().error("--url must start with http:// or https://")
-    args.token = args.token or os.environ.get("SEALEDRUN_TOKEN") or None
+    args.token = os.environ.get("SEALEDRUN_TOKEN") or None
+    if args.token_file:
+        try:
+            args.token = pathlib.Path(args.token_file).read_text().strip() or None
+        except OSError as error:
+            build_parser().error(f"--token-file: {error}")
     return args
 
 

@@ -7,7 +7,9 @@ uv run sealedrun-recorder            # http://localhost:8080
 ```
 
 Environment (prefix `SEALEDRUN_`): `DATA_DIR` (default `data/`), `DATABASE_URL` (default SQLite in
-`DATA_DIR`), `UI_DIR` (default `apps/web/out`), `PORT`, `MAX_BUNDLE_BYTES`,
+`DATA_DIR`), `UI_DIR` (default `apps/web/out`), `PORT`, `MAX_BUNDLE_BYTES` (default 64 MB; an
+archive may inflate to four times that), `PROXY_MAX_BODY_BYTES` (32 MB: request bodies, upstream
+replies, steps and OTLP exports, read against the cap as they arrive),
 `POLICY_BLOCK_TO_CLOUD` (JSON list of labels the block-to-cloud rule refuses; empty = off).
 
 | Method | Path                                | Purpose                                             |

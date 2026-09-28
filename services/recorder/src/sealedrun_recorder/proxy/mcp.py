@@ -18,17 +18,25 @@ reply is recorded when it ends; one that ends without the response is marked `tr
 changes. Everything else is forwarded without a record: notifications, client responses,
 `initialize`, `server/discover`, `subscriptions/listen`, GET streams, DELETE, and messages the
 server refused.
+
+Three shapes never reach a server, because they could carry a call past the record and the
+policy rule: a JSON-RPC batch (an array body), a request whose id is not a string or an integer,
+and a recorded method sent without an id. All are refused with 400. Proxy-generated JSON-RPC
+errors use the application codes `40000` (proxy error) and `40003` (blocked by policy), outside
+the range the MCP specification reserves.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import threading
 import time
+from collections import OrderedDict
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypeGuard
 from urllib.parse import urlsplit
 
 import anyio
@@ -37,6 +45,8 @@ from fastapi import APIRouter, Depends, Request, Response
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import StreamingResponse
 
+from sealedrun_recorder.limits import BodyTooLargeError, parse_json, read_body, read_reply
+from sealedrun_recorder.live import LiveRunError
 from sealedrun_recorder.policy import Decision, Rule
 from sealedrun_recorder.proxy.core import (
     JSON,
@@ -53,10 +63,15 @@ from sealedrun_recorder.upstreams import McpServer, Upstreams
 
 RECORDED = frozenset({"tools/call", "resources/read", "prompts/get", "tools/list"})
 GOVERNED = frozenset({"tools/call", "resources/read", "prompts/get"})
-POLICY_ERROR = -32003
+PROXY_ERROR = 40000
+POLICY_ERROR = 40003
 NAME_PARAM = {"tools/call": "name", "resources/read": "uri", "prompts/get": "name"}
+MAX_LISTS = 4096
+MAX_NAME = 256
 
-SAME_SITE = frozenset({"same-origin", "same-site", "none"})
+log = logging.getLogger("sealedrun.proxy")
+
+SAME_SITE = frozenset({"same-origin", "none"})
 REQUEST_HEADERS = (
     "accept",
     "content-type",
@@ -102,16 +117,17 @@ async def mcp(server: str, request: Request) -> Response:
     if target is None:
         return error(404, f"no MCP server configured as {server}")
     if not target.ready(client_credentials(request)):
-        return error(503, f"MCP server {target.name}: {target.key_env} is not set")
+        log.error("MCP server %s: %s is not set", target.name, target.key_env)
+        return error(503, "MCP server is not configured on the recorder")
     limit = request.app.state.settings.proxy_max_body_bytes
-    declared = request.headers.get("content-length", "")
-    if declared.isdigit() and int(declared) > limit:
+    try:
+        body = await read_body(request, limit)
+    except BodyTooLargeError:
         return error(413, "request body exceeds size limit")
-    body = await request.body()
-    if len(body) > limit:
-        return error(413, "request body exceeds size limit")
-
-    call = McpCall.parse(request, body) if request.method == "POST" else None
+    try:
+        call = McpCall.parse(request, body) if request.method == "POST" else None
+    except McpRequestError as problem:
+        return error(400, str(problem))
     started = time.perf_counter()
     policy = None
     if call is not None and call.method in GOVERNED:
@@ -125,7 +141,8 @@ async def mcp(server: str, request: Request) -> Response:
     try:
         reply = await http.send(_build(request, target, body), stream=True)
     except httpx.HTTPError as failure:
-        return error(502, f"MCP server {target.name} unreachable: {type(failure).__name__}")
+        log.error("MCP server %s unreachable: %s", target.name, type(failure).__name__)
+        return error(502, "MCP server unreachable")
     headers = {k: v for k, v in reply.headers.items() if k in REPLY_HEADERS}
     media_type = reply.headers.get("content-type", "")
     streamed = media_type.startswith(SSE)
@@ -150,17 +167,22 @@ async def mcp(server: str, request: Request) -> Response:
         )
 
     if streamed:
-        limit = request.app.state.settings.proxy_max_body_bytes
         relay = _relay_recorded(reply, limit, finish)
         return StreamingResponse(relay, status_code=reply.status_code, headers=headers)
     try:
-        answer = await reply.aread()
+        answer = await read_reply(reply, limit)
     except httpx.HTTPError:
         answer = b""
-    finally:
-        await reply.aclose()
+    except BodyTooLargeError:
+        await finish(b"")
+        log.error("MCP server %s reply exceeds size limit", target.name)
+        return error(502, "MCP server reply exceeds size limit")
     await finish(answer)
     return Response(answer, status_code=reply.status_code, headers=headers)
+
+
+class McpRequestError(ValueError):
+    """A POST body the proxy refuses to forward; the message says why."""
 
 
 @dataclass(frozen=True)
@@ -176,19 +198,32 @@ class McpCall:
 
     @classmethod
     def parse(cls, request: Request, body: bytes) -> McpCall | None:
-        """Read a recorded request from a POST body; None for anything forwarded unrecorded."""
+        """Read a recorded request from a POST body; None for anything forwarded unrecorded.
+
+        Raises McpRequestError for a batch, a request whose id is not a string or an integer,
+        and a recorded method sent as a notification: none can be matched to a response, so
+        none is forwarded.
+        """
         try:
-            message = json.loads(body)
+            message = parse_json(body)
         except ValueError:
             return None
-        if not isinstance(message, dict) or message.get("method") not in RECORDED:
+        if isinstance(message, list):
+            raise McpRequestError("JSON-RPC batches are not accepted")
+        if not isinstance(message, dict):
             return None
+        method = message.get("method")
         request_id = message.get("id")
-        if not isinstance(request_id, str | int) or isinstance(request_id, bool):
+        if method in RECORDED and "id" not in message:
+            raise McpRequestError(f"{method} must be a JSON-RPC request with an id")
+        if method is not None and "id" in message and not valid_id(request_id):
+            raise McpRequestError("JSON-RPC request id must be a string or an integer")
+        if method not in RECORDED or not valid_id(request_id):
             return None
-        method = message["method"]
         params = mapping(message.get("params"))
         name = params.get(NAME_PARAM.get(method, ""))
+        if isinstance(name, str) and len(name) > MAX_NAME:
+            raise McpRequestError(f"{NAME_PARAM[method]} longer than {MAX_NAME} characters")
         cursor = params.get("cursor")
         session = request.headers.get("mcp-session-id")
         return cls(
@@ -206,7 +241,7 @@ class McpCall:
             messages = sse_data(answer)
         else:
             try:
-                messages = [json.loads(answer)]
+                messages = [parse_json(answer)]
             except ValueError:
                 return None
         for message in messages:
@@ -220,11 +255,21 @@ class McpCall:
         return None
 
 
-class ListSeen:
-    """The last `tools/list` result recorded per run, server, transport and cursor, as a digest."""
+def valid_id(value: Any) -> TypeGuard[str | int]:
+    """Tell whether `value` is a JSON-RPC request id the proxy can match a response to."""
+    return isinstance(value, str | int) and not isinstance(value, bool)
 
-    def __init__(self) -> None:
-        self._seen: dict[tuple[str, str, str, str | None], str] = {}
+
+class ListSeen:
+    """The last `tools/list` result recorded per run, server, transport and cursor, as a digest.
+
+    At most `limit` keys are kept; the least recently used is forgotten first, which at worst
+    records one more `tools/list` for a very old run.
+    """
+
+    def __init__(self, limit: int = MAX_LISTS) -> None:
+        self._seen: OrderedDict[tuple[str, str, str, str | None], str] = OrderedDict()
+        self._limit = limit
         self._lock = threading.Lock()
 
     def changed(self, key: tuple[str, str, str, str | None], result: Any) -> bool:
@@ -236,6 +281,9 @@ class ListSeen:
         """Remember `result` under `key`, once it has been recorded."""
         with self._lock:
             self._seen[key] = _digest(result)
+            self._seen.move_to_end(key)
+            while len(self._seen) > self._limit:
+                self._seen.popitem(last=False)
 
 
 def _digest(result: Any) -> str:
@@ -402,11 +450,14 @@ async def _relay_recorded(
     finally:
         with anyio.CancelScope(shield=True):
             await reply.aclose()
-            await finish(b"".join(received))
+            try:
+                await finish(b"".join(received))
+            except LiveRunError:
+                log.exception("stream not recorded after %d bytes were delivered", size)
 
 
 def error(
-    status: int, message: str, *, code: int = -32000, request_id: str | int | None = None
+    status: int, message: str, *, code: int = PROXY_ERROR, request_id: str | int | None = None
 ) -> Response:
     """Return a proxy-generated error as a JSON-RPC error object, without an id unless given."""
     body = {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}

@@ -321,7 +321,7 @@ def test_mcp_call_to_a_cloud_server_is_blocked(
         "jsonrpc": "2.0",
         "id": "req-9",
         "error": {
-            "code": -32003,
+            "code": 40003,
             "message": "blocked by policy recorder/no-nda-to-cloud: target.location=cloud and"
             " labels contain nda",
         },
@@ -386,14 +386,15 @@ def test_a2a_delegation_to_a_cloud_agent_is_blocked_in_both_bindings(
         delegation = client.get("/api/identity", headers=auth).json()["delegation"]
     assert rpc.status_code == 403
     assert rpc.json()["id"] == 1
-    assert rpc.json()["error"]["code"] == -32003
+    assert rpc.json()["error"]["code"] == 40003
     assert "no-nda-to-cloud" in rpc.json()["error"]["message"]
     assert rest.status_code == 403
     assert rest.json()["status"] == "PERMISSION_DENIED"
     assert rest.json()["code"] == 7
-    assert cancel.status_code == 200
-    assert len(upstream.calls) == 1
-    for record in (blocked_rpc, blocked_rest):
+    assert cancel.status_code == 403
+    assert cancel.json()["id"] == 2
+    assert upstream.calls == []
+    for record in (blocked_rpc, blocked_rest, cancelled):
         assert record["outcome"] == "blocked"
         assert record["policy"] == BLOCK
         assert record["extensions"]["sealedrun.a2a"]["is_error"] is False
@@ -401,8 +402,108 @@ def test_a2a_delegation_to_a_cloud_agent_is_blocked_in_both_bindings(
         assert validator("record.json").is_valid(record)
     assert blocked_rpc["extensions"]["sealedrun.a2a"]["binding"] == "jsonrpc"
     assert blocked_rest["extensions"]["sealedrun.a2a"]["binding"] == "rest"
-    assert "policy" not in cancelled
+    assert cancelled["target"]["name"] == "hosted/cancel"
     verify_run(records, {delegation["delegation_id"]: delegation})
+
+
+@pytest.mark.parametrize(
+    ("verb", "path", "body", "method", "name"),
+    [
+        ("POST", "/a2a/hosted", _rpc("GetTask", {"id": "t-1"}, 3), "GetTask", "hosted/GetTask"),
+        ("POST", "/a2a/hosted", _rpc("message/send", {}, "x"), "message/send", "hosted/message"),
+        (
+            "POST",
+            "/a2a/hosted",
+            _rpc("tasks/cancel", {"id": "t"}, 4),
+            "tasks/cancel",
+            "hosted/cancel",
+        ),
+        (
+            "POST",
+            "/a2a/hosted",
+            _rpc("custom/Anything", {"secret": 1}, 5),
+            "custom/Anything",
+            "hosted/custom/Anything",
+        ),
+        (
+            "PUT",
+            "/a2a/hosted/tasks/t-1/pushNotificationConfigs/c-1",
+            {"url": "https://evil.example"},
+            "PUT /tasks/t-1/pushNotificationConfigs/c-1",
+            "hosted/PUT /tasks/t-1/pushNotificationConfigs/c-1",
+        ),
+        ("PATCH", "/a2a/hosted/tasks/t-1", {"x": 1}, "PATCH /tasks/t-1", "hosted/PATCH /tasks/t-1"),
+        (
+            "POST",
+            "/a2a/hosted/tasks/t-1:subscribe",
+            {},
+            "POST /tasks/t-1:subscribe",
+            "hosted/POST /tasks/t-1:subscribe",
+        ),
+    ],
+)
+def test_every_body_request_to_a_cloud_agent_is_governed(
+    make_proxy: Callable[..., TestClient],
+    upstream: Any,
+    token: dict[str, str],
+    proxy_records: Any,
+    verb: str,
+    path: str,
+    body: dict[str, Any],
+    method: str,
+    name: str,
+) -> None:
+    headers = _labelled(token, "nda", **{"X-SealedRun-Run": "a2a"})
+    with make_proxy(MCP_CONFIG, **RULE) as client:
+        reply = client.request(verb, path, json=body, headers=headers)
+        assert reply.status_code == 403, reply.text
+        [record] = _tool_calls(proxy_records(client))
+    assert upstream.calls == []
+    assert record["outcome"] == "blocked"
+    assert record["policy"] == BLOCK
+    assert record["extensions"]["sealedrun.a2a"]["method"] == method
+    assert record["target"]["name"] == name
+    assert validator("record.json").is_valid(record)
+
+
+def test_unreadable_cloud_requests_are_refused_and_local_ones_pass(
+    make_proxy: Callable[..., TestClient], upstream: Any, token: dict[str, str], proxy_records: Any
+) -> None:
+    upstream.routes["/rpc"] = A2A_RESULT
+    upstream.routes["/tasks/t-1"] = {"task": {"id": "t-1"}}
+    config = MCP_CONFIG + "  - name: nearby\n    url: http://agent.test/rpc\n    location: local\n"
+    with make_proxy(config, **RULE) as client:
+        for body in (b"not json", b"[]", b'[{"jsonrpc":"2.0","id":1,"method":"SendMessage"}]'):
+            reply = client.post("/a2a/hosted", content=body, headers=token)
+            assert reply.status_code == 400, body
+            assert reply.json()["error"]["code"] == 40000
+        for body in (
+            _rpc("GetTask", {"id": "t-1"}, 1.5),
+            _rpc("GetTask", {"id": "t-1"}, None),
+            {"jsonrpc": "2.0", "id": 1, "method": 7},
+            {"jsonrpc": "2.0", "id": 1},
+        ):
+            assert client.post("/a2a/hosted", json=body, headers=token).status_code == 400
+        assert client.post("/a2a/hosted/tasks", content=b"raw", headers=token).status_code == 400
+        assert upstream.calls == []
+        assert client.post("/a2a/nearby", content=b"not json", headers=token).status_code == 200
+        get = _rpc("GetTask", {"id": "t-1"}, 1)
+        assert client.post("/a2a/nearby", json=get, headers=token).status_code == 200
+        assert client.put("/a2a/nearby/tasks/t-1", json={}, headers=token).status_code == 200
+        assert len(upstream.calls) == 3
+        assert _tool_calls(proxy_records(client)) == []
+
+
+def test_rule_labels_are_validated_at_startup(make_app: Callable[..., Any], tmp_path: Any) -> None:
+    from sealedrun_recorder.policy import PolicyConfigError
+
+    for label in ("NDA", "nda secret", "", "acme:tier:1", "nda,"):
+        with pytest.raises(PolicyConfigError, match="SEALEDRUN_POLICY_BLOCK_TO_CLOUD"):
+            Rule((label,))
+    Rule(("nda", "acme:tier-1", "a_b-c"))
+    app = make_app(MCP_CONFIG, policy_block_to_cloud=["nda", "Secret"])
+    with pytest.raises(PolicyConfigError), TestClient(app):
+        pass
 
 
 def test_a2a_allowed_delegation_carries_the_allow_decision(

@@ -282,8 +282,7 @@ def test_tools_list_is_recorded_once_per_run_until_it_changes(
         _message("ping", {}),
         b'{"jsonrpc":"2.0","method":"notifications/initialized"}',
         b'{"jsonrpc":"2.0","id":3,"result":{"action":"accept"}}',
-        b'{"jsonrpc":"2.0","method":"tools/call","params":{"name":"add"}}',
-        b"[" + _call() + b"]",
+        b'{"jsonrpc":"2.0","id":3.5,"result":{"action":"accept"}}',
         b"not json",
     ],
 )
@@ -299,6 +298,38 @@ def test_other_messages_are_forwarded_unrecorded(
         assert client.post("/mcp/tools", content=body, headers=auth).status_code == 200
         assert _tool_calls(proxy_records(client)) == []
     assert upstream.calls[0].content == body
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"[" + _call() + b"]",
+        b"[]",
+        _call(request_id=7.0),
+        _call(request_id=None),
+        _call(request_id=True),
+        _call(request_id=[7]),
+        _message("resources/read", {"uri": "file:///x"}, None),
+        _message("initialize", {}, 1.5),
+        b'{"jsonrpc":"2.0","method":"tools/call","params":{"name":"add"}}',
+        b'{"jsonrpc":"2.0","method":"prompts/get","params":{"name":"p"}}',
+    ],
+)
+def test_batches_bad_ids_and_id_less_calls_are_refused_unforwarded(
+    make_proxy: Callable[..., TestClient],
+    upstream: Any,
+    auth: dict[str, str],
+    proxy_records: Any,
+    body: bytes,
+) -> None:
+    upstream.routes["/mcp"] = _result({})
+    with make_proxy(CONFIG) as client:
+        reply = client.post("/mcp/tools", content=body, headers=auth)
+        assert reply.status_code == 400, reply.text
+        assert reply.json()["error"]["code"] == 40000
+        assert reply.json()["id"] is None
+        assert _tool_calls(proxy_records(client)) == []
+    assert upstream.calls == []
 
 
 @pytest.mark.parametrize("status", [400, 401, 404, 500])

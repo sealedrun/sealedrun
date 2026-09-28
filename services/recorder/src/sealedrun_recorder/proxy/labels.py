@@ -8,13 +8,13 @@ The header never reaches an upstream: no dialect lists it among the headers that
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from fastapi import Request
 
+from sealedrun_recorder.policy import LABEL
+
 LABELS_HEADER = "x-sealedrun-labels"
-LABEL = re.compile(r"^[a-z0-9_-]+(:[a-z0-9_-]+)?$")
 MAX_LABELS = 64
 
 

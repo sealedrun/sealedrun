@@ -12,16 +12,23 @@ the proxy address, so an SDK client that discovers the agent here keeps talking 
 recorder. A signed card no longer matches its signature after the rewrite; README says so.
 
 Delegations are recorded as `tool_call` records with the `sealedrun.a2a` extension (SPEC 10.4):
-JSON-RPC `SendMessage`, `SendStreamingMessage` and `CancelTask`, and the REST operations
-`message:send`, `message:stream` and `tasks/{id}:cancel`. The request body and the reply (the
-JSON body, or the raw SSE stream) are the payloads; the outcome follows the last task state in
-the reply. `GetTask`, `ListTasks`, `SubscribeToTask` and push-notification configs are forwarded
-unrecorded.
+JSON-RPC `SendMessage`, `SendStreamingMessage` and `CancelTask` (and their A2A 0.3 names
+`message/send`, `message/stream`, `tasks/cancel`), and the REST operations `message:send`,
+`message:stream` and `tasks/{id}:cancel`. The request body and the reply (the JSON body, or the
+raw SSE stream) are the payloads; the outcome follows the last task state in the reply. To a
+`local` agent, `GetTask`, `ListTasks`, `SubscribeToTask` and push-notification configs are
+forwarded unrecorded. To a `cloud` agent every POST, PUT and PATCH is governed and recorded,
+whatever its method or sub-path: the policy rule sees it, and the record names the method or
+the sub-path. A body a cloud call cannot be read from (not JSON, a batch, an id that is not a
+string or an integer) is refused with 400, as is a path with `.`/`..` segments or encoded
+delimiters. Proxy-generated JSON-RPC errors use the application codes `40000` and `40003`.
 """
 
 from __future__ import annotations
 
 import json
+import logging
+import re
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -33,6 +40,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import StreamingResponse
 
+from sealedrun_recorder.limits import BodyTooLargeError, parse_json, read_body, read_reply
 from sealedrun_recorder.policy import Decision, Rule
 from sealedrun_recorder.proxy.core import (
     JSON,
@@ -45,7 +53,13 @@ from sealedrun_recorder.proxy.core import (
     sse_data,
 )
 from sealedrun_recorder.proxy.labels import LabelsError, header_labels, label_fields
-from sealedrun_recorder.proxy.mcp import POLICY_ERROR, _relay_recorded, same_origin
+from sealedrun_recorder.proxy.mcp import (
+    POLICY_ERROR,
+    PROXY_ERROR,
+    _relay_recorded,
+    same_origin,
+    valid_id,
+)
 from sealedrun_recorder.upstreams import A2aAgent, Upstreams
 
 CARD_PATH = ".well-known/agent-card.json"
@@ -68,9 +82,17 @@ REPLY_HEADERS = (
 )
 URL_KEYS = ("url",)
 INTERFACE_KEYS = ("supportedInterfaces", "additionalInterfaces", "interfaces")
-RECORDED_METHODS = frozenset({"SendMessage", "SendStreamingMessage", "CancelTask"})
-GOVERNED_METHODS = frozenset({"SendMessage", "SendStreamingMessage"})
+CANCEL_METHODS = frozenset({"CancelTask", "tasks/cancel"})
+GOVERNED_METHODS = frozenset(
+    {"SendMessage", "SendStreamingMessage", "message/send", "message/stream"}
+)
+RECORDED_METHODS = GOVERNED_METHODS | CANCEL_METHODS
 REST_OPERATIONS = {"message:send": "SendMessage", "message:stream": "SendStreamingMessage"}
+BODY_METHODS = frozenset({"POST", "PUT", "PATCH"})
+PLAIN_SEGMENT = re.compile(r"[A-Za-z0-9._~:-]+")
+MAX_METHOD = 200
+
+log = logging.getLogger("sealedrun.proxy")
 SUCCESS_STATES = frozenset({"TASK_STATE_COMPLETED"})
 ERROR_STATES = frozenset({"TASK_STATE_FAILED", "TASK_STATE_REJECTED", "TASK_STATE_CANCELED"})
 
@@ -103,20 +125,27 @@ async def a2a(agent: str, request: Request, path: str = "") -> Response:
     if target is None:
         return error(404, f"no A2A agent configured as {agent}")
     if not target.ready(client_credentials(request)):
-        return error(503, f"A2A agent {target.name}: {target.key_env} is not set")
+        log.error("A2A agent %s: %s is not set", target.name, target.key_env)
+        return error(503, "A2A agent is not configured on the recorder")
+    if not safe_path(request, path):
+        return error(400, "path segment not allowed")
     if request.method == "GET" and path.strip("/") == CARD_PATH:
         return await agent_card(request, target)
     limit = request.app.state.settings.proxy_max_body_bytes
-    declared = request.headers.get("content-length", "")
-    if declared.isdigit() and int(declared) > limit:
+    try:
+        body = await read_body(request, limit)
+    except BodyTooLargeError:
         return error(413, "request body exceeds size limit")
-    body = await request.body()
-    if len(body) > limit:
-        return error(413, "request body exceeds size limit")
-    call = A2aCall.parse(request, path, body) if request.method == "POST" else None
+    cloud = target.location == "cloud"
+    call = None
+    if request.method in BODY_METHODS:
+        try:
+            call = A2aCall.parse(request, path, body, cloud)
+        except A2aRequestError as problem:
+            return error(400, str(problem))
     started = time.perf_counter()
     policy = None
-    if call is not None and call.method in GOVERNED_METHODS:
+    if call is not None and (cloud or call.method in GOVERNED_METHODS):
         rule: Rule = request.app.state.policy
         policy = rule.evaluate(target.location, labels)
     if call is not None and policy is not None and policy.blocked:
@@ -126,7 +155,8 @@ async def a2a(agent: str, request: Request, path: str = "") -> Response:
     try:
         reply = await http.send(_build(request, target, path, body), stream=True)
     except httpx.HTTPError as failure:
-        return error(502, f"A2A agent {target.name} unreachable: {type(failure).__name__}")
+        log.error("A2A agent %s unreachable: %s", target.name, type(failure).__name__)
+        return error(502, "A2A agent unreachable")
     headers = {k: v for k, v in reply.headers.items() if k in REPLY_HEADERS}
     media_type = reply.headers.get("content-type", "")
     streamed = media_type.startswith(SSE)
@@ -154,13 +184,19 @@ async def a2a(agent: str, request: Request, path: str = "") -> Response:
         relay = _relay_recorded(reply, limit, finish)
         return StreamingResponse(relay, status_code=reply.status_code, headers=headers)
     try:
-        answer = await reply.aread()
+        answer = await read_reply(reply, limit)
     except httpx.HTTPError:
         answer = b""
-    finally:
-        await reply.aclose()
+    except BodyTooLargeError:
+        await finish(b"")
+        log.error("A2A agent %s reply exceeds size limit", target.name)
+        return error(502, "A2A agent reply exceeds size limit")
     await finish(answer)
     return Response(answer, status_code=reply.status_code, headers=headers)
+
+
+class A2aRequestError(ValueError):
+    """A request the proxy refuses to forward to a cloud agent; the message says why."""
 
 
 @dataclass(frozen=True)
@@ -176,27 +212,43 @@ class A2aCall:
     protocol_version: str | None
 
     @classmethod
-    def parse(cls, request: Request, path: str, body: bytes) -> A2aCall | None:
-        """Read a recorded request from a POST; None for anything forwarded unrecorded."""
+    def parse(cls, request: Request, path: str, body: bytes, cloud: bool) -> A2aCall | None:
+        """Read a recorded request from a POST, PUT or PATCH; None for one forwarded unrecorded.
+
+        To a cloud agent every request is recorded, so one that cannot be read (not a JSON
+        object, a batch, a JSON-RPC request without a string or integer id) raises
+        A2aRequestError instead of going through.
+        """
         try:
-            document = json.loads(body) if body else {}
+            document = parse_json(body) if body else {}
         except ValueError:
-            return None
+            document = None
+        if isinstance(document, list):
+            raise A2aRequestError("JSON-RPC batches are not accepted")
         if not isinstance(document, dict):
+            if cloud:
+                raise A2aRequestError("request body must be a JSON object")
             return None
         version = request.headers.get("a2a-version")
-        operation = path.strip("/").rpartition("/")[2] if path else ""
         if not path:
             method = document.get("method")
-            if method not in RECORDED_METHODS:
+            if not isinstance(method, str) or not method:
+                if cloud:
+                    raise A2aRequestError("JSON-RPC method must be a string")
                 return None
+            if len(method) > MAX_METHOD:
+                raise A2aRequestError(f"JSON-RPC method longer than {MAX_METHOD} characters")
             request_id = document.get("id")
-            if not isinstance(request_id, str | int) or isinstance(request_id, bool):
+            if not valid_id(request_id):
+                if cloud or method in RECORDED_METHODS:
+                    raise A2aRequestError("JSON-RPC request id must be a string or an integer")
+                return None
+            if not cloud and method not in RECORDED_METHODS:
                 return None
             params = mapping(document.get("params"))
-            task_id = params.get("id") if method == "CancelTask" else None
+            task_id = params.get("id") if method in CANCEL_METHODS else None
             return cls(
-                method=str(method),
+                method=method,
                 binding="jsonrpc",
                 id=request_id,
                 task_id=_string(task_id),
@@ -204,12 +256,18 @@ class A2aCall:
                 message_id=_string(mapping(params.get("message")).get("messageId")),
                 protocol_version=version,
             )
+        sub_path = path.strip("/")
+        operation = sub_path.rpartition("/")[2]
         method = REST_OPERATIONS.get(operation)
         task_id = None
         if method is None and operation.endswith(":cancel"):
             method, task_id = "CancelTask", operation[: -len(":cancel")]
         if method is None:
-            return None
+            if not cloud:
+                return None
+            method = f"{request.method} /{sub_path}"
+            if len(method) > MAX_METHOD:
+                raise A2aRequestError(f"sub-path longer than {MAX_METHOD} characters")
         return cls(
             method=method,
             binding="rest",
@@ -230,7 +288,7 @@ class A2aCall:
             messages = sse_data(answer)
         else:
             try:
-                messages = [json.loads(answer)]
+                messages = [parse_json(answer)]
             except ValueError:
                 return None
         found = [m for m in messages if isinstance(m, dict)]
@@ -278,6 +336,8 @@ def outcome_of(
         return "error", state, ids
     if state in SUCCESS_STATES or (state is None and direct_message):
         return "success", state, ids
+    if state is None and call.method not in RECORDED_METHODS:
+        return "success", None, ids
     if state in ERROR_STATES:
         return "error", state, ids
     if state is None:
@@ -348,7 +408,7 @@ async def _record(
         "tool_call",
         target={
             "type": "tool",
-            "name": f"{target.name}/{'cancel' if call.method == 'CancelTask' else 'message'}",
+            "name": f"{target.name}/{_target_suffix(call.method)}",
             "endpoint": target.url,
             "location": target.location,
             "provider": f"a2a:{target.name}",
@@ -359,6 +419,34 @@ async def _record(
         response_media_type=media_type.partition(";")[0].strip() or None,
         outcome=outcome,
         **fields,
+    )
+
+
+def _target_suffix(method: str) -> str:
+    if method in CANCEL_METHODS:
+        return "cancel"
+    if method in GOVERNED_METHODS:
+        return "message"
+    return method
+
+
+def safe_path(request: Request, path: str) -> bool:
+    """Tell whether the sub-path can be appended to the agent's URL as it is.
+
+    Only plain segments pass: unreserved URL characters plus `:` (A2A's `tasks/<id>:cancel`),
+    none equal to `.` or `..`, none empty. Any percent-encoding in the raw path is refused
+    outright, so nothing reaches the agent that its own decoder could turn into a different
+    location (`%252e%252e` arrives as `%2e%2e`), and neither does `;`, which some servers read
+    as a path-parameter separator.
+    """
+    if not path:
+        return True
+    raw = request.scope.get("raw_path", b"").decode("latin-1")
+    if "%" in raw:
+        return False
+    return all(
+        segment not in (".", "..") and PLAIN_SEGMENT.fullmatch(segment) is not None
+        for segment in path.strip("/").split("/")
     )
 
 
@@ -381,16 +469,24 @@ async def agent_card(request: Request, target: A2aAgent) -> Response:
     headers = target.request_headers(client_credentials(request))
     headers["accept"] = JSON
     timeout = request.app.state.settings.proxy_timeout_seconds
+    limit = request.app.state.settings.proxy_max_body_bytes
     try:
-        reply = await http.get(card_url(target.url), headers=headers, timeout=timeout)
+        fetch = http.build_request("GET", card_url(target.url), headers=headers, timeout=timeout)
+        reply = await http.send(fetch, stream=True)
+        content = await read_reply(reply, limit)
     except httpx.HTTPError as failure:
-        return error(502, f"A2A agent {target.name} unreachable: {type(failure).__name__}")
+        log.error("A2A agent %s unreachable: %s", target.name, type(failure).__name__)
+        return error(502, "A2A agent unreachable")
+    except BodyTooLargeError:
+        log.error("A2A agent %s card exceeds the size limit", target.name)
+        return error(502, "A2A agent card exceeds the size limit")
     if not reply.is_success:
-        return Response(reply.content, status_code=reply.status_code, media_type=JSON)
+        return Response(content, status_code=reply.status_code, media_type=JSON)
     try:
-        card = reply.json()
+        card = parse_json(content)
     except ValueError:
-        return error(502, f"A2A agent {target.name} sent a card that is not JSON")
+        log.error("A2A agent %s card is not JSON", target.name)
+        return error(502, "A2A agent card is not JSON")
     if not isinstance(card, dict):
         return error(502, f"A2A agent {target.name} sent a card that is not an object")
     return Response(json.dumps(rewrite_card(card, target.url, proxy_base(request, target))))
@@ -467,7 +563,7 @@ async def _relay(reply: httpx.Response) -> AsyncIterator[bytes]:
 
 
 def error(
-    status: int, message: str, *, code: int = -32000, request_id: str | int | None = None
+    status: int, message: str, *, code: int = PROXY_ERROR, request_id: str | int | None = None
 ) -> Response:
     """Return a proxy-generated error as a JSON-RPC error object, without an id unless given."""
     body = {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}

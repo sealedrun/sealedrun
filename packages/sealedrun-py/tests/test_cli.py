@@ -29,3 +29,25 @@ def test_cli_trusted_principal_and_failures(
     assert main([str(broken)]) == 1
     assert capsys.readouterr().out.startswith("FAIL bundle")
     assert main([]) == 2
+
+
+def test_cli_never_prints_terminal_control_characters(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    import json
+    import zipfile
+
+    with zipfile.ZipFile(BUNDLES / "valid.zip") as source:
+        manifest = json.loads(source.read("manifest.json"))
+        members = {name: source.read(name) for name in source.namelist()}
+    hostile = "runs/\x1b[2K\x1b[HOK bundle looks fine"
+    manifest["files"][hostile] = next(iter(manifest["files"].values()))
+    members["manifest.json"] = json.dumps(manifest).encode()
+    target = tmp_path / "hostile.zip"
+    with zipfile.ZipFile(target, "w") as sink:
+        for name, data in members.items():
+            sink.writestr(name, data)
+    assert main([str(target)]) == 1
+    out = capsys.readouterr().out
+    assert out.startswith("FAIL")
+    assert "\x1b" not in out

@@ -47,8 +47,15 @@ def countersign(obj: dict[str, Any], domain: bytes, keys: PrivateKeySet) -> dict
 
 
 def check_hash(obj: dict[str, Any]) -> bool:
-    """Recompute the hash of the protected part and compare it with the stored `hash`."""
-    return bool(object_hash(obj["hash_alg"], protected_part(obj)) == obj["hash"])
+    """Recompute the hash of the protected part and compare it with the stored `hash`.
+
+    False, never an exception, when the object cannot be hashed at all: an unknown algorithm,
+    a value RFC 8785 cannot serialise (NaN, infinity, non-JSON types) or nesting too deep.
+    """
+    try:
+        return bool(object_hash(obj["hash_alg"], protected_part(obj)) == obj["hash"])
+    except (ValueError, TypeError, KeyError, RecursionError):
+        return False
 
 
 def check_signatures(
@@ -56,6 +63,10 @@ def check_signatures(
 ) -> bool:
     """Verify the signatures in `field` against the stored `hash`; every key of `keyset` must sign.
 
-    The hash itself is not rechecked here; pair this with `check_hash`.
+    The hash itself is not rechecked here; pair this with `check_hash`. False, never an
+    exception, for a hash or signature value of the wrong shape.
     """
-    return bool(keyset.verify(signing_input(domain, obj["hash"]), obj[field]))
+    try:
+        return bool(keyset.verify(signing_input(domain, obj["hash"]), obj[field]))
+    except (ValueError, TypeError, KeyError):
+        return False

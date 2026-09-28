@@ -199,6 +199,8 @@ export class Recorder {
         method: "POST",
         headers,
         body: JSON.stringify(body),
+        // The bearer token must not travel to a host the caller did not name.
+        redirect: "error",
         signal: AbortSignal.timeout((this.options.timeout ?? 5) * 1000),
       });
     } catch (error) {

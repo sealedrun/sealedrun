@@ -41,6 +41,23 @@ afterEach(async () => {
 });
 
 describe("Recorder", () => {
+  test("a redirect is refused, the token never travels", async () => {
+    const lure = createServer((_req, res) => {
+      res.writeHead(307, { Location: `${url}/api/steps` });
+      res.end();
+    });
+    await new Promise<void>((resolve) => lure.listen(0, "127.0.0.1", resolve));
+    const address = lure.address();
+    if (!address || typeof address === "string") throw new Error("no port");
+    try {
+      const recorder = new Recorder(`http://127.0.0.1:${address.port}`, { token: "tok" });
+      await expect(recorder.record("note", "x")).rejects.toBeInstanceOf(RecorderError);
+      expect(posts).toEqual([]);
+    } finally {
+      await new Promise<void>((resolve) => lure.close(() => resolve()));
+    }
+  });
+
   test("record posts body and headers", async () => {
     const recorder = new Recorder(url + "/", { token: "tok", run: "job-1" });
     const record = await recorder.record("tool_call", "db.query", {

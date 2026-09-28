@@ -78,6 +78,7 @@ class RunRow(Base):
     complete: Mapped[bool]
     anchors: Mapped[int]
     labels_sent_to_cloud: Mapped[dict[str, int]] = mapped_column(JSON)
+    labels_self_reported: Mapped[dict[str, int]] = mapped_column(JSON, default=dict)
     run_label: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     last_anchor_at: Mapped[str | None] = mapped_column(String(24), nullable=True)
 

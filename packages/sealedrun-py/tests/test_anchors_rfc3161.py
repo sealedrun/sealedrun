@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 from asn1crypto import tsp
+from cryptography import x509
 from sealedrun import VerificationError, verify_run
 from sealedrun.anchors import rekor, rfc3161
 from sealedrun.anchors.rfc3161 import AnchorError
@@ -122,6 +123,30 @@ def test_verify_root_from_receipt_is_never_trusted(tsa: TestAuthority) -> None:
     assert rfc3161.verify(receipt, URL, trust_for(other)) is False
 
 
+def test_verify_receipt_chain_cannot_smuggle_a_root_under_another_spelling(
+    tsa: TestAuthority,
+) -> None:
+    attacker = TestAuthority("Fake", root_issuer="fake Root")
+    req = rfc3161.request(DIGEST)
+    for include in ("leaf", "chain"):
+        forged = attacker.respond(req.body, include=include)
+        receipt = rfc3161.receipt_from(req, forged, attacker.chain_pems)
+        assert rfc3161.verify(receipt, URL, trust_for(tsa)) is False
+    receipt = rfc3161.receipt_from(req, attacker.respond(req.body), [attacker.root_pem])
+    assert rfc3161.verify(receipt, URL, trust_for(tsa)) is False
+
+
+def test_verify_receipt_chain_only_adds_certificates_a_root_signed(tsa: TestAuthority) -> None:
+    other = TestAuthority("Other")
+    receipt = good_receipt(tsa)
+    receipt["chain"] = [*receipt["chain"], *other.chain_pems]
+    assert rfc3161.verify(receipt, URL, trust_for(tsa)) is True
+    trusted = x509.load_pem_x509_certificate(tsa.root_pem.encode())
+    offered = [x509.load_pem_x509_certificate(pem.encode()) for pem in receipt["chain"]]
+    added = rfc3161._issued_under([trusted], offered)
+    assert [c.subject.rfc4514_string() for c in added] == ["CN=Test TSA CA"]
+
+
 def test_verify_forged_leaf_in_front_of_the_bag_does_not_help(tsa: TestAuthority) -> None:
     attacker = TestAuthority("Attacker")
     req = rfc3161.request(DIGEST)
@@ -206,6 +231,17 @@ def test_captured_receipt_vectors(case: dict[str, Any]) -> None:
     module = {"rfc3161": rfc3161, "rekor": rekor}[case["type"]]
     receipt = {k: v for k, v in case["receipt"].items() if v is not None}
     assert module.verify(receipt, case["witness"], load_witnesses()) is case["verified"]
+
+
+def load_hostile() -> tuple[list[Witness], list[dict[str, Any]]]:
+    document = json.loads((VECTORS / "anchors" / "hostile.json").read_text())
+    return [Witness.from_json(e) for e in document["trust"]], document["cases"]
+
+
+@pytest.mark.parametrize("case", load_hostile()[1], ids=lambda c: c["name"])
+def test_hostile_receipt_vectors(case: dict[str, Any]) -> None:
+    trust, _ = load_hostile()
+    assert rfc3161.verify(case["receipt"], case["witness"], trust) is case["verified"]
 
 
 def test_reference_run_anchor_is_witness_verified() -> None:

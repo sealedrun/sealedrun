@@ -45,6 +45,7 @@ from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import yaml
 from pydantic import SecretStr
@@ -64,6 +65,22 @@ DEFAULT_AUTH = {
 CREDENTIAL_HEADERS = frozenset(
     {"authorization", "x-api-key", "x-goog-api-key", "api-key", "cookie", "proxy-authorization"}
 )
+
+
+def _check_url(url: Any, where: str) -> str:
+    """Return `url` if it is a bare http(s) URL: no credentials, query or fragment.
+
+    The URL is sealed into every record's `target.endpoint`, so a secret in it would be signed,
+    exported and impossible to remove; credentials belong in `key_env` or `headers`.
+    """
+    if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+        raise UpstreamConfigError(f"{where}: url must be http(s)")
+    parts = urlsplit(url)
+    if parts.username is not None or parts.password is not None:
+        raise UpstreamConfigError(f"{where}: url must not carry credentials; use key_env")
+    if parts.query or parts.fragment:
+        raise UpstreamConfigError(f"{where}: url must not carry a query string or fragment")
+    return url
 
 
 class UpstreamConfigError(ValueError):
@@ -261,8 +278,7 @@ def _parse(entry: Any, env: Mapping[str, str]) -> Upstream:
     key_env = entry.get("key_env")
     headers = entry.get("headers", {})
     client_auth = entry.get("client_auth", "replace")
-    if not isinstance(url, str) or not url.startswith(("http://", "https://")):
-        raise UpstreamConfigError(f"upstream {name}: url must be http(s)")
+    url = _check_url(url, f"upstream {name}")
     if dialect not in DIALECTS:
         raise UpstreamConfigError(f"upstream {name}: dialect must be one of {sorted(DIALECTS)}")
     if location not in LOCATIONS:
@@ -302,8 +318,7 @@ def _parse_mcp(entry: Any, env: Mapping[str, str], what: str = "MCP server") -> 
     headers = entry.get("headers", {})
     client_auth = entry.get("client_auth", "replace")
     where = f"{what} {name}"
-    if not isinstance(url, str) or not url.startswith(("http://", "https://")):
-        raise UpstreamConfigError(f"{where}: url must be http(s)")
+    url = _check_url(url, where)
     if location not in LOCATIONS:
         raise UpstreamConfigError(f"{where}: location must be one of {sorted(LOCATIONS)}")
     if key_env is not None and (not isinstance(key_env, str) or not key_env):

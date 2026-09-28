@@ -16,6 +16,7 @@ from starlette.responses import JSONResponse
 from sealedrun_recorder.db import BundleRow, PayloadRow, RecordRow, RunRow
 from sealedrun_recorder.export import ExportError, build_bundle
 from sealedrun_recorder.importer import import_bundle
+from sealedrun_recorder.limits import BodyTooLargeError, read_body
 from sealedrun_recorder.live import InvalidRecordError, LiveRunError
 from sealedrun_recorder.proxy.core import RUN_HEADER, RUN_LABEL
 from sealedrun_recorder.proxy.labels import LabelsError, header_labels
@@ -25,7 +26,7 @@ SAFE_PAYLOAD_MEDIA_TYPES = frozenset({"application/json", "text/plain", "applica
 
 
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
-SAME_SITE = frozenset({"same-origin", "same-site"})
+SAME_SITE = frozenset({"same-origin"})
 
 
 def require_token(request: Request) -> None:
@@ -44,8 +45,10 @@ def require_token(request: Request) -> None:
 def require_same_site(request: Request) -> None:
     """Refuse state-changing requests that a foreign page made a browser send.
 
-    Every current browser sets Sec-Fetch-Site and a page cannot forge it. A request without the
-    header is not from a browser, so it is let through only with a valid token.
+    Every current browser sets Sec-Fetch-Site and a page cannot forge it. Only `same-origin`
+    passes: `same-site` would let a sibling subdomain post, which matters when the recorder runs
+    without a token. A request without the header is not from a browser, so it is let through
+    only with a valid token.
     """
     if request.method in SAFE_METHODS:
         return
@@ -79,6 +82,7 @@ def get_session(request: Request) -> Any:
 
 
 SessionDep = Annotated[Session, Depends(get_session)]
+INFLATE_FACTOR = 4
 Limit = Annotated[int, Query(ge=1, le=1000)]
 Offset = Annotated[int, Query(ge=0)]
 
@@ -112,12 +116,14 @@ async def upload_bundle(request: Request, file: UploadFile, session: SessionDep)
     run id and seq when verification fails. When trusted Principals are configured, a bundle
     from any other Principal fails verification.
     """
-    limit = request.app.state.settings.max_bundle_bytes
-    archive = await file.read(limit + 1)
-    if len(archive) > limit:
-        raise HTTPException(413, "bundle exceeds size limit")
+    archive = await _read_archive(request, file)
     try:
-        row = import_bundle(session, archive, request.app.state.settings.trust_anchor)
+        row = import_bundle(
+            session,
+            archive,
+            request.app.state.settings.trust_anchor,
+            max_total_bytes=_inflated_limit(request),
+        )
     except VerificationError as error:
         raise HTTPException(
             422,
@@ -126,6 +132,23 @@ async def upload_bundle(request: Request, file: UploadFile, session: SessionDep)
     except (ValueError, KeyError, TypeError) as error:
         raise HTTPException(400, "malformed bundle") from error
     return _bundle_summary(row, request)
+
+
+async def _read_archive(request: Request, file: UploadFile) -> bytes:
+    """Read an uploaded archive up to `max_bundle_bytes`; 413 past it, before or while reading."""
+    limit = request.app.state.settings.max_bundle_bytes
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > limit:
+        raise HTTPException(413, "bundle exceeds size limit")
+    archive = await file.read(limit + 1)
+    if len(archive) > limit:
+        raise HTTPException(413, "bundle exceeds size limit")
+    return archive
+
+
+def _inflated_limit(request: Request) -> int:
+    """Return the most an archive may hold once inflated: `INFLATE_FACTOR` times the cap."""
+    return INFLATE_FACTOR * int(request.app.state.settings.max_bundle_bytes)
 
 
 @router.post("/verify")
@@ -138,12 +161,10 @@ async def verify_only(request: Request, file: UploadFile) -> dict[str, Any]:
     """
     from sealedrun import read_bundle, verify_bundle
 
-    limit = request.app.state.settings.max_bundle_bytes
-    archive = await file.read(limit + 1)
-    if len(archive) > limit:
-        raise HTTPException(413, "bundle exceeds size limit")
+    archive = await _read_archive(request, file)
     try:
-        report = verify_bundle(read_bundle(archive), request.app.state.settings.trust_anchor)
+        bundle = read_bundle(archive, max_total_bytes=_inflated_limit(request))
+        report = verify_bundle(bundle, request.app.state.settings.trust_anchor)
     except VerificationError as error:
         return {
             "ok": False,
@@ -342,13 +363,10 @@ def _unchanged_list() -> Response:
 
 
 async def _read_step(request: Request) -> Step:
-    limit = request.app.state.settings.proxy_max_body_bytes
-    declared = request.headers.get("content-length", "")
-    if declared.isdigit() and int(declared) > limit:
-        raise HTTPException(413, "step exceeds size limit")
-    body = await request.body()
-    if len(body) > limit:
-        raise HTTPException(413, "step exceeds size limit")
+    try:
+        body = await read_body(request, request.app.state.settings.proxy_max_body_bytes)
+    except BodyTooLargeError as error:
+        raise HTTPException(413, "step exceeds size limit") from error
     try:
         step = parse_step(body)
         labels = header_labels(request)
@@ -469,6 +487,7 @@ def _run_summary(row: RunRow, request: Request) -> dict[str, Any]:
         "complete": row.complete,
         "anchors": row.anchors,
         "labels_sent_to_cloud": row.labels_sent_to_cloud,
+        "labels_self_reported": row.labels_self_reported,
         "run_label": row.run_label,
         "last_anchor_at": row.last_anchor_at,
     }

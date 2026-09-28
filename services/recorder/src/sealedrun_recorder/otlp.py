@@ -40,7 +40,8 @@ from opentelemetry.proto.trace.v1.trace_pb2 import Span
 from sealedrun.timeutil import format_timestamp
 from starlette.concurrency import run_in_threadpool
 
-from sealedrun_recorder.live import InvalidRecordError
+from sealedrun_recorder.limits import BodyTooLargeError, parse_json, read_body
+from sealedrun_recorder.live import TARGET_LIMITS, InvalidRecordError
 from sealedrun_recorder.proxy.core import RUN_HEADER, RUN_LABEL, require_proxy_token
 
 PROTOBUF = "application/x-protobuf"
@@ -89,6 +90,7 @@ CLOUD_PROVIDERS = frozenset(
 )
 LOCAL_PROVIDERS = frozenset({"ollama", "llama.cpp", "llamacpp", "vllm", "lmstudio", "localai"})
 SEEN_SPANS = 10_000
+MAX_SPANS = 2000
 
 router = APIRouter(prefix="/otlp", dependencies=[Depends(require_proxy_token)])
 
@@ -112,15 +114,17 @@ async def traces(request: Request) -> Response:
     """Accept an OTLP trace export and record its GenAI spans.
 
     Responds 415 for an unknown content type, 400 for a body that does not decode, 413 for an
-    oversize body; otherwise 200 with an empty `ExportTraceServiceResponse`.
+    oversize body or more than `MAX_SPANS` spans; otherwise 200 with an empty
+    `ExportTraceServiceResponse`.
     """
     media_type = request.headers.get("content-type", "").partition(";")[0].strip().lower()
     if media_type not in (PROTOBUF, JSON):
         raise HTTPException(415, f"content type must be {PROTOBUF} or {JSON}")
     limit = request.app.state.settings.proxy_max_body_bytes
-    body = await request.body()
-    if len(body) > limit:
-        raise HTTPException(413, "export exceeds size limit")
+    try:
+        body = await read_body(request, limit)
+    except BodyTooLargeError as error:
+        raise HTTPException(413, "export exceeds size limit") from error
     try:
         body = decompress(body, request.headers.get("content-encoding", ""), limit)
         export = decode(body, media_type)
@@ -129,7 +133,10 @@ async def traces(request: Request) -> Response:
     label = request.headers.get(RUN_HEADER)
     if label is not None and not RUN_LABEL.match(label):
         raise HTTPException(400, f"{RUN_HEADER} must match {RUN_LABEL.pattern}")
-    rejected, message = await run_in_threadpool(record_spans, request.app, spans_of(export), label)
+    spans = spans_of(export)
+    if len(spans) > MAX_SPANS:
+        raise HTTPException(413, f"export has more than {MAX_SPANS} spans")
+    rejected, message = await run_in_threadpool(record_spans, request.app, spans, label)
     reply = ExportTraceServiceResponse()
     if rejected:
         reply.partial_success.rejected_spans = rejected
@@ -165,7 +172,7 @@ def decode(body: bytes, media_type: str) -> ExportTraceServiceRequest:
     export = ExportTraceServiceRequest()
     try:
         if media_type == JSON:
-            document = json.loads(body.decode())
+            document = parse_json(body.decode())
             Parse(json.dumps(_ids_to_base64(document)), export, ignore_unknown_fields=True)
         else:
             export.ParseFromString(body)
@@ -308,17 +315,17 @@ def map_span(item: OtlpSpan) -> tuple[str, dict[str, Any]] | None:
         return None
     provider = attributes.get("gen_ai.provider.name")
     provider = provider if isinstance(provider, str) and provider else None
-    name = _name(kind, operation, span.name, attributes)
+    name = _name(kind, operation, span.name, attributes)[: TARGET_LIMITS["name"]]
     target: dict[str, Any] = {
         "type": TARGET_TYPES[kind],
         "name": name,
         "location": _location(kind, provider),
     }
     if provider:
-        target["provider"] = provider
+        target["provider"] = provider[: TARGET_LIMITS["provider"]]
     server = attributes.get("server.address")
     if isinstance(server, str) and server:
-        target["endpoint"] = server
+        target["endpoint"] = server[: TARGET_LIMITS["endpoint"]]
     failed = span.status.code == STATUS_ERROR or "error.type" in attributes
     extensions: dict[str, Any] = {"sealedrun.otel": _otel(item, operation)}
     if kind == "llm_call":

@@ -6,10 +6,23 @@ verified against a witness in the shipped trust list, and exits 1 on a failed ch
 
 from __future__ import annotations
 
+import re
 import sys
 
 from sealedrun.bundle import read_bundle, verify_bundle
 from sealedrun.errors import VerificationError
+
+CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
+
+def plain(text: str) -> str:
+    """Replace control characters with `?`.
+
+    An error message may quote an archive path or a field from the bundle under test, and a
+    terminal would obey an escape sequence hidden there, so nothing that steers a terminal is
+    printed.
+    """
+    return CONTROL.sub("?", text)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -24,10 +37,10 @@ def main(argv: list[str] | None = None) -> int:
             bundle = read_bundle(handle)
         report = verify_bundle(bundle, principals or None)
     except VerificationError as error:
-        print(f"FAIL {error}")
+        print(f"FAIL {plain(str(error))}")
         return 1
     except (OSError, ValueError) as error:
-        print(f"FAIL malformed: {error}")
+        print(f"FAIL malformed: {plain(str(error))}")
         return 1
     trust = "principal trusted" if report.principal_trusted else "principal not confirmed"
     print(f"OK bundle {report.bundle_id}: {len(report.runs)} run(s), {trust}")

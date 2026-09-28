@@ -30,6 +30,9 @@ class RekorError(SealedRunError):
     """A log answer that cannot become a receipt."""
 
 
+MAX_INTEGRATED_TIME = 4_102_444_800  # 2100-01-01T00:00:00Z
+
+
 def generate_key() -> ec.EllipticCurvePrivateKey:
     """Return a fresh P-256 anchoring key."""
     return ec.generate_private_key(ec.SECP256R1())
@@ -116,7 +119,7 @@ def verify(receipt: dict[str, Any], witness: str, trust: list[Witness]) -> bool:
         return False
     try:
         return any(_verify_with(receipt, entry) for entry in entries)
-    except (KeyError, TypeError, ValueError, InvalidSignature, OverflowError):
+    except (KeyError, TypeError, ValueError, InvalidSignature, OverflowError, OSError):
         return False
 
 
@@ -146,6 +149,12 @@ def _verify_with(receipt: dict[str, Any], entry: Witness) -> bool:
     )
     integrated = receipt.get("integrated_time")
     set_ = receipt.get("signed_entry_timestamp")
+    # Without the log's time the receipt cannot be placed inside the witness validity window,
+    # so it does not count; a time outside the plausible range is refused before conversion.
+    if not isinstance(integrated, int) or isinstance(integrated, bool):
+        return False
+    if not 0 < integrated < MAX_INTEGRATED_TIME:
+        return False
     if integrated is not None:
         from datetime import UTC, datetime
 

@@ -17,10 +17,11 @@ recorded, marked `truncated` with outcome `error`.
 from __future__ import annotations
 
 import hmac
-import json
+import logging
 import re
 import threading
 import time
+from collections import OrderedDict
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from typing import Any
@@ -31,6 +32,7 @@ from fastapi import HTTPException, Request, Response
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import StreamingResponse
 
+from sealedrun_recorder.limits import BodyTooLargeError, parse_json, read_body, read_reply
 from sealedrun_recorder.live import LiveRunError, LiveRuns
 from sealedrun_recorder.policy import Decision, Rule
 from sealedrun_recorder.proxy.labels import LabelsError, header_labels, label_fields
@@ -45,6 +47,9 @@ NDJSON = "application/x-ndjson"
 TOKEN_HEADER = "x-sealedrun-token"  # noqa: S105
 CLIENT_KEY_HEADERS = (TOKEN_HEADER, "x-api-key", "x-goog-api-key", "api-key")
 CLIENT_CREDENTIALS = ("authorization", "x-api-key", "x-goog-api-key", "api-key")
+MAX_OPEN_RUNS = 1024
+
+log = logging.getLogger("sealedrun.proxy")
 
 BodyFields = Callable[[dict[str, Any]], dict[str, Any]]
 
@@ -140,28 +145,41 @@ class RunGrouper:
         self._live = live
         self._idle = idle_seconds
         self._clock = clock
-        self._runs: dict[str | None, tuple[str, float]] = {}
+        self._runs: OrderedDict[str | None, tuple[str, float]] = OrderedDict()
         self._lock = threading.Lock()
 
     def run_for(self, label: str | None, *, fresh: bool = False) -> str:
-        """Return the run id for `label`, opening a run when none is current or `fresh` is set."""
+        """Return the run for `label`, opening one when none is current, idle, or `fresh` is set.
+
+        An idle run is ended when it is replaced. The grouper remembers at most `MAX_OPEN_RUNS`
+        labels; past that the least recently used run is ended and forgotten, so a caller that
+        invents labels cannot grow the recorder without bound.
+        """
         with self._lock:
             now = self._clock()
             current = self._runs.get(label)
             if current is not None and not fresh:
                 run_id, last_seen = current
-                if label is not None or now - last_seen <= self._idle:
+                if now - last_seen <= self._idle:
                     self._runs[label] = (run_id, now)
+                    self._runs.move_to_end(label)
                     return run_id
-            if current is not None and label is None:
-                try:
-                    self._live.end(current[0])
-                except LiveRunError:
-                    pass
+            if current is not None:
+                self._end_quietly(current[0])
             extensions = {"sealedrun.proxy": {"run_label": label}} if label else None
             run_id = str(self._live.start(extensions=extensions)["run_id"])
             self._runs[label] = (run_id, now)
+            self._runs.move_to_end(label)
+            while len(self._runs) > MAX_OPEN_RUNS:
+                _, (oldest, _) = self._runs.popitem(last=False)
+                self._end_quietly(oldest)
             return run_id
+
+    def _end_quietly(self, run_id: str) -> None:
+        try:
+            self._live.end(run_id)
+        except LiveRunError:
+            pass
 
     def record(self, label: str | None, kind: str, **fields: Any) -> dict[str, Any]:
         """Append a record to the run for `label`.
@@ -245,15 +263,12 @@ async def forward(
         labels = header_labels(request)
     except LabelsError as problem:
         return error(dialect, 400, str(problem))
-    limit = settings.proxy_max_body_bytes
-    declared = request.headers.get("content-length", "")
-    if declared.isdigit() and int(declared) > limit:
-        return error(dialect, 413, "request body exceeds size limit")
-    body = await request.body()
-    if len(body) > limit:
+    try:
+        body = await read_body(request, settings.proxy_max_body_bytes)
+    except BodyTooLargeError:
         return error(dialect, 413, "request body exceeds size limit")
     try:
-        call = json.loads(body)
+        call = parse_json(body)
     except ValueError:
         return error(dialect, 400, "request body must be JSON")
     if not isinstance(call, dict):
@@ -274,7 +289,8 @@ async def forward(
             return error(dialect, 400, f"model {model} is reachable only as: {formats}")
         return error(dialect, 404, f"no upstream configured for model {model}")
     if not upstream.ready(client_credentials(request)):
-        return error(dialect, 503, f"upstream {upstream.name}: {upstream.key_env} is not set")
+        log.error("upstream %s: %s is not set", upstream.name, upstream.key_env)
+        return error(dialect, 503, "upstream is not configured on the recorder")
 
     exchange = Exchange(
         request, operation, upstream, label, model, call, body, streaming, path, labels
@@ -316,9 +332,9 @@ class Exchange:
         headers = upstream_headers(self.request, self.upstream, self.operation.dialect)
         if self.streaming:
             headers["accept"] = f"{self.operation.stream_media_type}, {JSON}"
-            # Streamed chunks are relayed and recorded as received, so ask for them uncompressed:
-            # a gzip stream passed on without its content-encoding header is unreadable.
-            headers["accept-encoding"] = "identity"
+        # Replies are relayed and recorded as received and capped by their real size, so ask
+        # for them uncompressed: a gzip stream passed on without its header is unreadable.
+        headers["accept-encoding"] = "identity"
         return http.build_request(
             "POST",
             self.endpoint,
@@ -328,9 +344,13 @@ class Exchange:
             timeout=self.timeout,
         )
 
+    def _oversize(self) -> tuple[int, bytes]:
+        log.error("upstream %s reply exceeds size limit", self.upstream.name)
+        return 502, self.operation.dialect.error_body(502, "upstream reply exceeds size limit")
+
     def _unreachable(self, failure: httpx.HTTPError) -> tuple[int, bytes]:
-        reason = f"upstream {self.upstream.name} unreachable: {type(failure).__name__}"
-        return 502, self.operation.dialect.error_body(502, reason)
+        log.error("upstream %s unreachable: %s", self.upstream.name, type(failure).__name__)
+        return 502, self.operation.dialect.error_body(502, "upstream unreachable")
 
     async def blocked(self) -> Response:
         """Refuse a call the policy rule blocks: nothing is sent, the refusal is recorded."""
@@ -340,14 +360,23 @@ class Exchange:
         return error(self.operation.dialect, 403, message)
 
     async def buffered(self) -> Response:
-        """Forward a plain call, record the reply and return it."""
+        """Forward a plain call, record the reply and return it.
+
+        The reply is read against the body cap; one that passes it is dropped and answered
+        with 502, and the record says so.
+        """
+        http: httpx.AsyncClient = self.request.app.state.http
         try:
-            reply = await self.request.app.state.http.send(self._build())
-            status, answer = reply.status_code, reply.content
+            reply = await http.send(self._build(), stream=True)
+            status = reply.status_code
             media_type = reply.headers.get("content-type", JSON)
             headers = self.operation.dialect.reply_headers(reply)
+            answer = await read_reply(reply, self.limit)
         except httpx.HTTPError as failure:
             status, answer = self._unreachable(failure)
+            media_type, headers = JSON, {}
+        except BodyTooLargeError:
+            status, answer = self._oversize()
             media_type, headers = JSON, {}
         await self._record(status, answer, media_type)
         return Response(answer, status_code=status, media_type=media_type, headers=headers)
@@ -367,12 +396,14 @@ class Exchange:
         media_type = reply.headers.get("content-type", self.operation.stream_media_type)
         headers = self.operation.dialect.reply_headers(reply)
         if not reply.is_success:
-            answer = await reply.aread()
-            await reply.aclose()
-            await self._record(reply.status_code, answer, media_type)
-            return Response(
-                answer, status_code=reply.status_code, media_type=media_type, headers=headers
-            )
+            status = reply.status_code
+            try:
+                answer = await read_reply(reply, self.limit)
+            except BodyTooLargeError:
+                status, answer = self._oversize()
+                media_type, headers = JSON, {}
+            await self._record(status, answer, media_type)
+            return Response(answer, status_code=status, media_type=media_type, headers=headers)
         return StreamingResponse(
             self._relay(reply, media_type),
             status_code=reply.status_code,
@@ -402,7 +433,14 @@ class Exchange:
         finally:
             with anyio.CancelScope(shield=True):
                 await reply.aclose()
-                await self._record(reply.status_code, b"".join(received), media_type, truncated)
+                try:
+                    await self._record(reply.status_code, b"".join(received), media_type, truncated)
+                except LiveRunError:
+                    log.exception(
+                        "stream to %s not recorded after %d bytes were delivered",
+                        self.upstream.name,
+                        size,
+                    )
 
     async def _record(
         self, status: int, answer: bytes | None, media_type: str, truncated: bool = False
@@ -532,7 +570,7 @@ def ndjson(raw: bytes) -> list[dict[str, Any]]:
 
 def _json_object(body: bytes) -> dict[str, Any] | None:
     try:
-        value = json.loads(body)
+        value = parse_json(body)
     except ValueError:
         return None
     return value if isinstance(value, dict) else None

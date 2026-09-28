@@ -191,7 +191,13 @@ function readArchive(files: Record<string, Uint8Array>): Bundle {
           assertRecord(record);
           return record;
         });
-      bundle.runs.set(path.slice("runs/".length, -".jsonl".length), records);
+      const runId = path.slice("runs/".length, -".jsonl".length);
+      for (const edge of [records[0], records[records.length - 1]]) {
+        if (edge && edge.run_id !== runId) {
+          throw new VerificationError("run", `${path} holds records of run ${edge.run_id}`, runId);
+        }
+      }
+      bundle.runs.set(runId, records);
     } else if (path.startsWith("payloads/")) {
       bundle.payloads.set(payloadKey(path, content, hashAlg), content);
     } else if (path.startsWith("anchors/")) {
@@ -263,6 +269,13 @@ export function verifyBundle(bundle: Bundle, options: VerifyBundleOptions = {}):
     }
     if (report.complete !== entry.complete || report.firstSeq !== entry.first_seq) {
       throw new VerificationError("manifest", "run entry flags do not match records", entry.run_id);
+    }
+    if (records[0] && records[0].hash_alg !== manifest.hash_alg) {
+      throw new VerificationError(
+        "hash_alg",
+        "run hash algorithm differs from the manifest",
+        entry.run_id,
+      );
     }
     return report;
   });

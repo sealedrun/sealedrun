@@ -46,6 +46,18 @@ P = ParamSpec("P")
 R = TypeVar("R")
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Never follow a redirect: the bearer token must not travel to a host we did not name."""
+
+    def redirect_request(
+        self, req: Any, fp: Any, code: int, msg: str, headers: Any, newurl: str
+    ) -> None:
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect())
+
+
 class RecorderError(SealedRunError):
     """The recorder refused the step or could not be reached; `status` is the HTTP code or 0."""
 
@@ -75,10 +87,15 @@ def post_step(
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as reply:  # noqa: S310
+        with _OPENER.open(request, timeout=timeout) as reply:
             answer: dict[str, Any] = json.loads(reply.read() or b"{}")
             return answer
     except urllib.error.HTTPError as error:
+        if 300 <= error.code < 400:
+            raise RecorderError(
+                f"recorder at {public_url(url)} redirected ({error.code}); not followed",
+                error.code,
+            ) from error
         detail = error.read(300).decode(errors="replace")
         raise RecorderError(f"recorder answered {error.code}: {detail}", error.code) from error
     except (urllib.error.URLError, OSError, ValueError) as error:

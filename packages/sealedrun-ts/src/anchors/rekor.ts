@@ -4,6 +4,9 @@ import { sha256 } from "@noble/hashes/sha2.js";
 import { hexDecode, hexEncode } from "../encoding.js";
 import { selectWitnesses, type Witness, witnessCovers } from "../trust.js";
 
+/** 2100-01-01T00:00:00Z: a log time beyond this is not a time. */
+const MAX_INTEGRATED_TIME = 4_102_444_800;
+
 /** `rekor` receipt as stored in an anchor record (SPEC 8.1.2). */
 export interface RekorReceipt {
   digest: string;
@@ -92,7 +95,16 @@ function verifyWith(receipt: RekorReceipt, entry: Witness): boolean {
     return false;
   }
 
-  if (receipt.integrated_time !== undefined) {
+  // Without the log's time the receipt cannot be placed inside the witness validity window.
+  if (
+    receipt.integrated_time === undefined ||
+    !Number.isInteger(receipt.integrated_time) ||
+    receipt.integrated_time <= 0 ||
+    receipt.integrated_time >= MAX_INTEGRATED_TIME
+  ) {
+    return false;
+  }
+  {
     if (!witnessCovers(entry, new Date(receipt.integrated_time * 1000))) return false;
     if (receipt.signed_entry_timestamp === undefined) return false;
     const signed = new TextEncoder().encode(

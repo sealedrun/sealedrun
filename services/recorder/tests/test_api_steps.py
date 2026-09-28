@@ -52,7 +52,6 @@ def _step(**overrides: Any) -> dict[str, Any]:
                 "is_error": False,
                 "tool": "add",
             },
-            "sealedrun.proxy": {"upstream": "calc", "dialect": "mcp", "operation": "tools/call"},
         },
     }
     step.update(overrides)
@@ -299,3 +298,76 @@ def test_human_approval_with_a_human_actor_is_sealed(
     reply = _post(client, api, step)
     assert reply.status_code == 201, reply.text
     assert reply.json()["actor"] == {"type": "human", "id": "reviewer"}
+
+
+# --- provenance ----------------------------------------------------------------------------------
+
+
+def test_every_step_is_marked_self_reported(client: TestClient, api: dict[str, str]) -> None:
+    record = _post(client, api, _step()).json()
+    assert record["extensions"]["sealedrun.step"] == {"source": "self_reported"}
+    tagged = _step(
+        extensions={
+            "sealedrun.step": {"source": "classifier", "via": "my-sdk", "latency_ms": 3.5},
+        }
+    )
+    record = _post(client, api, tagged).json()
+    assert record["extensions"]["sealedrun.step"] == {
+        "source": "self_reported",
+        "via": "my-sdk",
+        "latency_ms": 3.5,
+    }
+
+
+@pytest.mark.parametrize(
+    "extension",
+    [
+        "sealedrun.proxy",
+        "sealedrun.otel",
+        "sealedrun.anchor",
+        "sealedrun.delegation",
+        "sealedrun.imported",
+        "sealedrun.tombstone",
+    ],
+)
+def test_recorder_only_extensions_are_refused_on_steps(
+    client: TestClient, api: dict[str, str], extension: str
+) -> None:
+    reply = _post(client, api, _step(extensions={extension: {}}))
+    assert reply.status_code == 400
+    assert extension in reply.text and "written by the recorder" in reply.text
+
+
+def test_step_label_sources_are_limited_to_the_caller(
+    client: TestClient, api: dict[str, str]
+) -> None:
+    found = _step(
+        data_labels=["pii"],
+        extensions={"sealedrun.labels": {"pii": {"source": "classifier", "confidence": 0.9}}},
+    )
+    reply = _post(client, api, found)
+    assert reply.status_code == 400 and "source must be" in reply.text
+    stated = _step(
+        data_labels=["pii"], extensions={"sealedrun.labels": {"pii": {"source": "manual"}}}
+    )
+    assert _post(client, api, stated).status_code == 201
+    header = _post(client, api, _step(), **{"X-SealedRun-Labels": "nda"}).json()
+    assert header["extensions"]["sealedrun.labels"] == {"nda": {"source": "header"}}
+
+
+def test_self_reported_cloud_labels_are_counted_apart(
+    client: TestClient, api: dict[str, str]
+) -> None:
+    cloud = _step(
+        target={"type": "tool", "name": "search", "location": "cloud"},
+        data_labels=["nda"],
+        outcome="blocked",
+    )
+    run_id = _post(client, api, cloud, **{"X-SealedRun-Run": "prov"}).json()["run_id"]
+    _post(client, api, {**cloud, "outcome": "success"}, **{"X-SealedRun-Run": "prov"})
+    chat = {"model": "gpt-4.1", "messages": [{"role": "user", "content": "x"}]}
+    labelled = {**api, "X-SealedRun-Run": "prov", "X-SealedRun-Labels": "nda"}
+    assert client.post("/v1/chat/completions", json=chat, headers=labelled).status_code == 200
+    summary = client.get(f"/api/runs/{run_id}", headers=api).json()
+    assert summary["labels_sent_to_cloud"] == {"nda": 1}
+    assert summary["labels_self_reported"] == {"nda": 2}

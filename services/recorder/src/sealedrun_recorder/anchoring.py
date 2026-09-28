@@ -19,13 +19,16 @@ import httpx
 from sealedrun.anchors import rekor, rfc3161
 from sealedrun.anchors.rekor import RekorError
 from sealedrun.anchors.rfc3161 import AnchorError
+from starlette.concurrency import run_in_threadpool
 
+from sealedrun_recorder.limits import BodyTooLargeError, parse_json, read_reply
 from sealedrun_recorder.live import LiveRunError, LiveRuns
 from sealedrun_recorder.settings import Settings
 
 log = logging.getLogger("sealedrun.anchoring")
 
 PEM_MARK = "-----BEGIN CERTIFICATE-----"
+WITNESS_REPLY_BYTES = 1024 * 1024
 
 
 class Anchoring:
@@ -47,11 +50,24 @@ class Anchoring:
         return bool(self._urls or self._rekor)
 
     async def loop(self) -> None:
-        """Anchor every open run whose head moved, every `anchor_interval_seconds`."""
+        """Anchor every open run whose head moved, every `anchor_interval_seconds`.
+
+        A failure on one run is logged and the loop goes on; only cancellation ends it.
+        """
         while True:
             await asyncio.sleep(self._interval)
-            for run_id in self._live.open_runs():
-                await self.anchor_run(run_id)
+            try:
+                open_runs = await run_in_threadpool(self._live.open_runs)
+            except Exception:
+                log.exception("anchoring cycle: open runs not listed")
+                continue
+            for run_id in open_runs:
+                try:
+                    await self.anchor_run(run_id)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    log.exception("anchor run=%s failed", run_id)
 
     async def anchor_run(self, run_id: str) -> list[dict[str, Any]]:
         """Anchor the head of `run_id` unless it is already anchored or anchoring is off.
@@ -62,23 +78,37 @@ class Anchoring:
         """
         if not self.enabled:
             return []
-        async with self._busy.setdefault(run_id, asyncio.Lock()):
-            try:
-                seq, head, kind = self._live.head(run_id)
-            except LiveRunError:
-                return []
-            if kind == "anchor":
-                return []
-            written = []
-            if self._urls:
-                receipt, url = await self._timestamp_any(run_id, head)
-                if receipt is not None:
-                    written.append(self._write(run_id, "rfc3161", url, seq, head, receipt))
-            if self._rekor:
-                receipt = await self._publish(run_id, head)
-                if receipt is not None:
-                    written.append(self._write(run_id, "rekor", self._rekor, seq, head, receipt))
-            return [record for record in written if record is not None]
+        lock = self._busy.setdefault(run_id, asyncio.Lock())
+        try:
+            async with lock:
+                return await self._anchor_locked(run_id)
+        finally:
+            if not lock.locked() and self._busy.get(run_id) is lock:
+                del self._busy[run_id]
+
+    async def _anchor_locked(self, run_id: str) -> list[dict[str, Any]]:
+        try:
+            seq, head, kind = await run_in_threadpool(self._live.head, run_id)
+        except LiveRunError:
+            return []
+        if kind == "anchor":
+            return []
+        written = []
+        if self._urls:
+            receipt, url = await self._timestamp_any(run_id, head)
+            if receipt is not None:
+                record = await run_in_threadpool(
+                    self._write, run_id, "rfc3161", url, seq, head, receipt
+                )
+                written.append(record)
+        if self._rekor:
+            receipt = await self._publish(run_id, head)
+            if receipt is not None:
+                record = await run_in_threadpool(
+                    self._write, run_id, "rekor", self._rekor, seq, head, receipt
+                )
+                written.append(record)
+        return [record for record in written if record is not None]
 
     def _write(
         self, run_id: str, type_: str, url: str, seq: int, head: str, receipt: dict[str, Any]
@@ -117,32 +147,45 @@ class Anchoring:
         """Publish the head to the Rekor log as a `hashedrekord`; None when it failed."""
         key = self._live.identity.anchor_key
         public_key = self._live.identity.anchor_public_key
-        signature = rekor.sign_head(key, head)
+        signature = await run_in_threadpool(rekor.sign_head, key, head)
         try:
-            reply = await self._http.post(
+            status, content = await self._fetch(
+                "POST",
                 self._rekor + rekor.ENTRIES_PATH,
                 json=rekor.entry_for(head, signature, public_key),
                 headers={"accept": "application/json"},
-                timeout=self._timeout,
             )
-            if reply.status_code not in (200, 201):
-                raise RekorError(f"log answered {reply.status_code}")
-            return rekor.receipt_from(reply.json(), self._rekor, head, signature, public_key)
-        except (RekorError, httpx.HTTPError, ValueError) as error:
+            if status not in (200, 201):
+                raise RekorError(f"log answered {status}")
+            entry = parse_json(content)
+            return rekor.receipt_from(entry, self._rekor, head, signature, public_key)
+        except (RekorError, httpx.HTTPError, ValueError, BodyTooLargeError) as error:
             log.warning("anchor run=%s rekor=%s: %s", run_id, self._rekor, error)
             return None
 
     async def _timestamp(self, url: str, head: str) -> dict[str, Any]:
         req = rfc3161.request(head)
-        reply = await self._http.post(
-            url,
-            content=req.body,
-            headers={"content-type": rfc3161.MEDIA_TYPE, "accept": "application/timestamp-reply"},
-            timeout=self._timeout,
-        )
-        if reply.status_code != 200:
-            raise AnchorError(f"authority answered {reply.status_code}")
-        return rfc3161.receipt_from(req, reply.content, await self._chain(url))
+        try:
+            status, content = await self._fetch(
+                "POST",
+                url,
+                content=req.body,
+                headers={
+                    "content-type": rfc3161.MEDIA_TYPE,
+                    "accept": "application/timestamp-reply",
+                },
+            )
+        except BodyTooLargeError as error:
+            raise AnchorError(str(error)) from error
+        if status != 200:
+            raise AnchorError(f"authority answered {status}")
+        return rfc3161.receipt_from(req, content, await self._chain(url))
+
+    async def _fetch(self, method: str, url: str, **options: Any) -> tuple[int, bytes]:
+        """Call a witness and read its reply up to `WITNESS_REPLY_BYTES`."""
+        request = self._http.build_request(method, url, timeout=self._timeout, **options)
+        reply = await self._http.send(request, stream=True)
+        return reply.status_code, await read_reply(reply, WITNESS_REPLY_BYTES)
 
     async def _chain(self, url: str) -> list[str]:
         """Return the chain an authority publishes at `<url>/certchain`, or none.
@@ -155,14 +198,15 @@ class Anchoring:
             return cached
         chain: list[str] = []
         try:
-            reply = await self._http.get(f"{url}/certchain", timeout=self._timeout)
-            if reply.status_code == 200 and PEM_MARK in reply.text:
+            status, content = await self._fetch("GET", f"{url}/certchain")
+            text = content.decode("ascii", errors="replace")
+            if status == 200 and PEM_MARK in text:
                 chain = [
                     PEM_MARK + "\n" + part.strip() + "\n"
-                    for part in reply.text.split(PEM_MARK)[1:]
+                    for part in text.split(PEM_MARK)[1:]
                     if part.strip()
                 ]
-        except httpx.HTTPError as error:
+        except (httpx.HTTPError, BodyTooLargeError) as error:
             log.warning("anchor tsa=%s certchain not fetched: %s", url, error)
             return []
         self._chains[url] = chain

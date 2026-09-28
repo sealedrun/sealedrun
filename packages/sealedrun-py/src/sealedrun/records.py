@@ -164,6 +164,22 @@ class RunWriter:
         self._head = record["hash"]
         return record
 
+    def revert(self, record: dict[str, Any]) -> None:
+        """Take back the last sealed record, for example when it could not be stored.
+
+        The chain head returns to the record's `prev_hash` and its `seq` is reused by the next
+        record, so the writer stays in step with what is actually stored. Raises ValueError
+        unless `record` is the last one sealed.
+        """
+        if record["hash"] != self._head:
+            raise ValueError("only the last sealed record can be reverted")
+        if self._records and self._records[-1] is record:
+            self._records.pop()
+        self._seq = record["seq"]
+        self._head = record["prev_hash"]
+        if record["kind"] == "run_end":
+            self.closed = False
+
     def preview(
         self,
         kind: str,
