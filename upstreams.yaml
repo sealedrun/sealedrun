@@ -1,0 +1,14 @@
+# Model providers the recorder's LLM proxy forwards to; read from /data/upstreams.yaml in the image.
+# Keep the ones you use; the reference is services/recorder/upstreams.example.yaml.
+upstreams:
+  - name: ollama
+    url: http://host.docker.internal:11434 # Ollama on the host, started with OLLAMA_HOST=0.0.0.0
+    dialect: ollama
+    location: local
+    models: ["*:*", "*"]
+  - name: openai
+    url: https://api.openai.com/v1
+    dialect: openai
+    key_env: OPENAI_API_KEY
+    location: cloud
+    models: ["gpt-*", "text-embedding-*"]

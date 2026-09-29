@@ -5,7 +5,17 @@ follows Semantic Versioning once 1.0.0 is reached.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-29
+
+Stage 1 complete: the recorder sees every channel an agent uses (LLM proxy, MCP over HTTP and
+stdio, A2A, self-reported steps, OpenTelemetry spans), anchors run heads in external witnesses
+that both verifiers check offline, carries data labels and the first policy rule, and went through
+a threat review and a security scan with all findings fixed. A LangGraph example agent and a
+five-minute path are in `examples/langgraph-mcp`.
+
 ### Added
+
+- `examples/langgraph-mcp`: a LangGraph agent (`create_agent`) with the filesystem MCP server under `sealedrun-mcp-wrap`, models on Ollama or OpenAI through the proxy, its own tests; root README section "Five minutes to a verified run". `docker-compose.yml` mounts the root `upstreams.yaml` (Ollama on the host, OpenAI with `OPENAI_API_KEY`). End-to-end recorder test `test_e2e_agent.py`: one agent turn through the LLM and MCP proxies with fake servers, exported and verified by the Python and the TypeScript verifier.
 
 - Security pass, witness verification (Claude Security scan 2026-09-28, 13 findings, all fixed): the Python `rfc3161` verifier adds a receipt's `chain` certificates to the trust store only when their signatures lead back to a trust-list root (the library trusts everything it is handed, and a self-issued authority spelt `CN=Fake` / issuer `CN=fake` slipped past the old name comparison); the TypeScript verifier matches the signer certificate byte for byte as pkijs does, requires the certificate pkijs verified to be that signer (a decoy with the same serial value in a longer encoding no longer lends its time-stamping key usage to another certificate), builds paths only through authorities signed under a root (two authorities that issued each other made path building loop forever) and refuses tokens with more than 16 certificates. New vectors `spec/vectors/anchors/hostile.json` (generator `packages/sealedrun-py/tests/make_hostile_anchors.py`) cover all three. Inspector: witness verdicts are keyed per run and record (two runs may repeat a record id), a `rekor` anchor shows the log's `integrated_time` and never a `gen_time` written into the record, and for a verified receipt the witness name, root subject and public log link come from the trust entry that verified it, never from the record's `witness` or `log_url` (also removes a quadratic regex on that field).
 - Security pass, recorder and CLI: requests carrying an `X-Forwarded-Host` outside `SEALEDRUN_ALLOWED_HOSTS` are refused (400), so the Next dev server's `/api` rewrite, which replaces the Host header, no longer lets a DNS-rebound page reach a token-less recorder; A2A sub-paths may hold only plain segments (letters, digits, `.-_~:`), no percent-encoding or `;`, so `%252e%252e` and `..;` never reach the agent; upstream, MCP server and A2A agent URLs with credentials, a query string or a fragment are refused at start (they would be sealed into every record's `target.endpoint`); `python -m sealedrun` replaces control characters in what it prints (an archive path could carry a terminal escape that repaints `FAIL` as `OK`), and the manifest `files` pattern allows printable ASCII only.

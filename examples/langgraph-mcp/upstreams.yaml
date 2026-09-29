@@ -1,0 +1,13 @@
+# Upstreams for the demo recorder. Keep the one you use.
+upstreams:
+  - name: ollama
+    url: http://127.0.0.1:11434
+    dialect: ollama
+    location: local
+    models: ["*:*", "*"]
+  - name: openai
+    url: https://api.openai.com/v1
+    dialect: openai
+    key_env: OPENAI_API_KEY
+    location: cloud
+    models: ["gpt-*"]

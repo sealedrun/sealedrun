@@ -13,7 +13,7 @@ from sealedrun.keys import PROFILES, KeySet, PrivateKeySet
 from sealedrun.records import RunWriter, payload_ref
 from sealedrun.verify import RunReport, verify_run
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 __all__ = [
     "PROFILES",

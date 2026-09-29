@@ -1,6 +1,6 @@
 # SealedRun Record Specification
 
-Version 0.1.0-draft · 2026-09-17 · License: CC-BY-4.0
+Version 0.1.0-draft · 2026-09-29 · License: CC-BY-4.0
 
 The SealedRun Record is a format for a tamper-evident, signed, append-only record of what an AI agent did: which
 model it called, which tool it invoked, what data left the host, where it went, and why a policy
