@@ -1,0 +1,2 @@
+SealedRun demo notes: this folder holds a tiny LangGraph agent. Every model call and every
+file the agent reads through the filesystem MCP server is sealed into one signed run.

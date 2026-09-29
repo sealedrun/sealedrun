@@ -5,8 +5,10 @@ call, memory access, policy decision, human approval — becomes a signed record
 hash chain. Records are exported as an evidence bundle that anyone can verify offline, without
 trusting the operator.
 
-Status: early development. 0.2.0 adds the recorder as a live LLM proxy (OpenAI, Anthropic,
-Ollama and Gemini wire formats) on top of the Stage 0 specification, libraries and Inspector.
+Status: early development. 0.3.0 records every channel of an agent: LLM proxy (OpenAI, Anthropic,
+Ollama and Gemini wire formats), MCP servers (HTTP proxy and stdio wrapper), A2A agents, self-reported
+steps from the SDKs and OpenTelemetry GenAI spans, anchored in Sigstore Rekor and RFC 3161 witnesses
+that both verifiers check offline, after a security pass over the whole surface.
 
 ## Why
 
@@ -27,6 +29,22 @@ as a bundle that any third party verifies offline.
    **Bundle**. The verifier recomputes everything and reports the first failing check and seq.
 
 Read [SPEC.md](SPEC.md) for the format and [TRUST.md](TRUST.md) for what a bundle proves.
+
+## Five minutes to a verified run
+
+```bash
+git clone https://github.com/sealedrun/sealedrun && cd sealedrun
+SEALEDRUN_API_TOKEN=change-me docker compose up -d                # recorder + Inspector on :8080
+cd examples/langgraph-mcp && uv sync && SEALEDRUN_TOKEN=change-me uv run agent.py
+```
+
+The agent (LangGraph `create_agent`) asks a model what `notes.txt` is about; the model goes
+through the recorder's proxy and the filesystem MCP server runs under `sealedrun-mcp-wrap`, so
+model and tool calls land in one run. Export it and verify it with the CLI, `@sealedrun/core`
+or the Inspector at http://127.0.0.1:8080; the walk-through is in
+[examples/langgraph-mcp](examples/langgraph-mcp/README.md). The compose file mounts
+`upstreams.yaml` (Ollama on the host at `host.docker.internal`, which needs
+`OLLAMA_HOST=0.0.0.0`, and OpenAI with `OPENAI_API_KEY`); edit it for your providers.
 
 ## Quick start (Python)
 
@@ -71,7 +89,7 @@ print(report.complete, report.labels_sent_to_cloud)
 ```bash
 pip install sealedrun              # Python library: write, read and verify records and bundles
 npm install @sealedrun/core        # TypeScript verifier, runs in Node.js and in the browser
-docker run --rm -p 127.0.0.1:8080:8080 ghcr.io/sealedrun/sealedrun:0.2.0   # recorder + Inspector
+docker run --rm -p 127.0.0.1:8080:8080 ghcr.io/sealedrun/sealedrun:0.3.0   # recorder + Inspector
 ```
 
 Releases are published from GitHub Actions through PyPI and npm trusted publishing; both registries
@@ -117,7 +135,7 @@ verifies it. "Store in recorder" keeps it on the server.
 > the failure class; that detail goes to the recorder's log, and the access log drops query
 > strings, so a `?key=` token never lands in a log line.
 
-## Record live traffic and export it (unreleased, on `main`)
+## Record live traffic and export it
 
 The recorder is also an LLM proxy. Point an agent's SDK at it, and every model call becomes a
 signed record in a live run; export the run as a bundle at any time.

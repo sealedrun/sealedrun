@@ -6,7 +6,11 @@ services:
       - "127.0.0.1:8080:8080"
     volumes:
       - sealedrun-data:/data
+      - ./upstreams.yaml:/data/upstreams.yaml:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       SEALEDRUN_DATABASE_URL: ${SEALEDRUN_DATABASE_URL:-}
       SEALEDRUN_API_TOKEN: ${SEALEDRUN_API_TOKEN:-}
       SEALEDRUN_TRUSTED_PRINCIPALS: ${SEALEDRUN_TRUSTED_PRINCIPALS:-[]}
