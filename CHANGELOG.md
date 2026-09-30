@@ -5,6 +5,10 @@ follows Semantic Versioning once 1.0.0 is reached.
 
 ## [Unreleased]
 
+### Fixed
+
+- A data volume written by 0.2.x opens on the current release: 0.3.0 answered every `/api/runs` call with 500 (`no such column: runs.labels_self_reported`) because the two columns it added to the runs table were never added to an existing database. At start the recorder now adds missing columns (`ensure_schema`), fills required ones with the model default, creates their indexes and logs the columns added; nothing is dropped or retyped. SQLite and PostgreSQL.
+
 ## [0.3.0] - 2026-09-29
 
 Stage 1 complete: the recorder sees every channel an agent uses (LLM proxy, MCP over HTTP and
