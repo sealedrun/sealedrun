@@ -5,6 +5,10 @@ follows Semantic Versioning once 1.0.0 is reached.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-09-30
+
+Patch release: a recorder started on a data volume written by 0.2.x works again, and a `record_id` may not repeat across the runs of a bundle.
+
 ### Changed
 
 - A `record_id` may not repeat across the runs of a bundle (SPEC 5.1, 13.2 step 3). `verify_bundle` / `verifyBundle` fail with check `record_id` at the later record, runs taken in manifest order; until now only a repeat inside one run was refused, while `anchors/<record_id>.json` names an anchor record by that id alone, so two runs sharing an id left it open which record a receipt file belonged to. New vectors `spec/vectors/bundle/duplicate-record-id-across-runs.zip` and, as the accepted counterpart, `two-runs.zip`. The recorder refuses such an upload (422). Both verifiers.

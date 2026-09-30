@@ -1,6 +1,6 @@
 [project]
 name = "sealedrun"
-version = "0.3.0"
+version = "0.3.1"
 description = "SealedRun Record: canonicalization, hash chain, hybrid signatures and evidence bundles"
 readme = "README.md"
 license = "Apache-2.0"
