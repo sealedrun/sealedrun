@@ -1,5 +1,5 @@
 /** Version of this package, not of the specification. */
-export const VERSION = "0.3.0";
+export const VERSION = "0.3.1";
 
 export { canonicalize, canonicalBytes, type Json } from "./canonical.js";
 export { b64urlDecode, b64urlEncode, hexDecode, hexEncode } from "./encoding.js";
