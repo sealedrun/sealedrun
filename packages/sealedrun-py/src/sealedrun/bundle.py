@@ -328,6 +328,7 @@ def verify_bundle(
                 "hash_alg", "run hash algorithm differs from the manifest", entry["run_id"]
             )
         reports.append(report)
+    _check_record_ids(bundle)
     _check_anchor_files(bundle)
     return BundleReport(
         manifest["bundle_id"],
@@ -336,6 +337,21 @@ def verify_bundle(
         manifest["exporter"]["agent_id"],
         trusted_principals is not None,
     )
+
+
+def _check_record_ids(bundle: Bundle) -> None:
+    """Refuse a `record_id` that repeats across the runs of the bundle (SPEC 13.2 step 3)."""
+    seen: set[str] = set()
+    for entry in bundle.manifest["runs"]:
+        for record in bundle.runs[entry["run_id"]]:
+            if record["record_id"] in seen:
+                raise VerificationError(
+                    "record_id",
+                    "record_id repeats across the runs of the bundle",
+                    entry["run_id"],
+                    record["seq"],
+                )
+            seen.add(record["record_id"])
 
 
 def _check_anchor_files(bundle: Bundle) -> None:

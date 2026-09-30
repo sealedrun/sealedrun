@@ -1,4 +1,9 @@
 {
+  "duplicate-record-id-across-runs.zip": {
+    "check": "record_id",
+    "ok": false,
+    "seq": 0
+  },
   "no-payloads.zip": {
     "check": "payload",
     "ok": false,
@@ -36,6 +41,15 @@
   "too-many-delegations.zip": {
     "check": "schema",
     "ok": false
+  },
+  "two-runs.zip": {
+    "complete": true,
+    "ok": true,
+    "records": 9,
+    "runs": 2,
+    "trusted_principals": [
+      "qJtRVbgIsIjNNo6VuDr6nQ50Wj3rwEAAuR2e385pby8"
+    ]
   },
   "unknown-principal.zip": {
     "check": "trust",

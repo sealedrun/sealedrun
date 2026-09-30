@@ -63,6 +63,25 @@ def test_tampered_bundle_rejected(client: TestClient, upload: Any, vectors: Path
     assert client.get("/api/bundles").json() == []
 
 
+def test_bundle_repeating_a_record_id_across_runs_rejected(
+    client: TestClient, upload: Any, vectors: Path
+) -> None:
+    data = (vectors / "duplicate-record-id-across-runs.zip").read_bytes()
+    response = upload(client, "/api/bundles", data)
+    assert response.status_code == 422
+    assert response.json()["detail"]["check"] == "record_id"
+    assert client.get("/api/bundles").json() == []
+    assert client.get("/api/runs").json() == []
+    verdict = upload(client, "/api/verify", data).json()
+    assert (verdict["ok"], verdict["check"], verdict["seq"]) == (False, "record_id", 0)
+
+
+def test_bundle_with_two_runs_accepted(client: TestClient, upload: Any, vectors: Path) -> None:
+    data = (vectors / "two-runs.zip").read_bytes()
+    assert upload(client, "/api/bundles", data).status_code == 201
+    assert len(client.get("/api/runs").json()) == 2
+
+
 def test_verify_endpoint(client: TestClient, valid_zip: bytes, upload: Any, vectors: Path) -> None:
     ok = upload(client, "/api/verify", valid_zip).json()
     assert ok["ok"] is True

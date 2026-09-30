@@ -175,6 +175,40 @@ describe("bundles", () => {
     }
     expectFailure(() => verifyBundle(readBundle(data), options), c.check!, c.seq);
   });
+  test("a record id repeated across runs names the later run", () => {
+    const data = new Uint8Array(
+      readFileSync(join(VECTORS, "bundle", "duplicate-record-id-across-runs.zip")),
+    );
+    const bundle = readBundle(data);
+    let failure: unknown;
+    try {
+      verifyBundle(bundle);
+    } catch (e) {
+      failure = e;
+    }
+    expect(failure).toBeInstanceOf(VerificationError);
+    const error = failure as VerificationError;
+    expect([error.check, error.runId, error.seq]).toEqual([
+      "record_id",
+      bundle.manifest.runs[1]!.run_id,
+      0,
+    ]);
+    expect(error.message).toContain("across the runs");
+  });
+  test("each run of the duplicate bundle verifies on its own", () => {
+    const data = new Uint8Array(
+      readFileSync(join(VECTORS, "bundle", "duplicate-record-id-across-runs.zip")),
+    );
+    const bundle = readBundle(data);
+    for (const records of bundle.runs.values()) {
+      expect(verifyRun(records, bundle.delegations).complete).toBe(true);
+    }
+  });
+  test("two runs with record ids of their own verify", () => {
+    const data = new Uint8Array(readFileSync(join(VECTORS, "bundle", "two-runs.zip")));
+    const report = verifyBundle(readBundle(data));
+    expect(report.runs.map((r) => r.recordCount)).toEqual([9, 2]);
+  });
   test("unknown principal without a trust anchor is integrity only", () => {
     const data = new Uint8Array(readFileSync(join(VECTORS, "bundle", "unknown-principal.zip")));
     const report = verifyBundle(readBundle(data));
