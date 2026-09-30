@@ -2,11 +2,22 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, ForeignKey, LargeBinary, String, create_engine, event
+from sqlalchemy import (
+    JSON,
+    Column,
+    ForeignKey,
+    LargeBinary,
+    String,
+    create_engine,
+    event,
+    inspect,
+    text,
+)
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import (
     DeclarativeBase,
@@ -16,6 +27,8 @@ from sqlalchemy.orm import (
     relationship,
     sessionmaker,
 )
+
+log = logging.getLogger("sealedrun.recorder")
 
 
 class Base(DeclarativeBase):
@@ -120,8 +133,66 @@ class PayloadRow(Base):
     body: Mapped[bytes] = mapped_column(LargeBinary)
 
 
+def _default_value(column: Column[Any]) -> Any:
+    """Return the value the model gives a column when a row does not set it."""
+    default = column.default
+    if default is None or not (default.is_scalar or default.is_callable):
+        raise RuntimeError(
+            f"database upgrade: {column.table.name}.{column.name} is required and has no default"
+        )
+    return default.arg(None) if default.is_callable else default.arg  # type: ignore[attr-defined]
+
+
+def ensure_schema(engine: Engine) -> list[str]:
+    """Add the columns the models have and an older database lacks.
+
+    A database written by an earlier release keeps its rows: each missing column is added,
+    rows that predate a required column get the model's default, and indexes on the new
+    columns are created. Columns are never dropped, renamed or retyped. Returns the columns
+    added as `table.column`.
+    """
+    added: list[str] = []
+    quote = engine.dialect.identifier_preparer
+    with engine.begin() as connection:
+        existing = {
+            table.name: {column["name"] for column in inspect(connection).get_columns(table.name)}
+            for table in Base.metadata.sorted_tables
+        }
+        for table in Base.metadata.sorted_tables:
+            missing = [
+                column for column in table.columns if column.name not in existing[table.name]
+            ]
+            for column in missing:
+                name = quote.format_table(table)
+                connection.execute(
+                    text(
+                        f"ALTER TABLE {name} ADD COLUMN {quote.format_column(column)} "
+                        f"{column.type.compile(dialect=engine.dialect)}"
+                    )
+                )
+                if not column.nullable:
+                    connection.execute(
+                        table.update()
+                        .where(column.is_(None))
+                        .values({column: _default_value(column)})
+                    )
+                    if engine.dialect.name != "sqlite":
+                        connection.execute(
+                            text(
+                                f"ALTER TABLE {name} ALTER COLUMN {quote.format_column(column)} "
+                                "SET NOT NULL"
+                            )
+                        )
+                added.append(f"{table.name}.{column.name}")
+            names = {column.name for column in missing}
+            for index in table.indexes:
+                if names & {column.name for column in index.columns}:
+                    index.create(connection, checkfirst=True)
+    return added
+
+
 def make_engine(url: str) -> Engine:
-    """Create the engine and any missing tables.
+    """Create the engine, any missing tables and any columns an older database lacks.
 
     SQLite connections get WAL journaling and foreign key enforcement, and may be used from
     any thread because FastAPI runs sync routes in a thread pool.
@@ -137,6 +208,9 @@ def make_engine(url: str) -> Engine:
             connection.execute("PRAGMA foreign_keys=ON")
 
     Base.metadata.create_all(engine)
+    added = ensure_schema(engine)
+    if added:
+        log.warning("database upgraded, columns added: %s", ", ".join(added))
     return engine
 
 
