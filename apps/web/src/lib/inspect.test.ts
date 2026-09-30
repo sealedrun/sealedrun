@@ -1,7 +1,10 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import type { SealedRunRecord } from "@sealedrun/core";
 import { describe, expect, test } from "vitest";
 
-import { isSelfReported, recordKey, summarize, witnessResults } from "./inspect";
+import { isSelfReported, recordKey, summarize, verifyLocally, witnessResults } from "./inspect";
 
 function record(extensions?: SealedRunRecord["extensions"]): SealedRunRecord {
   return {
@@ -97,6 +100,30 @@ describe("witnessResults", () => {
     const results = await witnessResults([one, two]);
     expect([...results.keys()]).toEqual(["run-1/r", "run-2/r"]);
     expect(results.get(recordKey(one))).toEqual({ verified: false });
+  });
+});
+
+describe("verifyLocally", () => {
+  test("a record id repeated across runs is a failure naming the later run", async () => {
+    const name = "duplicate-record-id-across-runs.zip";
+    const path = join(
+      import.meta.dirname,
+      "..",
+      "..",
+      "..",
+      "..",
+      "spec",
+      "vectors",
+      "bundle",
+      name,
+    );
+    const result = await verifyLocally(name, new Uint8Array(readFileSync(path)));
+    expect(result.report).toBeNull();
+    expect(result.failure).toMatchObject({
+      check: "record_id",
+      runId: result.bundle?.manifest.runs[1]?.run_id,
+      seq: 0,
+    });
   });
 });
 

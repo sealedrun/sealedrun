@@ -279,6 +279,7 @@ export function verifyBundle(bundle: Bundle, options: VerifyBundleOptions = {}):
     }
     return report;
   });
+  checkRecordIds(bundle);
   checkAnchorFiles(bundle);
   return {
     bundleId: manifest.bundle_id,
@@ -287,6 +288,24 @@ export function verifyBundle(bundle: Bundle, options: VerifyBundleOptions = {}):
     exporterAgentId: manifest.exporter.agent_id,
     principalTrusted: trusted !== undefined,
   };
+}
+
+/** Requires that no `record_id` repeats across the runs of the bundle (SPEC 13.2 step 3). */
+function checkRecordIds(bundle: Bundle): void {
+  const seen = new Set<string>();
+  for (const entry of bundle.manifest.runs) {
+    for (const record of bundle.runs.get(entry.run_id) ?? []) {
+      if (seen.has(record.record_id)) {
+        throw new VerificationError(
+          "record_id",
+          "record_id repeats across the runs of the bundle",
+          entry.run_id,
+          record.seq,
+        );
+      }
+      seen.add(record.record_id);
+    }
+  }
 }
 
 /** Requires every `anchors/<record_id>.json` to be the receipt of that anchor record (SPEC 13). */

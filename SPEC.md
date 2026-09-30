@@ -152,7 +152,7 @@ The `signatures` object maps each `sig_alg` of the signer's key set to a base64u
 | Field              | Type        | Req | Description                                                                       |
 | ------------------ | ----------- | --- | --------------------------------------------------------------------------------- |
 | `spec_version`     | string      | M   | `"0.1"`                                                                           |
-| `record_id`        | uuid        | M   | Unique id of the record                                                           |
+| `record_id`        | uuid        | M   | Unique id of the record; never repeats within a Run or a bundle                   |
 | `run_id`           | uuid        | M   | Run this record belongs to                                                        |
 | `seq`              | integer ≥ 0 | M   | Position in the Run. Contiguous, starts at 0                                      |
 | `occurred_at`      | timestamp   | M   | Set by the recorder's clock, never by the caller                                  |
@@ -685,7 +685,9 @@ the bundle.
    continues, and the report MUST state that the Principal was not authenticated.
 3. For each run: check `seq` contiguity, `prev_hash` linkage, `hash` recomputation, agent
    signatures, delegation validity at `occurred_at`, `run_start` binding, absence of records after
-   `run_end`.
+   `run_end`. A `record_id` MUST NOT repeat within a run, nor across the runs of the bundle
+   (`anchors/<record_id>.json` names a record by that id alone); otherwise fail with check
+   `record_id` at the later record, runs taken in manifest order.
 4. For each record with a payload present: recompute body digests.
 5. For each anchor record: check `anchored_hash` against the run; verify the witness proof as in
    8.4 when the witness is in the trust list; optionally re-query the witness.
@@ -713,14 +715,17 @@ implementations can prove conformance:
 - `chains/*.jsonl` with `expected.json`: negative runs (`tampered-field`,
   `resigned-by-other-key`, `resigned-with-agent-key`, `gap-in-seq`, `reordered`,
   `broken-prev-hash`, `record-after-run-end`, `expired-delegation`, `bad-anchor`,
-  `receipt-digest-mismatch`,
-  `malformed-anchor-extension`) and the check
+  `receipt-digest-mismatch`, `malformed-anchor-extension`, `duplicate-record-id`) and the check
   name and seq at which a verifier MUST fail.
 - `bundle/unknown-principal.zip`: consistent and correctly signed end to end, but by the
   `attacker` Principal. `expected.json` lists `trusted_principals`; a verifier given that set MUST
   fail with check `trust`, and without it MUST report the Principal as not authenticated.
 - `bundle/swapped-anchor-receipt.zip`: the `anchors/` file is not the receipt of its anchor
   record; check `anchor`.
+- `bundle/duplicate-record-id-across-runs.zip`: two runs, each valid on its own, where the second
+  reuses record ids of the first; check `record_id` at seq 0 of the second run.
+- `bundle/two-runs.zip`: the same two runs with record ids of their own; a verifier MUST accept it
+  and report two runs.
 - `bundle/open-run.zip`: the same run exported before its `run_end`; a verifier MUST accept it
   and report `complete: false`.
 - `bundle/valid.zip`, `tampered-payload.zip`, `tampered-record.zip`, `poisoned-payload-name.zip`,

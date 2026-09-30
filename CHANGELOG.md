@@ -5,6 +5,10 @@ follows Semantic Versioning once 1.0.0 is reached.
 
 ## [Unreleased]
 
+### Changed
+
+- A `record_id` may not repeat across the runs of a bundle (SPEC 5.1, 13.2 step 3). `verify_bundle` / `verifyBundle` fail with check `record_id` at the later record, runs taken in manifest order; until now only a repeat inside one run was refused, while `anchors/<record_id>.json` names an anchor record by that id alone, so two runs sharing an id left it open which record a receipt file belonged to. New vectors `spec/vectors/bundle/duplicate-record-id-across-runs.zip` and, as the accepted counterpart, `two-runs.zip`. The recorder refuses such an upload (422). Both verifiers.
+
 ### Fixed
 
 - A data volume written by 0.2.x opens on the current release: 0.3.0 answered every `/api/runs` call with 500 (`no such column: runs.labels_self_reported`) because the two columns it added to the runs table were never added to an existing database. At start the recorder now adds missing columns (`ensure_schema`), fills required ones with the model default, creates their indexes and logs the columns added; nothing is dropped or retyped. SQLite and PostgreSQL.

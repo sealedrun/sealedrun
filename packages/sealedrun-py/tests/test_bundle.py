@@ -194,3 +194,78 @@ def test_open_run_exports_incomplete(
     assert report.runs[0].complete is False
     assert report.runs[0].record_count == 2
     assert report.principal_trusted
+
+
+def _two_runs(
+    agent: PrivateKeySet,
+    principal: PrivateKeySet,
+    delegation: dict[str, Any],
+    first_ids: Any,
+    second_ids: Any,
+) -> tuple[bytes, str]:
+    """Bundle two started-and-ended runs; return the archive and the second run's id."""
+    from sealedrun import RunWriter, write_bundle
+
+    runs = []
+    for number, ids in enumerate((first_ids, second_ids)):
+        writer = RunWriter(
+            agent, delegation, run_id=f"0192b3c4-5d6e-7f80-9a1b-0000000000a{number}", id_factory=ids
+        )
+        writer.start()
+        writer.end()
+        runs.append(writer.records)
+    out = io.BytesIO()
+    write_bundle(
+        out,
+        exporter=agent,
+        software="test/0",
+        delegations=[delegation],
+        runs=runs,
+        principal=principal,
+    )
+    return out.getvalue(), runs[1][0]["run_id"]
+
+
+def _counter(start: int) -> Any:
+    numbers = iter(range(start, start + 100))
+    return lambda: f"0192b3c4-5d6e-7f80-9a1b-{next(numbers):012x}"
+
+
+def test_record_id_repeating_across_runs_fails(
+    agent: PrivateKeySet, principal: PrivateKeySet, delegation: dict[str, Any]
+) -> None:
+    data, second = _two_runs(agent, principal, delegation, _counter(1), _counter(1))
+    with pytest.raises(VerificationError, match="across the runs") as info:
+        verify_bundle(read_bundle(data))
+    assert (info.value.check, info.value.run_id, info.value.seq) == ("record_id", second, 0)
+
+
+def test_record_id_shared_by_last_records_is_reported_at_that_seq(
+    agent: PrivateKeySet, principal: PrivateKeySet, delegation: dict[str, Any]
+) -> None:
+    data, second = _two_runs(agent, principal, delegation, _counter(1), _counter(2))
+    with pytest.raises(VerificationError) as info:
+        verify_bundle(read_bundle(data))
+    assert (info.value.check, info.value.run_id, info.value.seq) == ("record_id", second, 0)
+    data, second = _two_runs(agent, principal, delegation, _counter(2), _counter(1))
+    with pytest.raises(VerificationError) as info:
+        verify_bundle(read_bundle(data))
+    assert (info.value.check, info.value.run_id, info.value.seq) == ("record_id", second, 1)
+
+
+def test_two_runs_with_their_own_record_ids_pass(
+    agent: PrivateKeySet, principal: PrivateKeySet, delegation: dict[str, Any]
+) -> None:
+    data, _ = _two_runs(agent, principal, delegation, _counter(1), _counter(50))
+    report = verify_bundle(read_bundle(data))
+    assert [r.record_count for r in report.runs] == [2, 2]
+
+
+def test_record_id_repeating_inside_one_run_keeps_the_run_error(
+    agent: PrivateKeySet, principal: PrivateKeySet, delegation: dict[str, Any]
+) -> None:
+    same = "0192b3c4-5d6e-7f80-9a1b-000000000001"
+    data, _ = _two_runs(agent, principal, delegation, lambda: same, _counter(50))
+    with pytest.raises(VerificationError, match="within the run") as info:
+        verify_bundle(read_bundle(data))
+    assert (info.value.check, info.value.seq) == ("record_id", 1)

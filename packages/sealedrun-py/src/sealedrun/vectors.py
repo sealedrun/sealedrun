@@ -47,6 +47,7 @@ START = datetime(2026, 9, 16, 12, 0, tzinfo=UTC)
 UUID_PREFIX = "0192b3c4-5d6e-7f80-9a1b-"
 DELEGATION_ID = UUID_PREFIX + "0000000000d0"
 RUN_ID = UUID_PREFIX + "0000000000a0"
+SECOND_RUN_ID = UUID_PREFIX + "0000000000a1"
 BUNDLE_ID = UUID_PREFIX + "0000000000b0"
 SEED_DERIVATION = (
     "seed = utf8('<name>:<sig_alg>') right-padded with 0x00 to 32 bytes; "
@@ -586,11 +587,12 @@ def bundle_bytes(
     *,
     with_payloads: bool = True,
     receipt_override: dict[str, Any] | None = None,
+    more_runs: list[list[dict[str, Any]]] | None = None,
 ) -> bytes:
     """Export one run as a bundle with fixed id and creation time and return the zip bytes.
 
     `receipt_override` replaces every anchor receipt file, to build a bundle whose receipt
-    differs from its anchor record.
+    differs from its anchor record. `more_runs` are written after `records`, in that order.
     """
     anchors = {
         r["record_id"]: receipt_override or r["extensions"]["sealedrun.anchor"]["receipt"]
@@ -603,7 +605,7 @@ def bundle_bytes(
         exporter=agent,
         software="sealedrun-vectors/0.1.0",
         delegations=[delegation],
-        runs=[records],
+        runs=[records, *(more_runs or [])],
         payloads=payload_map(delegation["hash_alg"]) if with_payloads else {},
         principal=principal,
         anchors=anchors,
@@ -611,6 +613,20 @@ def bundle_bytes(
         created_at="2026-09-16T13:00:00.000Z",
     )
     return out.getvalue()
+
+
+def second_run(
+    agent: PrivateKeySet, delegation: dict[str, Any], *, reuse_ids: bool
+) -> list[dict[str, Any]]:
+    """Write a second, valid two-record run.
+
+    With `reuse_ids` its record ids repeat those of the reference run, otherwise they are its own.
+    """
+    ids = Ids() if reuse_ids else Ids(start=0x100)
+    writer = RunWriter(agent, delegation, run_id=SECOND_RUN_ID, clock=Clock(), id_factory=ids)
+    writer.start()
+    writer.end()
+    return writer.records
 
 
 def poison_payload_name(data: bytes, exporter: PrivateKeySet, principal: PrivateKeySet) -> bytes:
@@ -914,6 +930,24 @@ def generate(spec_dir: Path) -> None:
     (bundle_dir / "no-payloads.zip").write_bytes(
         bundle_bytes(agent, principal, delegation, run.records, with_payloads=False)
     )
+    (bundle_dir / "duplicate-record-id-across-runs.zip").write_bytes(
+        bundle_bytes(
+            agent,
+            principal,
+            delegation,
+            run.records,
+            more_runs=[second_run(agent, delegation, reuse_ids=True)],
+        )
+    )
+    (bundle_dir / "two-runs.zip").write_bytes(
+        bundle_bytes(
+            agent,
+            principal,
+            delegation,
+            run.records,
+            more_runs=[second_run(agent, delegation, reuse_ids=False)],
+        )
+    )
     dump(
         bundle_dir / "expected.json",
         {
@@ -931,6 +965,13 @@ def generate(spec_dir: Path) -> None:
                 "complete": False,
                 "trusted_principals": trusted,
             },
+            "two-runs.zip": {
+                "ok": True,
+                "runs": 2,
+                "records": len(run.records),
+                "complete": True,
+                "trusted_principals": trusted,
+            },
             "unknown-principal.zip": {
                 "ok": False,
                 "check": "trust",
@@ -943,6 +984,7 @@ def generate(spec_dir: Path) -> None:
             "too-many-delegations.zip": {"ok": False, "check": "schema"},
             "swapped-anchor-receipt.zip": {"ok": False, "check": "anchor"},
             "no-payloads.zip": {"ok": False, "check": "payload", "seq": 1},
+            "duplicate-record-id-across-runs.zip": {"ok": False, "check": "record_id", "seq": 0},
         },
     )
 
