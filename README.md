@@ -114,6 +114,10 @@ docker compose --profile postgres up -d   # with PostgreSQL; set SEALEDRUN_DATAB
 Open http://localhost:8080, drop a bundle (for example `spec/examples/bundle.zip`) and the browser
 verifies it. "Store in recorder" keeps it on the server.
 
+Upgrading keeps the data: at start the recorder adds the columns a database written by an earlier
+release lacks (SQLite and PostgreSQL) and logs what it added. Going back to an older image on the
+same volume is not supported.
+
 > **No authentication by default.** The recorder listens on `127.0.0.1` only and compose publishes
 > the port to localhost. Before exposing it to a network, set `SEALEDRUN_API_TOKEN` to a long random
 > value and put TLS in front. Clients send `Authorization: Bearer <token>`; the Inspector asks for
