@@ -4,7 +4,15 @@ import { join } from "node:path";
 import type { SealedRunRecord } from "@sealedrun/core";
 import { describe, expect, test } from "vitest";
 
-import { isSelfReported, recordKey, summarize, verifyLocally, witnessResults } from "./inspect";
+import {
+  contextDifferences,
+  isSelfReported,
+  recordKey,
+  runContext,
+  summarize,
+  verifyLocally,
+  witnessResults,
+} from "./inspect";
 
 function record(extensions?: SealedRunRecord["extensions"]): SealedRunRecord {
   return {
@@ -26,6 +34,44 @@ function record(extensions?: SealedRunRecord["extensions"]): SealedRunRecord {
     ...(extensions ? { extensions } : {}),
   } as SealedRunRecord;
 }
+
+describe("runContext", () => {
+  const context = {
+    recorder_software: "sealedrun-recorder/0.4.0",
+    agent_software: "acme-planner",
+    agent_version: "2.3.1",
+    agent_source: "header",
+    policy_set_hash: "a".repeat(64),
+    tool_inventory_hash: "b".repeat(64),
+    tool_inventory_server: "filesystem",
+  };
+  test("reads the run_start extension and names what differs between two runs", () => {
+    const start = { ...record({ "sealedrun.context": context }), kind: "run_start" };
+    const read = runContext([start as SealedRunRecord, record()]);
+    expect(read).toEqual({
+      recorder: "sealedrun-recorder/0.4.0",
+      agent: "acme-planner 2.3.1",
+      agentSource: "header",
+      policySetHash: "a".repeat(64),
+      toolInventoryHash: "b".repeat(64),
+      toolInventoryServer: "filesystem",
+    });
+    expect(contextDifferences(read!, read!)).toEqual([]);
+    expect(contextDifferences(read!, { ...read!, policySetHash: "c".repeat(64) })).toEqual([
+      "policy set",
+    ]);
+    expect(contextDifferences(read!, { recorder: read!.recorder })).toEqual([
+      "agent",
+      "policy set",
+      "tool inventory",
+    ]);
+  });
+  test("a run without the extension, or with a malformed one, has no context", () => {
+    expect(runContext([record()])).toBeNull();
+    const start = { ...record({ "sealedrun.context": { agent_software: 1 } }), kind: "run_start" };
+    expect(runContext([start as SealedRunRecord])).toBeNull();
+  });
+});
 
 describe("isSelfReported", () => {
   test("a step marker makes the record self-reported, a proxy extension does not", () => {

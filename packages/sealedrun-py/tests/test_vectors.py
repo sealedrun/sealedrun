@@ -132,6 +132,22 @@ def test_unknown_principal_without_trust_anchor_is_integrity_only() -> None:
     assert report.exporter_agent_id != ""
 
 
+def test_context_run_verifies() -> None:
+    records = records_of(VECTORS / "records" / "context-run.jsonl")
+    expected = load(VECTORS / "records" / "expected.json")
+    assert isinstance(expected, dict)
+    for record, exp in zip(records, expected["context-run.jsonl"], strict=True):
+        assert check_hash(record)
+        assert record["hash"] == exp["hash"]
+    delegation = load(VECTORS / "delegations" / "valid.json")
+    assert isinstance(delegation, dict)
+    report = verify_run(records, {delegation["delegation_id"]: delegation})
+    assert report.complete
+    context = records[0]["extensions"]["sealedrun.context"]
+    assert context["agent_source"] == "header"
+    assert records[1]["policy"]["policy_set_hash"] == context["policy_set_hash"]
+
+
 def test_regeneration_is_hash_stable(tmp_path: Path) -> None:
     from sealedrun.vectors import generate
 

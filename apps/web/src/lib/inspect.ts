@@ -118,6 +118,49 @@ export function summarize(records: SealedRunRecord[]) {
   };
 }
 
+/** The `sealedrun.context` of a run's `run_start` (SPEC 10.6), as far as the record carries it. */
+export interface RunContext {
+  recorder: string;
+  agent?: string;
+  agentSource?: string;
+  policySetHash?: string;
+  toolInventoryHash?: string;
+  toolInventoryServer?: string;
+}
+
+/** Reads the run context from the `run_start` record; null when the run carries none. */
+export function runContext(records: SealedRunRecord[]): RunContext | null {
+  const start = records.find((r) => r.kind === "run_start");
+  const raw = start?.extensions?.["sealedrun.context"];
+  if (!raw || typeof raw.recorder_software !== "string") return null;
+  const text = (key: string) => (typeof raw[key] === "string" ? (raw[key] as string) : undefined);
+  const name = text("agent_software");
+  const version = text("agent_version");
+  const context: RunContext = { recorder: raw.recorder_software };
+  if (name) context.agent = version ? `${name} ${version}` : name;
+  const source = text("agent_source");
+  if (source) context.agentSource = source;
+  const policy = text("policy_set_hash");
+  if (policy) context.policySetHash = policy;
+  const tools = text("tool_inventory_hash");
+  if (tools) context.toolInventoryHash = tools;
+  const server = text("tool_inventory_server");
+  if (server) context.toolInventoryServer = server;
+  return context;
+}
+
+/**
+ * Names what makes two runs not comparable: the agent, the policy set or the tool inventory
+ * differs. Empty when they match on everything both runs state.
+ */
+export function contextDifferences(a: RunContext, b: RunContext): string[] {
+  const differences: string[] = [];
+  if (a.agent !== b.agent) differences.push("agent");
+  if (a.policySetHash !== b.policySetHash) differences.push("policy set");
+  if (a.toolInventoryHash !== b.toolInventoryHash) differences.push("tool inventory");
+  return differences;
+}
+
 /** What the offline witness check found for one anchor record. */
 export interface WitnessVerdict {
   verified: boolean;

@@ -22,6 +22,7 @@ from __future__ import annotations
 import functools
 import inspect
 import json
+import re
 import urllib.error
 import urllib.request
 from collections.abc import Callable
@@ -32,6 +33,7 @@ from sealedrun.errors import SealedRunError
 
 DEFAULT_TIMEOUT = 5.0
 JSON = "application/json"
+AGENT = re.compile(r"^[A-Za-z0-9._-]{1,64}/[A-Za-z0-9._+-]{1,32}$")
 TARGET_TYPES = {
     "llm_call": "model",
     "tool_call": "tool",
@@ -72,6 +74,7 @@ def post_step(
     *,
     token: str | None = None,
     run: str | None = None,
+    agent: str | None = None,
     timeout: float = DEFAULT_TIMEOUT,
 ) -> dict[str, Any]:
     """POST one step to `url` and return the recorder's answer; raises RecorderError."""
@@ -80,6 +83,8 @@ def post_step(
         headers["Authorization"] = f"Bearer {token}"
     if run:
         headers["X-SealedRun-Run"] = run
+    if agent:
+        headers["X-SealedRun-Agent"] = agent
     request = urllib.request.Request(  # noqa: S310
         f"{url.rstrip('/')}/api/steps",
         data=json.dumps(step).encode(),
@@ -165,13 +170,17 @@ class Recorder:
         *,
         token: str | None = None,
         run: str | None = None,
+        agent: str | None = None,
         timeout: float = DEFAULT_TIMEOUT,
     ) -> None:
         if not url.startswith(("http://", "https://")):
             raise ValueError("url must start with http:// or https://")
+        if agent is not None and not AGENT.match(agent):
+            raise ValueError("agent must be <name>/<version>")
         self.url = url.rstrip("/")
         self.token = token
         self.run = run
+        self.agent = agent
         self.timeout = timeout
 
     def record(
@@ -283,7 +292,12 @@ class Recorder:
     def post(self, step: Step) -> dict[str, Any]:
         """Post a prepared `Step`; stores and returns the signed record."""
         step.record = post_step(
-            self.url, step.body(), token=self.token, run=self.run, timeout=self.timeout
+            self.url,
+            step.body(),
+            token=self.token,
+            run=self.run,
+            agent=self.agent,
+            timeout=self.timeout,
         )
         return step.record
 

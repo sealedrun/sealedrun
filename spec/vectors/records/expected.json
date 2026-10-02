@@ -1,4 +1,24 @@
 {
+  "context-run.jsonl": [
+    {
+      "hash": "8d0050cdd4ec601e2fbbeaea22318d12f50333ce6ca0d786e8af3fb84018639f",
+      "kind": "run_start",
+      "prev_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "seq": 0
+    },
+    {
+      "hash": "af5d29b698f8a5ebe04c0562b666581818863cdc8006f948926ccbf1769cd4ca",
+      "kind": "llm_call",
+      "prev_hash": "8d0050cdd4ec601e2fbbeaea22318d12f50333ce6ca0d786e8af3fb84018639f",
+      "seq": 1
+    },
+    {
+      "hash": "06d4b6d42f7ae79b3f86af6b264b64b8d0b4604951e4c8ee11fd4f46a0e68d44",
+      "kind": "run_end",
+      "prev_hash": "af5d29b698f8a5ebe04c0562b666581818863cdc8006f948926ccbf1769cd4ca",
+      "seq": 2
+    }
+  ],
   "valid-run.jsonl": [
     {
       "hash": "18d39e849b52694684f84e1c3157a832fa3cbb6f58b4528ac3adabbbdcfe2b24",

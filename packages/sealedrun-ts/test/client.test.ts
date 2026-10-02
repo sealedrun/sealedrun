@@ -58,6 +58,12 @@ describe("Recorder", () => {
     }
   });
 
+  test("agent option sets the header", async () => {
+    await new Recorder(url, { agent: "acme-planner/2.3.1" }).record("note", "x");
+    expect(posts.at(-1)!.headers["x-sealedrun-agent"]).toBe("acme-planner/2.3.1");
+    expect(() => new Recorder(url, { agent: "no version" })).toThrow("agent");
+  });
+
   test("record posts body and headers", async () => {
     const recorder = new Recorder(url + "/", { token: "tok", run: "job-1" });
     const record = await recorder.record("tool_call", "db.query", {

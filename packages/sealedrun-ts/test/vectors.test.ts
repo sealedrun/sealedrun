@@ -134,6 +134,25 @@ describe("valid run", () => {
   });
 });
 
+describe("context run", () => {
+  const records = readRecords("records", "context-run.jsonl");
+  const expected = readJson<Record<string, { seq: number; hash: string; prev_hash: string }[]>>(
+    "records",
+    "expected.json",
+  )["context-run.jsonl"]!;
+  test("hashes reproduce and the run verifies", () => {
+    records.forEach((record, i) => {
+      expect(checkHash(record)).toBe(true);
+      expect(record.hash).toBe(expected[i]!.hash);
+    });
+    const report = verifyRun(records, delegationMap(validDelegation()));
+    expect(report.complete).toBe(true);
+    const context = records[0]!.extensions!["sealedrun.context"]!;
+    expect(context.agent_source).toBe("header");
+    expect(records[1]!.policy!.policy_set_hash).toBe(context.policy_set_hash);
+  });
+});
+
 describe("negative chains", () => {
   type Case = { check: string; seq: number; delegation?: string };
   const expected = readJson<Record<string, Case>>("chains", "expected.json");
@@ -207,7 +226,7 @@ describe("bundles", () => {
   test("two runs with record ids of their own verify", () => {
     const data = new Uint8Array(readFileSync(join(VECTORS, "bundle", "two-runs.zip")));
     const report = verifyBundle(readBundle(data));
-    expect(report.runs.map((r) => r.recordCount)).toEqual([9, 2]);
+    expect(report.runs.map((r) => r.recordCount)).toEqual([9, 3]);
   });
   test("unknown principal without a trust anchor is integrity only", () => {
     const data = new Uint8Array(readFileSync(join(VECTORS, "bundle", "unknown-principal.zip")));

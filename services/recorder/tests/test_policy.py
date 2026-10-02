@@ -55,10 +55,12 @@ CHAT_REPLY = {
 OLLAMA_REPLY = {"model": "llama3", "message": {"role": "assistant", "content": "ok"}, "done": True}
 MESSAGES = [{"role": "user", "content": "the NDA text"}]
 RULE = {"policy_block_to_cloud": ["nda", "secret"]}
+RULE_HASH = Rule(("nda", "secret")).set_hash
 BLOCK = {
     "rule_id": "recorder/no-nda-to-cloud",
     "decision": "block",
     "reason": "target.location=cloud and labels contain nda",
+    "policy_set_hash": RULE_HASH,
 }
 
 
@@ -75,6 +77,7 @@ def test_rule_evaluation() -> None:
         "rule_id": "default/allow",
         "decision": "allow",
         "reason": "target.location=cloud and no configured label is present",
+        "policy_set_hash": RULE_HASH,
     }
     blocked = rule.evaluate("cloud", ["pii", "secret", "nda"])
     assert blocked is not None and blocked.blocked
@@ -219,6 +222,7 @@ def test_allowed_cloud_call_carries_the_allow_decision(
         "rule_id": "default/allow",
         "decision": "allow",
         "reason": "target.location=cloud and no configured label is present",
+        "policy_set_hash": RULE_HASH,
     }
     assert plain["policy"]["decision"] == "allow"
     assert run["labels_sent_to_cloud"] == {"pii": 1}

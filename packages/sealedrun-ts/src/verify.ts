@@ -94,6 +94,7 @@ export function verifyRun(
     labelsSentToCloud: {},
   };
   let ended = false;
+  let policySetHash: string | undefined;
   const seenIds = new Set<string>();
 
   records.forEach((record, index) => {
@@ -143,6 +144,7 @@ export function verifyRun(
       report.anchors += 1;
     }
     if (record.kind === "run_end") ended = true;
+    policySetHash = checkContext(record, policySetHash, runId, seq);
     if (record.target.location === "cloud" && record.outcome !== "blocked") {
       for (const label of record.data_labels) {
         report.labelsSentToCloud[label] = (report.labelsSentToCloud[label] ?? 0) + 1;
@@ -180,6 +182,41 @@ function delegationForRun(
   const problem = verifyDelegation(delegation);
   if (problem) throw new VerificationError("delegation", problem, runId, first.seq);
   return delegation;
+}
+
+/**
+ * Applies SPEC 10.6: `sealedrun.context` sits on `run_start` only, and every `policy` block that
+ * names a policy set names the run's. Returns the run's policy set digest, if any.
+ */
+function checkContext(
+  record: SealedRunRecord,
+  policySetHash: string | undefined,
+  runId: string,
+  seq: number,
+): string | undefined {
+  const context = record.extensions?.["sealedrun.context"];
+  if (context !== undefined) {
+    if (record.kind !== "run_start") {
+      throw new VerificationError(
+        "context",
+        "sealedrun.context on a record other than run_start",
+        runId,
+        seq,
+      );
+    }
+    const digest = context.policy_set_hash;
+    policySetHash = typeof digest === "string" ? digest : undefined;
+  }
+  const declared = record.policy?.policy_set_hash;
+  if (declared !== undefined && policySetHash !== undefined && declared !== policySetHash) {
+    throw new VerificationError(
+      "context",
+      "policy_set_hash differs from the run's context",
+      runId,
+      seq,
+    );
+  }
+  return policySetHash;
 }
 
 function checkPayload(

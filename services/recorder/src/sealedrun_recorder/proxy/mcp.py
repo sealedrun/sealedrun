@@ -48,6 +48,13 @@ from starlette.responses import StreamingResponse
 from sealedrun_recorder.limits import BodyTooLargeError, parse_json, read_body, read_reply
 from sealedrun_recorder.live import LiveRunError
 from sealedrun_recorder.policy import Decision, Rule
+from sealedrun_recorder.proxy.context import (
+    AgentError,
+    client_info_agent,
+    header_agent,
+    run_context,
+    tool_inventory_digest,
+)
 from sealedrun_recorder.proxy.core import (
     JSON,
     RUN_HEADER,
@@ -110,7 +117,8 @@ async def mcp(server: str, request: Request) -> Response:
         return error(400, f"{RUN_HEADER} must match {RUN_LABEL.pattern}")
     try:
         labels = header_labels(request)
-    except LabelsError as problem:
+        header_agent(request)
+    except (LabelsError, AgentError) as problem:
         return error(400, str(problem))
     upstreams: Upstreams = request.app.state.upstreams
     target = upstreams.mcp(server)
@@ -286,6 +294,29 @@ class ListSeen:
                 self._seen.popitem(last=False)
 
 
+def _context(
+    request: Request, target: McpServer, call: McpCall, body: bytes, result: dict[str, Any]
+) -> dict[str, Any]:
+    """Build the run context for a call that may open the run (SPEC 10.6).
+
+    The agent comes from the header, else from the request's MCP clientInfo; a `tools/list`
+    answer also names the inventory the agent saw.
+    """
+    agent, source = header_agent(request), "header"
+    if agent is None:
+        try:
+            agent, source = client_info_agent(parse_json(body)), "mcp_client_info"
+        except ValueError:
+            agent = None
+    tools = None
+    if call.method == "tools/list":
+        digest = tool_inventory_digest(result)
+        if digest is not None:
+            tools = (target.name, digest)
+    rule: Rule = request.app.state.policy
+    return run_context(rule, agent, source if agent else None, tools=tools)
+
+
 def _digest(result: Any) -> str:
     return hashlib.sha256(json.dumps(result, sort_keys=True).encode()).hexdigest()
 
@@ -310,9 +341,10 @@ async def _record(
     result = mapping(message.get("result")) if message is not None else {}
     runs = request.app.state.runs
     seen: ListSeen = request.app.state.mcp_lists
+    context = _context(request, target, call, body, result)
     list_key = None
     if call.method == "tools/list" and message is not None and "result" in message:
-        run_id = await run_in_threadpool(runs.run_for, label)
+        run_id = await run_in_threadpool(runs.run_for, label, context=context)
         list_key = (run_id, target.name, "http", call.cursor)
         if not seen.changed(list_key, result):
             return
@@ -360,6 +392,7 @@ async def _record(
         runs.record,
         label,
         "tool_call",
+        context=context,
         target={
             "type": "tool",
             "name": call.name,

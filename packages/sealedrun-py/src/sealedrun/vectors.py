@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from sealedrun.bundle import MANIFEST, write_bundle
+from sealedrun.canonical import canonicalize
 from sealedrun.delegation import create_delegation
 from sealedrun.hashing import b64url_decode, b64url_encode, payload_digest
 from sealedrun.keys import (
@@ -49,6 +50,11 @@ DELEGATION_ID = UUID_PREFIX + "0000000000d0"
 RUN_ID = UUID_PREFIX + "0000000000a0"
 SECOND_RUN_ID = UUID_PREFIX + "0000000000a1"
 BUNDLE_ID = UUID_PREFIX + "0000000000b0"
+POLICY_SET = {"block_to_cloud": ["nda"]}
+POLICY_SET_HASH = hashlib.sha256(canonicalize(POLICY_SET)).hexdigest()
+TOOL_INVENTORY_HASH = hashlib.sha256(
+    canonicalize([{"name": "read_file", "inputSchema": {"type": "object"}}])
+).hexdigest()
 SEED_DERIVATION = (
     "seed = utf8('<name>:<sig_alg>') right-padded with 0x00 to 32 bytes; "
     "ed25519 seed per RFC 8032; ml-dsa seed per FIPS 204 xi; "
@@ -560,6 +566,20 @@ def negative_chains(
         {"check": "schema", "seq": 3},
     )
 
+    # A policy block that names another policy set than the run's context, re-sealed by the
+    # agent so that only the context check can catch it (SPEC 5.7, 10.6).
+    with_context = second_run(agent, delegation, reuse_ids=False)
+    other_set = copy.deepcopy(with_context)
+    other_set[1]["policy"]["policy_set_hash"] = "0" * 64
+    other_set[1] = seal(other_set[1], DOMAIN_RECORD, agent)
+    cases["policy-set-hash-mismatch"] = (other_set, {"check": "context", "seq": 1})
+
+    # The context extension on a record other than run_start, re-sealed by the agent.
+    moved = copy.deepcopy(with_context)
+    moved[1]["extensions"]["sealedrun.context"] = with_context[0]["extensions"]["sealedrun.context"]
+    moved[1] = seal(moved[1], DOMAIN_RECORD, agent)
+    cases["context-on-llm-call"] = (moved, {"check": "context", "seq": 1})
+
     return cases
 
 
@@ -618,13 +638,37 @@ def bundle_bytes(
 def second_run(
     agent: PrivateKeySet, delegation: dict[str, Any], *, reuse_ids: bool
 ) -> list[dict[str, Any]]:
-    """Write a second, valid two-record run.
+    """Write a second, valid three-record run that carries `sealedrun.context` (SPEC 10.6).
 
     With `reuse_ids` its record ids repeat those of the reference run, otherwise they are its own.
     """
     ids = Ids() if reuse_ids else Ids(start=0x100)
     writer = RunWriter(agent, delegation, run_id=SECOND_RUN_ID, clock=Clock(), id_factory=ids)
-    writer.start()
+    writer.start(
+        extensions={
+            "sealedrun.context": {
+                "recorder_software": "sealedrun-recorder/0.4.0",
+                "agent_software": "acme-planner",
+                "agent_version": "2.3.1",
+                "agent_source": "header",
+                "policy_set_hash": POLICY_SET_HASH,
+                "tool_inventory_hash": TOOL_INVENTORY_HASH,
+                "tool_inventory_server": "filesystem",
+            }
+        }
+    )
+    writer.append(
+        "llm_call",
+        target={"type": "model", "name": "qwen2.5:14b", "location": "local", "provider": "ollama"},
+        data_labels=["nda"],
+        policy={
+            "rule_id": "eu-strict/no-nda-to-cloud",
+            "decision": "allow",
+            "reason": "target.location=local",
+            "policy_set_hash": POLICY_SET_HASH,
+        },
+        extensions={"sealedrun.llm": {"model": "qwen2.5:14b", "provider": "ollama"}},
+    )
     writer.end()
     return writer.records
 
@@ -863,13 +907,19 @@ def generate(spec_dir: Path) -> None:
 
     (vectors / "records").mkdir(parents=True)
     (vectors / "records" / "valid-run.jsonl").write_text(jsonl(run.records))
+    context_run = second_run(agent, delegation, reuse_ids=False)
+    (vectors / "records" / "context-run.jsonl").write_text(jsonl(context_run))
     dump(
         vectors / "records" / "expected.json",
         {
-            "valid-run.jsonl": [
+            name: [
                 {"seq": r["seq"], "kind": r["kind"], "prev_hash": r["prev_hash"], "hash": r["hash"]}
-                for r in run.records
+                for r in records
             ]
+            for name, records in (
+                ("valid-run.jsonl", run.records),
+                ("context-run.jsonl", context_run),
+            )
         },
     )
 

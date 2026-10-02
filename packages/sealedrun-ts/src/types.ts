@@ -39,7 +39,7 @@ export type SealedRunRecord = Sealed & {
   target: Target;
   payload?: Payload;
   data_labels: string[];
-  policy?: { rule_id: string; decision: string; reason: string };
+  policy?: { rule_id: string; decision: string; reason: string; policy_set_hash?: string };
   outcome: string;
   parent_record_id?: string;
   extensions?: { [key: string]: { [key: string]: Json } };

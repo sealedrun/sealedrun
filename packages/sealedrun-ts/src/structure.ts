@@ -76,6 +76,7 @@ const EXTENSIONS: Record<string, Shape> = {
   "sealedrun.mcp": { server: "string", transport: "string", method: "string" },
   "sealedrun.otel": { trace_id: "string", span_id: "string" },
   "sealedrun.imported": { source_format: "string" },
+  "sealedrun.context": { recorder_software: "string" },
 };
 
 /** Required members of `sealedrun.anchor.receipt` per anchor type (SPEC 8.1.1, 8.1.2). */
@@ -112,6 +113,18 @@ const EXTENSION_ENUMS: Record<string, Record<string, readonly string[]>> = {
   "sealedrun.anchor": { type: ["rekor", "rfc3161", "scitt", "other"] },
   "sealedrun.mcp": { transport: ["stdio", "http"] },
   "sealedrun.imported": { source_format: ["otel", "aat", "sep-3004", "other"] },
+};
+
+/** Optional string fields of an extension whose pattern the JSON Schema fixes. */
+const EXTENSION_PATTERNS: Record<string, Record<string, RegExp>> = {
+  "sealedrun.context": {
+    recorder_software: /^[A-Za-z0-9._-]{1,64}\/[A-Za-z0-9._+-]{1,32}$/,
+    agent_software: /^[A-Za-z0-9._-]{1,64}$/,
+    agent_version: /^[A-Za-z0-9._+-]{1,32}$/,
+    agent_source: /^(header|mcp_client_info|otel)$/,
+    policy_set_hash: /^([0-9a-f]{64}|[0-9a-f]{96})$/,
+    tool_inventory_hash: /^([0-9a-f]{64}|[0-9a-f]{96})$/,
+  },
 };
 
 /** Array bounds from the JSON Schemas (`maxItems`), keyed by field name. */
@@ -198,6 +211,15 @@ export function assertExtensions(value: unknown): void {
           (anchor.receipt as Record<string, unknown>).inclusion_proof,
           INCLUSION_PROOF,
           `extensions/${key}/receipt/inclusion_proof`,
+        );
+      }
+    }
+    for (const [field, pattern] of Object.entries(EXTENSION_PATTERNS[key] ?? {})) {
+      const actual = (ext as Record<string, unknown>)[field];
+      if (actual !== undefined && (typeof actual !== "string" || !pattern.test(actual))) {
+        throw new VerificationError(
+          "schema",
+          `extensions/${key}: field ${field} does not match ${pattern.source}`,
         );
       }
     }

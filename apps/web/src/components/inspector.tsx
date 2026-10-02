@@ -8,6 +8,8 @@ import { api, type RunSummary, saveFile, setToken, UnauthorizedError } from "@/l
 import {
   type LocalVerification,
   parsePrincipals,
+  type RunContext,
+  runContext,
   verifyLocally,
   witnessResults,
   type WitnessVerdict,
@@ -44,6 +46,12 @@ export function Inspector() {
   const [recorder, setRecorder] = useState<Recorder>({ state: "loading" });
   const [serverRun, setServerRun] = useState<RunSummary | null>(null);
   const [serverRecords, setServerRecords] = useState<SealedRunRecord[]>([]);
+  const previousContext = useRef<{ runId: string; label: string; context: RunContext } | null>(
+    null,
+  );
+  const [comparedWith, setComparedWith] = useState<{ label: string; context: RunContext } | null>(
+    null,
+  );
   const [notice, setNotice] = useState<string | null>(null);
   const [tokenTried, setTokenTried] = useState(false);
   const trusted = useSyncExternalStore(trustedStore.subscribe, trustedStore.read, () => "");
@@ -141,7 +149,21 @@ export function Inspector() {
     shown.current = run;
     setServerRun(run);
     try {
-      setServerRecords(await api.records(run.run_id));
+      const records = await api.records(run.run_id);
+      const context = runContext(records);
+      const previous = previousContext.current;
+      // The run shown before becomes the one this run is compared with (SPEC 10.6).
+      if (previous && previous.runId !== run.run_id) {
+        setComparedWith({ label: previous.label, context: previous.context });
+      }
+      if (context) {
+        previousContext.current = {
+          runId: run.run_id,
+          label: run.run_label ?? run.run_id,
+          context,
+        };
+      }
+      setServerRecords(records);
     } catch (error) {
       if (!onUnauthorized(error)) throw error;
     }
@@ -334,7 +356,11 @@ export function Inspector() {
                 )}
                 {serverRun && serverRecords.length > 0 ? (
                   <ErrorBoundary title="The steps could not be shown">
-                    <RunFeed records={serverRecords} onDownload={downloadPayload} />
+                    <RunFeed
+                      records={serverRecords}
+                      onDownload={downloadPayload}
+                      previous={comparedWith}
+                    />
                   </ErrorBoundary>
                 ) : (
                   <p className="text-ink-soft">Pick a run to see its steps.</p>

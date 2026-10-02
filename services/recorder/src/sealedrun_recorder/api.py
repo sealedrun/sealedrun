@@ -18,6 +18,13 @@ from sealedrun_recorder.export import ExportError, build_bundle
 from sealedrun_recorder.importer import import_bundle
 from sealedrun_recorder.limits import BodyTooLargeError, read_body
 from sealedrun_recorder.live import InvalidRecordError, LiveRunError
+from sealedrun_recorder.policy import Rule
+from sealedrun_recorder.proxy.context import (
+    AgentError,
+    header_agent,
+    run_context,
+    tool_inventory_digest,
+)
 from sealedrun_recorder.proxy.core import RUN_HEADER, RUN_LABEL
 from sealedrun_recorder.proxy.labels import LabelsError, header_labels
 from sealedrun_recorder.steps import Step, StepError, parse_step
@@ -292,16 +299,29 @@ async def post_step(request: Request) -> Response | dict[str, Any]:
     label = request.headers.get(RUN_HEADER)
     if label is not None and not RUN_LABEL.match(label):
         raise HTTPException(400, f"{RUN_HEADER} must match {RUN_LABEL.pattern}")
+    try:
+        agent = header_agent(request)
+    except AgentError as problem:
+        raise HTTPException(400, str(problem)) from problem
     step = await _read_step(request)
     runs = request.app.state.runs
     listing = step.tools_list()
+    tools = None
     if listing is not None:
-        run_id = await run_in_threadpool(runs.run_for, label)
+        digest = tool_inventory_digest(listing["result"])
+        if digest is not None:
+            tools = (listing["server"], digest)
+    rule: Rule = request.app.state.policy
+    context = run_context(rule, agent, "header" if agent else None, tools=tools)
+    if listing is not None:
+        run_id = await run_in_threadpool(runs.run_for, label, context=context)
         if not _list_changed(request, run_id, listing):
             return _unchanged_list()
     record: dict[str, Any]
     try:
-        record = await run_in_threadpool(runs.record, label, step.kind, **step.fields())
+        record = await run_in_threadpool(
+            runs.record, label, step.kind, context=context, **step.fields()
+        )
     except InvalidRecordError as error:
         raise HTTPException(400, str(error)) from error
     if listing is not None:

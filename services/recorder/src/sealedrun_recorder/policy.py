@@ -10,9 +10,12 @@ while the rule is off carry no policy object at all.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 from typing import Any
+
+from sealedrun.canonical import canonicalize
 
 RULE_PREFIX = "recorder/no-"
 DEFAULT_ALLOW = "default/allow"
@@ -30,6 +33,7 @@ class Decision:
     rule_id: str
     decision: str
     reason: str
+    policy_set_hash: str | None = None
 
     @property
     def blocked(self) -> bool:
@@ -38,7 +42,10 @@ class Decision:
 
     def document(self) -> dict[str, Any]:
         """Return the `policy` object of the record."""
-        return {"rule_id": self.rule_id, "decision": self.decision, "reason": self.reason}
+        document = {"rule_id": self.rule_id, "decision": self.decision, "reason": self.reason}
+        if self.policy_set_hash is not None:
+            document["policy_set_hash"] = self.policy_set_hash
+        return document
 
 
 @dataclass(frozen=True)
@@ -60,6 +67,14 @@ class Rule:
         """Whether any label is configured."""
         return bool(self.block_to_cloud)
 
+    @property
+    def set_hash(self) -> str | None:
+        """SHA-256 over the canonical form of the rules in force (SPEC 10.6); None when off."""
+        if not self.active:
+            return None
+        document = {"block_to_cloud": sorted(set(self.block_to_cloud))}
+        return hashlib.sha256(canonicalize(document)).hexdigest()
+
     def evaluate(self, target_location: str, labels: list[str]) -> Decision | None:
         """Decide one call; None when the rule does not apply (off, or not a cloud target)."""
         if not self.active or target_location != "cloud":
@@ -70,9 +85,11 @@ class Rule:
                     rule_id=f"{RULE_PREFIX}{label}-to-cloud",
                     decision="block",
                     reason=f"target.location=cloud and labels contain {label}",
+                    policy_set_hash=self.set_hash,
                 )
         return Decision(
             rule_id=DEFAULT_ALLOW,
             decision="allow",
             reason="target.location=cloud and no configured label is present",
+            policy_set_hash=self.set_hash,
         )

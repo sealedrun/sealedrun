@@ -42,6 +42,7 @@ from starlette.concurrency import run_in_threadpool
 
 from sealedrun_recorder.limits import BodyTooLargeError, parse_json, read_body
 from sealedrun_recorder.live import TARGET_LIMITS, InvalidRecordError
+from sealedrun_recorder.proxy.context import otel_agent, run_context
 from sealedrun_recorder.proxy.core import RUN_HEADER, RUN_LABEL, require_proxy_token
 
 PROTOBUF = "application/x-protobuf"
@@ -269,11 +270,13 @@ def record_spans(app: Any, spans: list[OtlpSpan], label: str | None) -> tuple[in
         if conversation:
             fields["extensions"]["sealedrun.otel"]["conversation"] = conversation
         run_label = label or f"otel:{item.span.trace_id.hex()}"
-        run_id = runs.run_for(run_label)
+        agent = otel_agent({**item.resource, **item.attributes})
+        context = run_context(app.state.policy, agent, "otel" if agent else None)
+        run_id = runs.run_for(run_label, context=context)
         if not seen.first_time(run_id, item.span.span_id.hex()):
             continue
         try:
-            runs.record(run_label, kind, check=True, **fields)
+            runs.record(run_label, kind, check=True, context=context, **fields)
         except InvalidRecordError as error:
             rejected += 1
             message = message or f"span {item.span.name}: {error}"
