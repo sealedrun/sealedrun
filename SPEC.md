@@ -270,6 +270,11 @@ A `block` decision MUST be accompanied by `outcome = "blocked"` and a payload th
 request that was not sent. A `redirect` MUST record the final target in `target` and the original
 in `policy.original_target`.
 
+`policy_set_hash` (optional, hex) is the digest of the policy set the rule came from, as defined
+in 10.6. When a run's `run_start` carries `sealedrun.context.policy_set_hash`, every `policy`
+block of that run that has a `policy_set_hash` MUST carry the same value; a verifier fails the
+run with check `context` otherwise.
+
 ## 6. Delegation
 
 ### 6.1 Fields
@@ -488,6 +493,7 @@ verification failure. Registered:
 | `sealedrun.a2a`        | 10.4    | A2A task delegation details      |
 | `sealedrun.otel`       | 11      | OpenTelemetry trace and span ids |
 | `sealedrun.step`       | 10.5    | Self-reported step provenance    |
+| `sealedrun.context`    | 10.6    | What produced the run            |
 
 ### 9.1 Compatibility with MCP SEP-3004 and IETF AAT
 
@@ -586,6 +592,39 @@ its `sealedrun.labels` sources are limited to `manual` and `header`: a recorder 
 steps. Run summaries a recorder serves count the labels of self-reported cloud-target records
 separately (`labels_self_reported`) from `labels_sent_to_cloud`, which counts only records the
 recorder made itself.
+
+### 10.6 `sealedrun.context`
+
+```json
+{
+  "recorder_software": "sealedrun-recorder/0.4.0",
+  "agent_software": "acme-planner",
+  "agent_version": "2.3.1",
+  "agent_source": "header",
+  "policy_set_hash": "<sha256 hex>",
+  "tool_inventory_hash": "<sha256 hex>",
+  "tool_inventory_server": "filesystem",
+  "model_defaults": { "model": "qwen2.5:14b" }
+}
+```
+
+Written on the `run_start` record only; a verifier fails a run with check `context` when any
+other record carries it. It says what produced the run, so that two runs can be compared and a
+past run can be replayed under a new policy. `recorder_software` (`<name>/<version>`) is
+required. `agent_software` and `agent_version` are self-reported by the caller and never
+verified; `agent_source` names where they came from: `header` (the request header
+`X-SealedRun-Agent: <name>/<version>` on the first call of the run, name `[A-Za-z0-9._-]{1,64}`,
+version `[A-Za-z0-9._+-]{1,32}`, never forwarded upstream), `mcp_client_info` (MCP
+`_meta["io.modelcontextprotocol/clientInfo"]`, itself self-reported), or `otel`
+(`gen_ai.agent.name` / `gen_ai.agent.version` of the span that opened the run).
+`policy_set_hash` is the SHA-256 (hex) of the canonical form (JCS) of the policy set in force
+when the run opened, present when a rule is active; this specification does not fix the
+document's shape, only that a recorder uses the same digest here and in every `policy` block of
+the run (5.7). `tool_inventory_hash` is the SHA-256 (hex) of the canonical form of the `tools`
+array of an MCP `tools/list` result, sorted by `name`, first page only, when that call is the
+first of the run; `tool_inventory_server` names the server it came from. `model_defaults` is a
+free-form object of the caller's defaults. A verifier checks the shape and the `policy` rule of
+5.7 only; matching a digest to a policy file or a tool list is the operator's step.
 
 ## 11. Mapping to OpenTelemetry GenAI semantic conventions
 

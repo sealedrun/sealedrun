@@ -479,6 +479,48 @@
           "type": "boolean"
         }
       }
+    },
+    "sealedrun.context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["recorder_software"],
+      "properties": {
+        "recorder_software": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]{1,64}/[A-Za-z0-9._+-]{1,32}$"
+        },
+        "agent_software": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]{1,64}$"
+        },
+        "agent_version": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._+-]{1,32}$"
+        },
+        "agent_source": {
+          "type": "string",
+          "enum": ["header", "mcp_client_info", "otel"]
+        },
+        "policy_set_hash": {
+          "$ref": "../common.json#/$defs/digestHex"
+        },
+        "tool_inventory_hash": {
+          "$ref": "../common.json#/$defs/digestHex"
+        },
+        "tool_inventory_server": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "model_defaults": {
+          "type": "object"
+        }
+      },
+      "dependentRequired": {
+        "agent_software": ["agent_source"],
+        "agent_version": ["agent_software"],
+        "tool_inventory_hash": ["tool_inventory_server"]
+      }
     }
   }
 }

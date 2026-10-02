@@ -35,6 +35,7 @@ from starlette.responses import StreamingResponse
 from sealedrun_recorder.limits import BodyTooLargeError, parse_json, read_body, read_reply
 from sealedrun_recorder.live import LiveRunError, LiveRuns
 from sealedrun_recorder.policy import Decision, Rule
+from sealedrun_recorder.proxy.context import AgentError, header_agent, run_context
 from sealedrun_recorder.proxy.labels import LabelsError, header_labels, label_fields
 from sealedrun_recorder.upstreams import Upstream, Upstreams
 
@@ -148,10 +149,14 @@ class RunGrouper:
         self._runs: OrderedDict[str | None, tuple[str, float]] = OrderedDict()
         self._lock = threading.Lock()
 
-    def run_for(self, label: str | None, *, fresh: bool = False) -> str:
+    def run_for(
+        self, label: str | None, *, fresh: bool = False, context: dict[str, Any] | None = None
+    ) -> str:
         """Return the run for `label`, opening one when none is current, idle, or `fresh` is set.
 
-        An idle run is ended when it is replaced. The grouper remembers at most `MAX_OPEN_RUNS`
+        `context` is the `sealedrun.context` object (SPEC 10.6) written when this call opens
+        the run; it is ignored when the run already exists. An idle run is ended when it is
+        replaced. The grouper remembers at most `MAX_OPEN_RUNS`
         labels; past that the least recently used run is ended and forgotten, so a caller that
         invents labels cannot grow the recorder without bound.
         """
@@ -166,8 +171,12 @@ class RunGrouper:
                     return run_id
             if current is not None:
                 self._end_quietly(current[0])
-            extensions = {"sealedrun.proxy": {"run_label": label}} if label else None
-            run_id = str(self._live.start(extensions=extensions)["run_id"])
+            extensions: dict[str, Any] = {}
+            if label:
+                extensions["sealedrun.proxy"] = {"run_label": label}
+            if context:
+                extensions["sealedrun.context"] = context
+            run_id = str(self._live.start(extensions=extensions or None)["run_id"])
             self._runs[label] = (run_id, now)
             self._runs.move_to_end(label)
             while len(self._runs) > MAX_OPEN_RUNS:
@@ -181,16 +190,24 @@ class RunGrouper:
         except LiveRunError:
             pass
 
-    def record(self, label: str | None, kind: str, **fields: Any) -> dict[str, Any]:
-        """Append a record to the run for `label`.
+    def record(
+        self,
+        label: str | None,
+        kind: str,
+        *,
+        context: dict[str, Any] | None = None,
+        **fields: Any,
+    ) -> dict[str, Any]:
+        """Append a record to the run for `label`; `context` is written if this opens the run.
 
         A run closed behind the grouper's back, for example through the API, is replaced by a
         new one.
         """
         try:
-            return self._live.append(self.run_for(label), kind, **fields)
+            return self._live.append(self.run_for(label, context=context), kind, **fields)
         except LiveRunError:
-            return self._live.append(self.run_for(label, fresh=True), kind, **fields)
+            run_id = self.run_for(label, fresh=True, context=context)
+            return self._live.append(run_id, kind, **fields)
 
 
 def require_proxy_token(request: Request) -> None:
@@ -261,7 +278,8 @@ async def forward(
         return error(dialect, 400, f"{RUN_HEADER} must match {RUN_LABEL.pattern}")
     try:
         labels = header_labels(request)
-    except LabelsError as problem:
+        header_agent(request)
+    except (LabelsError, AgentError) as problem:
         return error(dialect, 400, str(problem))
     try:
         body = await read_body(request, settings.proxy_max_body_bytes)
@@ -483,10 +501,13 @@ class Exchange:
             outcome = "blocked"
         else:
             outcome = "error" if failed else "success"
+        rule: Rule = self.request.app.state.policy
+        agent = header_agent(self.request)
         await run_in_threadpool(
             self.request.app.state.runs.record,
             self.label,
             "llm_call",
+            context=run_context(rule, agent, "header" if agent else None),
             target={
                 "type": "model",
                 "name": self.model,

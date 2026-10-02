@@ -84,6 +84,7 @@ def verify_run(
     report = RunReport(run_id, len(records), first_seq, records[-1]["hash"], False)
     seen_ids: set[str] = set()
     ended = False
+    policy_set_hash: str | None = None
 
     for index, record in enumerate(records):
         seq = first_seq + index
@@ -133,6 +134,7 @@ def verify_run(
                 raise VerificationError("witness", "anchor receipt not verified", run_id, seq)
         if record["kind"] == "run_end":
             ended = True
+        policy_set_hash = _check_context(record, policy_set_hash, run_id, seq)
         if record["target"].get("location") == "cloud" and record.get("outcome") != "blocked":
             for label in record["data_labels"]:
                 report.labels_sent_to_cloud[label] = report.labels_sent_to_cloud.get(label, 0) + 1
@@ -163,6 +165,31 @@ def _delegation_for_run(
     if problem:
         raise VerificationError("delegation", problem, run_id, first["seq"])
     return delegation
+
+
+def _check_context(
+    record: dict[str, Any], policy_set_hash: str | None, run_id: str, seq: int
+) -> str | None:
+    """Apply SPEC 10.6 to one record and return the run's policy set digest, if any.
+
+    `sealedrun.context` sits on `run_start` only, and every `policy` block that names a policy
+    set names the run's.
+    """
+    context = record.get("extensions", {}).get("sealedrun.context")
+    if context is not None:
+        if record["kind"] != "run_start":
+            raise VerificationError(
+                "context", "sealedrun.context on a record other than run_start", run_id, seq
+            )
+        policy_set_hash = context.get("policy_set_hash")
+    policy = record.get("policy")
+    if policy is not None and policy_set_hash is not None:
+        declared = policy.get("policy_set_hash")
+        if declared is not None and declared != policy_set_hash:
+            raise VerificationError(
+                "context", "policy_set_hash differs from the run's context", run_id, seq
+            )
+    return policy_set_hash
 
 
 def _check_payload(

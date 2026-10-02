@@ -7,6 +7,10 @@
     "check": "chain",
     "seq": 4
   },
+  "context-on-llm-call.jsonl": {
+    "check": "context",
+    "seq": 1
+  },
   "duplicate-record-id.jsonl": {
     "check": "record_id",
     "seq": 3
@@ -23,6 +27,10 @@
   "malformed-anchor-extension.jsonl": {
     "check": "schema",
     "seq": 3
+  },
+  "policy-set-hash-mismatch.jsonl": {
+    "check": "context",
+    "seq": 1
   },
   "receipt-digest-mismatch.jsonl": {
     "check": "anchor",

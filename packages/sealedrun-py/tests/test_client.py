@@ -80,6 +80,14 @@ def test_record_posts_body_and_headers(fake: FakeRecorder, recorder: Recorder) -
     }
 
 
+def test_agent_option_sets_the_header(fake: FakeRecorder) -> None:
+    Recorder(fake.url, agent="acme-planner/2.3.1").record("note", "x")
+    [(headers, _)] = fake.posts
+    assert headers["x-sealedrun-agent"] == "acme-planner/2.3.1"
+    with pytest.raises(ValueError, match="agent"):
+        Recorder(fake.url, agent="no version")
+
+
 def test_target_type_follows_the_kind(fake: FakeRecorder, recorder: Recorder) -> None:
     recorder.record("memory_read", "vector-store", location="cloud", endpoint="https://v.example")
     recorder.record("llm_call", "gpt-4.1", target_type="model", provider="openai")

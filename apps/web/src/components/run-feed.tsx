@@ -1,16 +1,19 @@
 "use client";
 
 import type { SealedRunRecord } from "@sealedrun/core";
-import { ChevronDown, Download } from "lucide-react";
+import { Check, ChevronDown, Copy, Download } from "lucide-react";
 import { useState } from "react";
 
 import {
   anchorInfo,
   capText,
+  contextDifferences,
   decodePayload,
   describeTarget,
   isSelfReported,
   recordKey,
+  type RunContext,
+  runContext,
   summarize,
   type WitnessVerdict,
 } from "@/lib/inspect";
@@ -39,21 +42,25 @@ const TAG_TONES: Record<string, string> = {
  *
  * @param payloads - Bodies from a local bundle, keyed by digest, shown inline in the step detail.
  * @param onDownload - Set for recorder runs, where bodies are downloaded instead of shown.
+ * @param previous - Context of the run shown before this one, to say whether the two compare.
  */
 export function RunFeed({
   records,
   payloads,
   onDownload,
   witness,
+  previous,
 }: {
   records: SealedRunRecord[];
   payloads?: Map<string, Uint8Array> | undefined;
   onDownload?: OnDownload;
   /** Per anchor record (see `recordKey`), whether its receipt verified against a trusted witness. */
   witness?: Map<string, WitnessVerdict> | undefined;
+  previous?: { label: string; context: RunContext } | null | undefined;
 }) {
   const [open, setOpen] = useState<string | null>(null);
   const summary = summarize(records);
+  const context = runContext(records);
   const verified = witness
     ? records.filter((r) => r.kind === "anchor" && witness.get(recordKey(r))?.verified).length
     : undefined;
@@ -81,6 +88,7 @@ export function RunFeed({
         )}
         {summary.anchors > 0 && witnessSummary(summary.anchors, verified)}
       </p>
+      {context && <ContextCard context={context} previous={previous ?? null} />}
       <ol className="mt-6">
         {records.map((record, index) => (
           <Step
@@ -97,6 +105,109 @@ export function RunFeed({
         ))}
       </ol>
     </div>
+  );
+}
+
+/**
+ * What produced the run (SPEC 10.6): the agent as it named itself, the recorder, the policy set
+ * and the tool inventory digests. Says when the run cannot be compared with the one shown before.
+ */
+function ContextCard({
+  context,
+  previous,
+}: {
+  context: RunContext;
+  previous: { label: string; context: RunContext } | null;
+}) {
+  const sources: Record<string, string> = {
+    header: "named itself in the request header",
+    mcp_client_info: "named itself as the MCP client",
+    otel: "named itself in the trace",
+  };
+  const rows: [string, React.ReactNode][] = [
+    [
+      "Agent",
+      context.agent ? (
+        <>
+          {context.agent}
+          {context.agentSource && (
+            <span className="text-ink-soft">
+              {" "}
+              ({sources[context.agentSource] ?? context.agentSource})
+            </span>
+          )}
+        </>
+      ) : (
+        <span className="text-ink-soft">did not name itself</span>
+      ),
+    ],
+    ["Recorder", context.recorder],
+    [
+      "Policy set",
+      context.policySetHash ? (
+        <Digest value={context.policySetHash} />
+      ) : (
+        <span className="text-ink-soft">no rule active</span>
+      ),
+    ],
+    [
+      "Tool inventory",
+      context.toolInventoryHash ? (
+        <>
+          {context.toolInventoryServer && <span>{context.toolInventoryServer} </span>}
+          <Digest value={context.toolInventoryHash} />
+        </>
+      ) : (
+        <span className="text-ink-soft">not listed at start</span>
+      ),
+    ],
+  ];
+  const differences = previous ? contextDifferences(context, previous.context) : [];
+  return (
+    <section className="mt-4 rounded-lg border border-line bg-surface px-4 py-3">
+      <h3 className="text-sm font-semibold">What produced this run</h3>
+      <dl className="mt-2 grid gap-x-4 gap-y-1 text-sm sm:grid-cols-[auto_1fr]">
+        {rows.map(([label, value]) => (
+          <div key={label} className="contents">
+            <dt className="text-ink-soft">{label}</dt>
+            <dd className="min-w-0 break-words">{value}</dd>
+          </div>
+        ))}
+      </dl>
+      {previous && (
+        <p className={`mt-2 text-sm ${differences.length > 0 ? "text-warn" : "text-ink-soft"}`}>
+          {differences.length > 0
+            ? `Not comparable with ${previous.label}: the ${differences.join(", ")} differ${differences.length === 1 ? "s" : ""}.`
+            : `Comparable with ${previous.label}: same agent, policy set and tool inventory.`}
+        </p>
+      )}
+    </section>
+  );
+}
+
+/** A digest shown short, with the full value on hover and a copy button. */
+function Digest({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    void navigator.clipboard?.writeText(value).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  };
+  return (
+    <span className="inline-flex items-center gap-1">
+      <span className="hash" title={value}>
+        {value.slice(0, 16)}…
+      </span>
+      <button
+        type="button"
+        onClick={copy}
+        className="shrink-0 cursor-pointer rounded p-0.5 text-ink-soft hover:text-ink"
+        aria-label={copied ? "Copied" : "Copy digest"}
+      >
+        {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+      </button>
+    </span>
   );
 }
 

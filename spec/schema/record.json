@@ -395,6 +395,9 @@
         },
         "note": {
           "type": "string"
+        },
+        "policy_set_hash": {
+          "$ref": "common.json#/$defs/digestHex"
         }
       }
     }

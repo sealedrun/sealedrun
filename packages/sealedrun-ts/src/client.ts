@@ -15,6 +15,7 @@
 import type { Target } from "./types.js";
 
 const JSON_TYPE = "application/json";
+const AGENT = /^[A-Za-z0-9._-]{1,64}\/[A-Za-z0-9._+-]{1,32}$/;
 const TARGET_TYPES: Record<string, string> = {
   llm_call: "model",
   tool_call: "tool",
@@ -86,6 +87,8 @@ export interface RecorderOptions {
   token?: string;
   /** Run label, sent as `X-SealedRun-Run`; joins the run of proxied calls with the same label. */
   run?: string;
+  /** Agent `<name>/<version>`, sent as `X-SealedRun-Agent`; lands in the run's `sealedrun.context`. */
+  agent?: string;
   /** Seconds to wait for the recorder; defaults to 5. */
   timeout?: number;
   /** `fetch` to use; defaults to the global one. */
@@ -104,6 +107,9 @@ export class Recorder {
   constructor(url: string, options: RecorderOptions = {}) {
     if (!/^https?:\/\//.test(url)) throw new Error("url must start with http:// or https://");
     if (/^\w+:\/\/[^/]*@/.test(url)) throw new Error("url must not carry credentials");
+    if (options.agent !== undefined && !AGENT.test(options.agent)) {
+      throw new Error("agent must be <name>/<version>");
+    }
     this.url = url.replace(/\/+$/, "");
     this.options = options;
   }
@@ -192,6 +198,7 @@ export class Recorder {
     const headers: Record<string, string> = { "Content-Type": JSON_TYPE };
     if (this.options.token) headers["Authorization"] = `Bearer ${this.options.token}`;
     if (this.options.run) headers["X-SealedRun-Run"] = this.options.run;
+    if (this.options.agent) headers["X-SealedRun-Agent"] = this.options.agent;
     const doFetch = this.options.fetch ?? fetch;
     let reply: Response;
     try {

@@ -42,6 +42,7 @@ from starlette.responses import StreamingResponse
 
 from sealedrun_recorder.limits import BodyTooLargeError, parse_json, read_body, read_reply
 from sealedrun_recorder.policy import Decision, Rule
+from sealedrun_recorder.proxy.context import AgentError, header_agent, run_context
 from sealedrun_recorder.proxy.core import (
     JSON,
     RUN_HEADER,
@@ -118,7 +119,8 @@ async def a2a(agent: str, request: Request, path: str = "") -> Response:
         return error(400, f"{RUN_HEADER} must match {RUN_LABEL.pattern}")
     try:
         labels = header_labels(request)
-    except LabelsError as problem:
+        header_agent(request)
+    except (LabelsError, AgentError) as problem:
         return error(400, str(problem))
     upstreams: Upstreams = request.app.state.upstreams
     target = upstreams.a2a(agent)
@@ -402,10 +404,13 @@ async def _record(
     if policy is not None:
         fields["policy"] = policy.document()
     runs = request.app.state.runs
+    rule: Rule = request.app.state.policy
+    caller = header_agent(request)
     await run_in_threadpool(
         runs.record,
         label,
         "tool_call",
+        context=run_context(rule, caller, "header" if caller else None),
         target={
             "type": "tool",
             "name": f"{target.name}/{_target_suffix(call.method)}",
