@@ -5,6 +5,10 @@ follows Semantic Versioning once 1.0.0 is reached.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-05
+
+Every run now says what produced it (`sealedrun.context`, SPEC 10.6), and the recorder moves to SQLAlchemy 2.1.
+
 ### Added
 
 - `sealedrun.context` on every `run_start` (SPEC 10.6): what produced the run. The recorder names itself (`recorder_software`), the policy set in force (`policy_set_hash`, a SHA-256 over the canonical rules; the same digest sits in every `policy` block as `policy_set_hash`, SPEC 5.7) and, when the run opens on an MCP `tools/list`, the tool inventory the agent saw (`tool_inventory_hash` over the `tools` sorted by name, `tool_inventory_server`). The agent names itself with `X-SealedRun-Agent: <name>/<version>` on the first call of a run (any proxy dialect, `/api/steps`; never forwarded upstream; 400 when malformed), else through the MCP `_meta` clientInfo or the `gen_ai.agent.*` span attributes; `agent_source` says which. Until now a bundle proved a record was not changed, but not which agent version, policy set or tool inventory produced it, so two runs could not be compared. Both verifiers check the shape and fail a run with check `context` when the extension sits on a record other than `run_start` or a `policy` block names another policy set than the run's. Python `Recorder(agent=...)` and TypeScript `RecorderOptions.agent` set the header. Inspector shows a "What produced this run" card and says whether the run is comparable with the one shown before it. New vectors `records/context-run.jsonl`, `chains/policy-set-hash-mismatch.jsonl`, `chains/context-on-llm-call.jsonl`; `two-runs.zip` and `duplicate-record-id-across-runs.zip` regenerated with the context on their second run.
