@@ -5,6 +5,14 @@ follows Semantic Versioning once 1.0.0 is reached.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-06
+
+Patch release: a run that opens on a wrapped MCP stdio server can name its agent.
+
+### Fixed
+
+- `sealedrun-mcp-wrap --agent <name>/<version>` (or `SEALEDRUN_AGENT`) sends `X-SealedRun-Agent` with every step it posts. An MCP client such as Codex starts its stdio servers before the first model call, so the run opened on the wrapper's `tools/list`, which carried no agent, and the name sent later on the model calls was dropped: the run said "Agent did not name itself". A malformed value stops the wrapper at start instead of losing records to a 400; the variable is not passed on to the wrapped server.
+
 ## [0.4.0] - 2026-10-05
 
 Every run now says what produced it (`sealedrun.context`, SPEC 10.6), and the recorder moves to SQLAlchemy 2.1.

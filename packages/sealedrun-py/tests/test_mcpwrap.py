@@ -156,6 +156,23 @@ def test_arguments_and_environment_defaults(monkeypatch: pytest.MonkeyPatch) -> 
     )
 
 
+def test_agent_comes_from_the_flag_or_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SEALEDRUN_AGENT", raising=False)
+    assert parse_args(["--", "server"]).agent is None
+    assert parse_args(["--agent", "codex/0.160.1", "--", "server"]).agent == "codex/0.160.1"
+    monkeypatch.setenv("SEALEDRUN_AGENT", "acme-planner/2.3.1")
+    assert parse_args(["--", "server"]).agent == "acme-planner/2.3.1"
+    assert parse_args(["--agent", "codex/1", "--", "server"]).agent == "codex/1"
+
+
+@pytest.mark.parametrize("value", ["codex", "codex/", "/1", "co dex/1", "codex/1/2"])
+def test_malformed_agent_stops_the_start(value: str, capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as stop:
+        parse_args(["--agent", value, "--", "server"])
+    assert stop.value.code == 2
+    assert "--agent must be <name>/<version>" in capsys.readouterr().err
+
+
 def test_token_comes_from_a_file_never_from_the_command_line(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
