@@ -5,7 +5,7 @@ call, memory access, policy decision, human approval — becomes a signed record
 hash chain. Records are exported as an evidence bundle that anyone can verify offline, without
 trusting the operator.
 
-Status: early development. 0.4.0 records every channel of an agent: LLM proxy (OpenAI, Anthropic,
+Status: early development. 0.4.1 records every channel of an agent: LLM proxy (OpenAI, Anthropic,
 Ollama and Gemini wire formats), MCP servers (HTTP proxy and stdio wrapper), A2A agents, self-reported
 steps from the SDKs and OpenTelemetry GenAI spans, anchored in Sigstore Rekor and RFC 3161 witnesses
 that both verifiers check offline, after a security pass over the whole surface.
@@ -89,7 +89,7 @@ print(report.complete, report.labels_sent_to_cloud)
 ```bash
 pip install sealedrun              # Python library: write, read and verify records and bundles
 npm install @sealedrun/core        # TypeScript verifier, runs in Node.js and in the browser
-docker run --rm -p 127.0.0.1:8080:8080 ghcr.io/sealedrun/sealedrun:0.4.0   # recorder + Inspector
+docker run --rm -p 127.0.0.1:8080:8080 ghcr.io/sealedrun/sealedrun:0.4.1   # recorder + Inspector
 ```
 
 Releases are published from GitHub Actions through PyPI and npm trusted publishing; both registries
@@ -248,7 +248,9 @@ ones of the HTTP proxy; the server's stderr and exit code pass through. The reco
 token come from `--url` / `SEALEDRUN_URL` and `SEALEDRUN_TOKEN` or `--token-file` (never a
 command-line token: `/proc` shows it to every local user); `--run` (or
 `SEALEDRUN_RUN`) is the same label as `X-SealedRun-Run`, so the tool calls land in the run of the
-model calls. A recorder that cannot be reached does not stop the call: the reply is delivered and
+model calls; `--agent <name>/<version>` (or `SEALEDRUN_AGENT`) is the same value as
+`X-SealedRun-Agent`. An MCP client starts its servers before the first model call, so a run often
+opens on a wrapped `tools/list`, and without `--agent` that run does not name its agent. A recorder that cannot be reached does not stop the call: the reply is delivered and
 a warning goes to stderr; with `--strict` the client gets a JSON-RPC error instead. The wrapper
 keeps at most 1024 open requests (older ones are recorded as truncated), relays a line above 16 MB
 in pieces without recording it (warning), and gives a recorder post up to `--timeout` seconds in
@@ -256,14 +258,14 @@ total before it gives up. POSIX only.
 
 ```bash
 claude mcp add --env SEALEDRUN_TOKEN=$SEALEDRUN_API_TOKEN --transport stdio fs -- \
-  sealedrun-mcp-wrap --server fs --run my-task -- npx -y @modelcontextprotocol/server-filesystem .
+  sealedrun-mcp-wrap --server fs --run my-task --agent claude-code/2.1.284 -- npx -y @modelcontextprotocol/server-filesystem .
 ```
 
 ```toml
 # ~/.codex/config.toml
 [mcp_servers.fs]
 command = "sealedrun-mcp-wrap"
-args = ["--server", "fs", "--run", "my-task", "--", "npx", "-y", "@modelcontextprotocol/server-filesystem", "."]
+args = ["--server", "fs", "--run", "my-task", "--agent", "codex/0.160.1", "--", "npx", "-y", "@modelcontextprotocol/server-filesystem", "."]
 env = { SEALEDRUN_TOKEN = "..." }
 ```
 

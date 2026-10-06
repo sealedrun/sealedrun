@@ -47,6 +47,8 @@ for raw in sys.stdin:
         if arguments.get("fail"):
             reply({"jsonrpc": "2.0", "id": rid, "error": {"code": -32602, "message": "bad"}})
             continue
+        if arguments.get("environ"):
+            arguments = {"environ": sorted(k for k in os.environ if k.startswith("SEALEDRUN_"))}
         result = {"content": [{"type": "text", "text": json.dumps(arguments)}]}
         if "reply_id" in arguments:
             reply({"jsonrpc": "2.0", "id": arguments["reply_id"], "result": result})

@@ -119,6 +119,7 @@ def test_tool_call_is_posted_before_the_reply_is_delivered(recorder: FakeRecorde
     assert post["path"] == "/api/steps"
     assert recorder.headers[0]["authorization"] == "Bearer tok"
     assert recorder.headers[0]["x-sealedrun-run"] == "job-9"
+    assert "x-sealedrun-agent" not in recorder.headers[0]
     assert step["kind"] == "tool_call"
     assert step["outcome"] == "success"
     assert step["target"] == {
@@ -146,6 +147,25 @@ def test_tool_call_is_posted_before_the_reply_is_delivered(recorder: FakeRecorde
     assert json.loads(step["response"]) == reply
     assert step["request_media_type"] == step["response_media_type"] == "application/json"
     assert b"tok" not in err
+
+
+@pytest.mark.parametrize("by_env", [False, True])
+def test_agent_is_sent_with_every_post_and_hidden_from_the_server(
+    recorder: FakeRecorder, by_env: bool
+) -> None:
+    agent = "codex/0.160.1"
+    proc = (
+        _spawn(recorder.url, env={"SEALEDRUN_AGENT": agent})
+        if by_env
+        else _spawn(recorder.url, "--agent", agent)
+    )
+    _send(proc, _request("tools/list", 1, MODERN_META))
+    _readline(proc)
+    _send(proc, _request("tools/call", 2, MODERN_META, name="add", arguments={"environ": True}))
+    reply = _readline(proc)
+    _finish(proc)
+    assert [h["x-sealedrun-agent"] for h in recorder.headers] == [agent, agent]
+    assert json.loads(reply["result"]["content"][0]["text"]) == {"environ": []}
 
 
 def test_legacy_initialize_version_is_remembered(recorder: FakeRecorder) -> None:

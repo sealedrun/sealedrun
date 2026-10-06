@@ -13,7 +13,8 @@ Recording follows the HTTP proxy's rules: `tools/call`, `resources/read`, `promp
 `tools/list` requests become `tool_call` steps posted to `POST /api/steps` with the request line
 and the response line as payloads, before the response is delivered to the client. The steps
 carry `sealedrun.step` (`source: self_reported`, `via: sealedrun-mcp-wrap`, latency, truncation):
-a wrapper reports what it relayed, it is not a proxy the recorder runs. A recorder
+a wrapper reports what it relayed, it is not a proxy the recorder runs. With `--agent` every
+post carries `X-SealedRun-Agent`, so a run that opens on a wrapped call names its agent. A recorder
 that cannot be reached does not stop the call: the response is delivered and a warning goes to
 stderr, unless `--strict` is set, in which case the client gets a JSON-RPC error instead. A
 request cancelled by the client or still open when the server exits is recorded as truncated.
@@ -42,7 +43,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import IO, Any
 
-from sealedrun.client import RecorderError, post_step
+from sealedrun.client import AGENT, RecorderError, post_step
 
 DEFAULT_URL = "http://127.0.0.1:8080"
 DEFAULT_TIMEOUT = 5.0
@@ -53,7 +54,7 @@ META_VERSION = "io.modelcontextprotocol/protocolVersion"
 NOT_RECORDED_CODE = 1001
 MAX_PENDING = 1024
 MAX_LINE_BYTES = 16 * 1024 * 1024
-HIDDEN_ENV = frozenset({"SEALEDRUN_TOKEN", "SEALEDRUN_URL", "SEALEDRUN_RUN"})
+HIDDEN_ENV = frozenset({"SEALEDRUN_TOKEN", "SEALEDRUN_URL", "SEALEDRUN_RUN", "SEALEDRUN_AGENT"})
 
 
 class Observer:
@@ -116,6 +117,7 @@ class Recording(Observer):
     url: str
     token: str | None = None
     run: str | None = None
+    agent: str | None = None
     strict: bool = False
     timeout: float = DEFAULT_TIMEOUT
     stderr: IO[str] = field(default_factory=lambda: sys.stderr)
@@ -235,7 +237,14 @@ class Recording(Observer):
 
         def work() -> None:
             try:
-                post_step(self.url, step, token=self.token, run=self.run, timeout=self.timeout)
+                post_step(
+                    self.url,
+                    step,
+                    token=self.token,
+                    run=self.run,
+                    agent=self.agent,
+                    timeout=self.timeout,
+                )
                 outcome.append(None)
             except RecorderError as error:
                 outcome.append(error)
@@ -496,6 +505,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--server", help="server name in the records (default: command name)")
     parser.add_argument("--run", help="run label, joins the run of proxied LLM calls with it")
+    parser.add_argument(
+        "--agent",
+        help="agent as <name>/<version> for the run's context (default: SEALEDRUN_AGENT)",
+    )
     parser.add_argument("--url", help=f"recorder URL (default {DEFAULT_URL} or SEALEDRUN_URL)")
     parser.add_argument(
         "--token-file",
@@ -528,6 +541,9 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     args.command = command
     args.server = args.server or os.path.basename(command[0])
     args.run = args.run or os.environ.get("SEALEDRUN_RUN") or None
+    args.agent = args.agent or os.environ.get("SEALEDRUN_AGENT") or None
+    if args.agent is not None and not AGENT.match(args.agent):
+        build_parser().error("--agent must be <name>/<version>")
     args.url = (args.url or os.environ.get("SEALEDRUN_URL") or DEFAULT_URL).rstrip("/")
     if not args.url.startswith(("http://", "https://")):
         build_parser().error("--url must start with http:// or https://")
@@ -549,6 +565,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         url=args.url,
         token=args.token,
         run=args.run,
+        agent=args.agent,
         strict=args.strict,
         timeout=args.timeout,
     )
