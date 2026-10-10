@@ -118,6 +118,39 @@ export function summarize(records: SealedRunRecord[]) {
   };
 }
 
+/** Most bytes a bundle file may have to be verified in the browser; the CLI has no such cap. */
+export const MAX_BROWSER_BUNDLE_BYTES = 1024 * 1024 * 1024;
+/** Above this, the Inspector points at the export without payloads before a full one. */
+export const LARGE_EXPORT_BYTES = 256 * 1024 * 1024;
+
+/** Bytes the distinct payload bodies of these records would add to a full export. */
+export function payloadBytes(records: SealedRunRecord[]): number {
+  const sizes = new Map<string, number>();
+  for (const record of records) {
+    const ref = record.payload;
+    if (!ref || ref.storage !== "bundle") continue;
+    for (const side of ["request", "response"] as const) {
+      const hash = ref[`${side}_hash`];
+      if (typeof hash === "string") sizes.set(hash, Number(ref[`${side}_size`] ?? 0));
+    }
+  }
+  let total = 0;
+  for (const size of sizes.values()) total += size;
+  return total;
+}
+
+/** A byte count in decimal units with at most one decimal, for example `1.2 GB`. */
+export function formatBytes(size: number): string {
+  let value = size;
+  for (const unit of ["B", "kB", "MB", "GB"]) {
+    if (value < 1000 || unit === "GB") {
+      return unit === "B" ? `${value} B` : `${value.toFixed(1).replace(/\.0$/, "")} ${unit}`;
+    }
+    value /= 1000;
+  }
+  return `${value.toFixed(1)} GB`;
+}
+
 /** The `sealedrun.context` of a run's `run_start` (SPEC 10.6), as far as the record carries it. */
 export interface RunContext {
   recorder: string;

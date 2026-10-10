@@ -32,6 +32,8 @@ export interface BundleReport {
   exporterAgentId: string;
   /** False means integrity only: the Principal was not compared with a trust anchor (SPEC 13.2). */
   principalTrusted: boolean;
+  /** True when the exporter left every payload body out on purpose; the bodies were not checked. */
+  payloadsOmitted: boolean;
 }
 
 /** Optional inputs of {@link verifyBundle}. */
@@ -68,7 +70,7 @@ export const MAX_ENTRY_BYTES = 64 * 1024 * 1024;
 /** Limit on `manifest.json` (SPEC 13.1). {@link BundleLimits} cannot raise it. */
 export const MAX_MANIFEST_BYTES = 4 * 1024 * 1024;
 /** Default limit on the uncompressed size of all entries together. */
-export const MAX_TOTAL_BYTES = 512 * 1024 * 1024;
+export const MAX_TOTAL_BYTES = 4 * 1024 * 1024 * 1024;
 
 /** Overrides of the archive size limits applied by {@link readBundle}. */
 export interface BundleLimits {
@@ -124,7 +126,10 @@ function unzipLimited(data: Uint8Array, limits: BundleLimits): Record<string, Ui
         throw new VerificationError("bundle", "entry exceeds size limit");
       }
       if (total > maxTotal) {
-        throw new VerificationError("bundle", "archive exceeds uncompressed size limit");
+        throw new VerificationError(
+          "bundle",
+          `archive exceeds uncompressed size limit (${human(total)} claimed, limit ${human(maxTotal)})`,
+        );
       }
       if (compressed > data.length) {
         throw new VerificationError("bundle", "entries overlap or exceed the archive");
@@ -132,6 +137,20 @@ function unzipLimited(data: Uint8Array, limits: BundleLimits): Record<string, Ui
       return true;
     },
   });
+}
+
+/** Formats a byte count as a short decimal unit string, for example `1.19 GB`. */
+function human(size: number): string {
+  let value = size;
+  for (const unit of ["B", "kB", "MB", "GB"]) {
+    if (value < 1000 || unit === "GB") {
+      return unit === "B"
+        ? `${value.toFixed(0)} B`
+        : `${value.toFixed(2).replace(/\.00$/, "")} ${unit}`;
+    }
+    value /= 1000;
+  }
+  return `${value.toFixed(2)} GB`;
 }
 
 function payloadKey(path: string, content: Uint8Array, hashAlg: HashAlg): string {
@@ -258,10 +277,17 @@ export function verifyBundle(bundle: Bundle, options: VerifyBundleOptions = {}):
   ) {
     throw new VerificationError("manifest", "run list does not match files");
   }
+  const omitted = manifest.payloads === "omitted";
+  if (omitted && bundle.payloads.size > 0) {
+    throw new VerificationError(
+      "bundle",
+      "payload bodies present although the manifest says omitted",
+    );
+  }
   const runs = manifest.runs.map((entry) => {
     const records = bundle.runs.get(entry.run_id) ?? [];
     const report = verifyRun(records, bundle.delegations, {
-      payloads: bundle.payloads,
+      ...(omitted ? {} : { payloads: bundle.payloads }),
       ...(entry.first_seq > 0 ? { expectedPrevHash: entry.first_hash } : {}),
     });
     if (report.recordCount !== entry.record_count || report.lastHash !== entry.last_hash) {
@@ -287,6 +313,7 @@ export function verifyBundle(bundle: Bundle, options: VerifyBundleOptions = {}):
     principalId: manifest.principal_id,
     exporterAgentId: manifest.exporter.agent_id,
     principalTrusted: trusted !== undefined,
+    payloadsOmitted: omitted,
   };
 }
 

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import io
-from typing import Any
+import tempfile
+from collections.abc import Iterator, Mapping
+from typing import Any, BinaryIO, cast
 
 from sealedrun import write_bundle
 from sqlalchemy import select
@@ -24,13 +25,46 @@ class ExportError(Exception):
         self.status = status
 
 
-def build_bundle(session: Session, identity: Identity, run_id: str) -> bytes:
-    """Return a bundle archive holding the live run `run_id`, signed by this recorder.
+SPOOL_BYTES = 64 * 1024 * 1024
+
+
+class _StoredPayloads(Mapping[str, bytes]):
+    """Payload bodies of one run read from the database one at a time, in digest order."""
+
+    def __init__(self, session: Session, digests: list[str]):
+        self._session = session
+        self._digests = digests
+
+    def __getitem__(self, digest: str) -> bytes:
+        row = self._session.get(PayloadRow, digest)
+        if row is None:
+            raise ExportError(500, f"payload body missing from the database: {digest}")
+        body = row.body
+        self._session.expunge(row)
+        return body
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._digests)
+
+    def __len__(self) -> int:
+        return len(self._digests)
+
+
+def build_bundle(
+    session: Session, identity: Identity, run_id: str, *, payloads_omitted: bool = False
+) -> tempfile.SpooledTemporaryFile[bytes]:
+    """Return a seekable file holding the bundle archive of live run `run_id`, at offset 0.
+
+    The archive is spooled to disk past `SPOOL_BYTES`, and each payload body is read from the
+    database only while it is being written, so a run of gigabytes does not need that much
+    memory. The caller closes the file.
 
     The recorder's agent key is the exporter and its principal key countersigns. An open run
     is exported as it stands, with `complete` false in the manifest. Imported runs are refused:
     their original bundle is the record. A payload body a record names but the database no
-    longer holds is an error, never a silent gap.
+    longer holds is an error, never a silent gap. With `payloads_omitted` no body is read or
+    written and the manifest says so (SPEC 13.1): the archive of a long session shrinks from
+    gigabytes to the records alone.
 
     Raises:
         ExportError: 404 when the run is unknown, 409 when it was imported, 500 when a payload
@@ -49,37 +83,58 @@ def build_bundle(session: Session, identity: Identity, run_id: str) -> bytes:
         )
     ]
     delegation = _delegation_of(session, records[0])
-    payloads: dict[str, bytes] = {}
+    digests: list[str] = []
     for record in records:
         ref = record.get("payload") or {}
-        if ref.get("storage") != "bundle":
+        if payloads_omitted or ref.get("storage") != "bundle":
             continue
         for side in ("request", "response"):
             digest = ref.get(f"{side}_hash")
-            if digest is None or digest in payloads:
+            if digest is None or digest in digests:
                 continue
-            row = session.get(PayloadRow, digest)
-            if row is None:
+            stored = session.scalar(select(PayloadRow.digest).where(PayloadRow.digest == digest))
+            if stored is None:
                 raise ExportError(500, f"payload body missing from the database: {digest}")
-            payloads[digest] = row.body
+            digests.append(digest)
     anchors = {
         r["record_id"]: r["extensions"]["sealedrun.anchor"]["receipt"]
         for r in records
         if r["kind"] == "anchor"
     }
-    out = io.BytesIO()
+    out = tempfile.SpooledTemporaryFile(max_size=SPOOL_BYTES)
     write_bundle(
-        out,
+        cast(BinaryIO, out),
         exporter=identity.agent,
         software=SOFTWARE,
         delegations=[delegation],
         runs=[records],
-        payloads=payloads,
+        payloads=_StoredPayloads(session, digests),
         anchors=anchors,
         principal=identity.principal,
         hash_alg=run.hash_alg,
+        payloads_omitted=payloads_omitted,
     )
-    return out.getvalue()
+    out.seek(0)
+    return out
+
+
+def payload_bytes(session: Session, run_id: str) -> int:
+    """Sum of the distinct payload bodies a full export of `run_id` would carry, in bytes.
+
+    Read from the sizes the records state, not from the bodies, so the answer is cheap.
+    """
+    seen: dict[str, int] = {}
+    query = select(RecordRow.document).where(RecordRow.run_id == run_id)
+    documents: list[dict[str, Any]] = list(session.scalars(query))
+    for document in documents:
+        ref = document.get("payload") or {}
+        if ref.get("storage") != "bundle":
+            continue
+        for side in ("request", "response"):
+            digest = ref.get(f"{side}_hash")
+            if digest is not None:
+                seen[digest] = int(ref.get(f"{side}_size") or 0)
+    return sum(seen.values())
 
 
 def _delegation_of(session: Session, first: dict[str, Any]) -> dict[str, Any]:

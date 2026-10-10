@@ -4,17 +4,18 @@ from __future__ import annotations
 
 import hmac
 import re
-from typing import Annotated, Any
+from collections.abc import Iterator
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, UploadFile
 from sealedrun import VerificationError
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, StreamingResponse
 
 from sealedrun_recorder.db import BundleRow, PayloadRow, RecordRow, RunRow
-from sealedrun_recorder.export import ExportError, build_bundle
+from sealedrun_recorder.export import ExportError, build_bundle, payload_bytes
 from sealedrun_recorder.importer import import_bundle
 from sealedrun_recorder.limits import BodyTooLargeError, read_body
 from sealedrun_recorder.live import InvalidRecordError, LiveRunError
@@ -111,6 +112,7 @@ def identity(request: Request) -> dict[str, Any]:
         "agent_keys": live.identity.agent.public.to_json(),
         "anchor_public_key": live.identity.anchor_public_key,
         "delegation": live.identity.delegation,
+        "anchors": request.app.state.anchoring.status.as_json(),
     }
 
 
@@ -233,14 +235,58 @@ def download_bundle(bundle_id: str, session: SessionDep) -> Response:
     )
 
 
+Text = Annotated[str | None, Query(max_length=128)]
+Stamp = Annotated[str | None, Query(pattern=r"^\d{4}-\d{2}-\d{2}(T[0-9:.]+Z?)?$")]
+
+
 @router.get("/runs")
 def list_runs(
-    request: Request, session: SessionDep, limit: Limit = 100, offset: Offset = 0
+    request: Request,
+    response: Response,
+    session: SessionDep,
+    limit: Limit = 100,
+    offset: Offset = 0,
+    q: Text = None,
+    since: Stamp = None,
+    until: Stamp = None,
+    complete: bool | None = None,
+    source: Literal["live", "imported"] | None = None,
 ) -> list[dict[str, Any]]:
-    """List stored runs, latest start time first."""
-    query = select(RunRow).order_by(RunRow.started_at.desc()).limit(limit).offset(offset)
+    """List stored runs, latest start time first.
+
+    `q` matches a run id prefix or a part of the run label (case-insensitive); `since` and
+    `until` bound `started_at` (ISO 8601, `until` exclusive). The `X-Total-Count` header holds
+    the number of runs that match before paging.
+    """
+    where = []
+    if q:
+        needle = q.strip()
+        where.append(
+            or_(
+                RunRow.run_id.startswith(needle, autoescape=True),
+                RunRow.run_label.ilike(f"%{_escape(needle)}%", escape="\\"),
+            )
+        )
+    if since:
+        where.append(RunRow.started_at >= since)
+    if until:
+        where.append(RunRow.started_at < until)
+    if complete is not None:
+        where.append(RunRow.complete.is_(complete))
+    if source:
+        where.append(RunRow.source == source)
+    total = session.scalar(select(func.count()).select_from(RunRow).where(*where)) or 0
+    response.headers["X-Total-Count"] = str(total)
+    query = (
+        select(RunRow).where(*where).order_by(RunRow.started_at.desc()).limit(limit).offset(offset)
+    )
     rows = session.scalars(query).all()
     return [_run_summary(r, request) for r in rows]
+
+
+def _escape(needle: str) -> str:
+    """Escape LIKE wildcards so a user's `%` or `_` matches itself."""
+    return needle.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 @router.get("/runs/{run_id}")
@@ -249,21 +295,28 @@ def get_run(run_id: str, request: Request, session: SessionDep) -> dict[str, Any
     row = session.get(RunRow, run_id)
     if row is None:
         raise HTTPException(404, "run not found")
-    return _run_summary(row, request)
+    summary = _run_summary(row, request)
+    summary["payload_bytes"] = payload_bytes(session, run_id)
+    return summary
 
 
 @router.post("/runs/{run_id}/export")
 async def export_run(
-    run_id: str, request: Request, session: SessionDep, end: bool = False
+    run_id: str,
+    request: Request,
+    session: SessionDep,
+    end: bool = False,
+    payloads: Literal["include", "omit"] = "include",
 ) -> Response:
     """Export a live run as a bundle archive signed by this recorder.
 
     When anchoring is on, the run's head is anchored first (SPEC 8.2), so an open run leaves
     with a fresh receipt and a run ended here has its anchor right before `run_end`. With
     `end=true` the run's `run_end` record is written first, so the bundle is complete;
-    otherwise an open run is exported as it stands. Responds 404 for an unknown run, 409 for an
-    imported run (download its original bundle) and 409 with `end=true` on a run that is
-    already closed.
+    otherwise an open run is exported as it stands. With `payloads=omit` the archive holds the
+    records and receipts but no bodies, and its manifest says so. Responds 404 for an unknown
+    run, 409 for an imported run (download its original bundle) and 409 with `end=true` on a run
+    that is already closed.
     """
     await request.app.state.anchoring.anchor_run(run_id)
     if end:
@@ -273,14 +326,33 @@ async def export_run(
             raise HTTPException(409, str(error)) from error
     session.expire_all()
     try:
-        archive = build_bundle(session, request.app.state.live.identity, run_id)
+        archive = build_bundle(
+            session,
+            request.app.state.live.identity,
+            run_id,
+            payloads_omitted=payloads == "omit",
+        )
     except ExportError as error:
         raise HTTPException(error.status, str(error)) from error
-    return Response(
-        archive,
+    size = archive.seek(0, 2)
+    archive.seek(0)
+    suffix = "-records" if payloads == "omit" else ""
+
+    def chunks() -> Iterator[bytes]:
+        try:
+            while chunk := archive.read(1 << 20):
+                yield chunk
+        finally:
+            archive.close()
+
+    return StreamingResponse(
+        chunks(),
         media_type="application/zip",
         headers={
-            "Content-Disposition": f'attachment; filename="sealedrun-{_safe_name(run_id)}.zip"',
+            "Content-Disposition": (
+                f'attachment; filename="sealedrun-{_safe_name(run_id)}{suffix}.zip"'
+            ),
+            "Content-Length": str(size),
             "X-Content-Type-Options": "nosniff",
         },
     )
@@ -403,18 +475,33 @@ async def _read_step(request: Request) -> Step:
 
 @router.get("/runs/{run_id}/records")
 def list_records(
-    run_id: str, session: SessionDep, limit: Limit = 1000, offset: Offset = 0
+    run_id: str,
+    response: Response,
+    session: SessionDep,
+    limit: Limit = 1000,
+    offset: Offset = 0,
+    kind: Text = None,
+    q: Text = None,
+    outcome: Text = None,
 ) -> list[dict[str, Any]]:
-    """List the signed records of a run in seq order. Responds 404 when the run is not stored."""
+    """List the signed records of a run in seq order. Responds 404 when the run is not stored.
+
+    `kind` keeps one record kind, `outcome` one outcome, and `q` matches a part of the target
+    name (the model or tool, case-insensitive). `X-Total-Count` holds the number of records that
+    match before paging; bodies are never searched.
+    """
     if session.get(RunRow, run_id) is None:
         raise HTTPException(404, "run not found")
-    query = (
-        select(RecordRow)
-        .where(RecordRow.run_id == run_id)
-        .order_by(RecordRow.seq)
-        .limit(limit)
-        .offset(offset)
-    )
+    where = [RecordRow.run_id == run_id]
+    if kind:
+        where.append(RecordRow.kind == kind)
+    if outcome:
+        where.append(RecordRow.outcome == outcome)
+    if q:
+        where.append(RecordRow.target_name.ilike(f"%{_escape(q.strip())}%", escape="\\"))
+    total = session.scalar(select(func.count()).select_from(RecordRow).where(*where)) or 0
+    response.headers["X-Total-Count"] = str(total)
+    query = select(RecordRow).where(*where).order_by(RecordRow.seq).limit(limit).offset(offset)
     return [r.document for r in session.scalars(query)]
 
 

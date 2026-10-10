@@ -40,6 +40,12 @@ export function Verdict({ verification }: { verification: LocalVerification }) {
             {failure &&
               `Check "${failure.check}"${failure.seq !== undefined ? ` at step #${failure.seq}` : ""}: ${failure.message}`}
           </p>
+          {report?.payloadsOmitted && (
+            <p className="mt-2 max-w-[70ch] text-sm" data-testid="payloads-omitted">
+              Payloads omitted by the exporter: the records carry every body hash and size, but the
+              bodies themselves are not in this file and were not checked.
+            </p>
+          )}
           <dl className="mt-4 grid gap-x-6 gap-y-2 text-sm sm:grid-cols-[auto_1fr]">
             <dt className="text-ink-soft">File</dt>
             <dd>

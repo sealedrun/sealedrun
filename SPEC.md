@@ -694,6 +694,7 @@ anchors/<record_id>.json     optional raw witness receipts
 | `delegations`  | string[]  | Delegation ids included                                                                |
 | `runs`         | object[]  | `{ run_id, hash_alg, record_count, first_hash, last_hash, complete }`                  |
 | `files`        | object    | Map of every file path in the archive (except `manifest.json`) to its base64url digest |
+| `payloads`     | enum      | O. `included` (default when absent) or `omitted`: the exporter left every body out     |
 | `hash_alg`     | enum      | Algorithm for `hash` and `files`                                                       |
 | `hash`         | hex       |                                                                                        |
 | `signatures`   | object    | Exporter's Agent signatures; MAY include `principal_signatures`                        |
@@ -701,7 +702,17 @@ anchors/<record_id>.json     optional raw witness receipts
 Bounds, enforced by the schemas so that a reader can reject an oversized document before doing
 any other work: `delegations` and `runs` hold at most 1024 items each, a Record's `data_labels`
 at most 64, and `manifest.json` is at most 4 MiB. Readers MUST check these before any hash or
-signature work and SHOULD stop at the first schema error on untrusted input.
+signature work and SHOULD stop at the first schema error on untrusted input. Archive bounds are
+read from the ZIP central directory before any entry is inflated: at most 10 000 entries, 64 MiB
+per entry and, by default, 4 GiB for all entries together (a long agent session carries the full
+context on every call, so a run of a few hundred steps reaches 1 GiB); a reader MAY offer a
+different total and MUST name both the claimed and the allowed size when it refuses.
+
+`payloads: "omitted"` is the exporter's signed statement that no payload body was written: the
+records keep their `payload` hashes and sizes, so nothing can be forged, only withheld. A verifier
+MUST skip the body checks of SPEC 13.2 for such a bundle, MUST refuse a bundle that says
+`omitted` yet carries a `payloads/` entry, and MUST report the omission to the relying party.
+A bundle without the field, or with `included`, fails when a body a record names is absent.
 
 `complete` is true when the run contains a `run_end` record. A bundle MAY contain a slice of a
 run; then `first_hash` is the `prev_hash` of the first included record so the slice can be joined
@@ -767,6 +778,8 @@ implementations can prove conformance:
   and report two runs.
 - `bundle/open-run.zip`: the same run exported before its `run_end`; a verifier MUST accept it
   and report `complete: false`.
+- `bundle/payloads-omitted.zip` (verifies, bodies not checked) and
+  `payloads-omitted-with-bodies.zip` (refused: a body is present although the manifest says omitted).
 - `bundle/valid.zip`, `tampered-payload.zip`, `tampered-record.zip`, `poisoned-payload-name.zip`,
   `overlapping-entries.zip`, `too-many-delegations.zip`, `no-payloads.zip` with `expected.json`.
 

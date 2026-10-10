@@ -51,3 +51,19 @@ def test_cli_never_prints_terminal_control_characters(
     out = capsys.readouterr().out
     assert out.startswith("FAIL")
     assert "\x1b" not in out
+
+
+def test_cli_max_total_bytes_flag(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["--max-total-bytes", "100", str(BUNDLES / "valid.zip")]) == 1
+    out = capsys.readouterr().out
+    assert out.startswith("FAIL bundle") and "claimed, limit 100 B" in out
+    assert main([str(BUNDLES / "valid.zip"), "--max-total-bytes", "100000000"]) == 0
+    assert main(["--max-total-bytes", "0", str(BUNDLES / "valid.zip")]) == 2
+    assert main(["--max-total-bytes", "x", str(BUNDLES / "valid.zip")]) == 2
+
+
+def test_cli_reports_omitted_payloads(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main([str(BUNDLES / "payloads-omitted.zip")]) == 0
+    assert "payloads omitted by exporter (bodies not checked)" in capsys.readouterr().out
+    assert main([str(BUNDLES / "valid.zip")]) == 0
+    assert "omitted" not in capsys.readouterr().out

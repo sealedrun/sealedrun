@@ -5,7 +5,7 @@ import zipfile
 from typing import Any
 
 import pytest
-from sealedrun import PrivateKeySet, VerificationError, read_bundle, verify_bundle
+from sealedrun import PrivateKeySet, VerificationError, read_bundle, verify_bundle, write_bundle
 from sealedrun.schema import validate
 
 
@@ -124,8 +124,29 @@ def test_entry_size_limit() -> None:
 
 
 def test_total_size_limit() -> None:
-    with pytest.raises(VerificationError, match="uncompressed size"):
+    with pytest.raises(VerificationError, match="uncompressed size") as info:
         read_bundle(_bomb(2_000_000), max_total_bytes=1_000_000)
+    assert "2 MB claimed, limit 1 MB" in str(info.value)
+
+
+def test_total_size_limit_names_gigabytes() -> None:
+    # The central directory claims 1.19 GB; the reader refuses before inflating anything.
+    patched = _claim_size(_bomb(10), "payloads/zeros", 1_190_000_000)
+    with pytest.raises(VerificationError, match=r"1\.19 GB claimed, limit 1 GB"):
+        read_bundle(patched, max_entry_bytes=2_000_000_000, max_total_bytes=1_000_000_000)
+
+
+def _claim_size(archive: bytes, name: str, size: int) -> bytes:
+    """Return `archive` with the central-directory uncompressed size of `name` set to `size`."""
+    data = bytearray(archive)
+    marker = b"PK\x01\x02"
+    pos = data.find(marker)
+    while pos >= 0:
+        name_len = int.from_bytes(data[pos + 28 : pos + 30], "little")
+        if data[pos + 46 : pos + 46 + name_len].decode() == name:
+            data[pos + 24 : pos + 28] = size.to_bytes(4, "little")
+        pos = data.find(marker, pos + 4)
+    return bytes(data)
 
 
 def test_manifest_size_limit() -> None:
@@ -269,3 +290,70 @@ def test_record_id_repeating_inside_one_run_keeps_the_run_error(
     with pytest.raises(VerificationError, match="within the run") as info:
         verify_bundle(read_bundle(data))
     assert (info.value.check, info.value.seq) == ("record_id", 1)
+
+
+def test_write_bundle_refuses_bodies_with_payloads_omitted() -> None:
+    from sealedrun.vectors import build_delegation, build_run, keys_for, payload_map
+
+    principal, agent = keys_for("principal"), keys_for("agent")
+    delegation = build_delegation(principal, agent)
+    run = build_run(agent, delegation)
+    with pytest.raises(ValueError, match="payloads_omitted excludes"):
+        write_bundle(
+            io.BytesIO(),
+            exporter=agent,
+            software="t/0",
+            delegations=[delegation],
+            runs=[run.records],
+            payloads=payload_map(delegation["hash_alg"]),
+            payloads_omitted=True,
+        )
+
+
+def test_write_bundle_streams_lazy_payloads() -> None:
+    """Twenty 2 MB bodies fetched one at a time must not peak near 40 MB in memory."""
+    import tracemalloc
+    from collections.abc import Iterator, Mapping
+
+    from sealedrun.hashing import payload_digest
+    from sealedrun.vectors import build_delegation, build_run, keys_for
+
+    principal, agent = keys_for("principal"), keys_for("agent")
+    delegation = build_delegation(principal, agent)
+    run = build_run(agent, delegation)
+    size = 2 * 1024 * 1024
+    bodies = {payload_digest("sha-256", bytes([i]) * size): i for i in range(20)}
+
+    class Lazy(Mapping[str, bytes]):
+        fetched = 0
+
+        def __getitem__(self, key: str) -> bytes:
+            Lazy.fetched += 1
+            return bytes([bodies[key]]) * size
+
+        def __iter__(self) -> Iterator[str]:
+            return iter(bodies)
+
+        def __len__(self) -> int:
+            return len(bodies)
+
+    out = io.BytesIO()
+    tracemalloc.start()
+    manifest = write_bundle(
+        out,
+        exporter=agent,
+        software="t/0",
+        delegations=[delegation],
+        runs=[run.records],
+        payloads=Lazy(),
+        principal=principal,
+    )
+    _, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    assert Lazy.fetched == 20
+    assert peak < 12 * size, f"peak {peak / 1024 / 1024:.1f} MB"
+    with zipfile.ZipFile(io.BytesIO(out.getvalue())) as zf:
+        names = zf.namelist()
+        assert names[-1] == "manifest.json" and len(manifest["files"]) == len(names) - 1
+        assert sum(1 for n in names if n.startswith("payloads/")) == 20
+    assert read_bundle(out.getvalue()).manifest["bundle_id"] == manifest["bundle_id"]

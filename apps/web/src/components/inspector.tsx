@@ -4,7 +4,14 @@ import type { SealedRunRecord } from "@sealedrun/core";
 import { Download, KeyRound, Server } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
-import { api, type RunSummary, saveFile, setToken, UnauthorizedError } from "@/lib/api";
+import {
+  type AnchorStatus,
+  api,
+  type RunSummary,
+  saveFile,
+  setToken,
+  UnauthorizedError,
+} from "@/lib/api";
 import {
   type LocalVerification,
   parsePrincipals,
@@ -13,14 +20,27 @@ import {
   verifyLocally,
   witnessResults,
   type WitnessVerdict,
+  formatBytes,
+  LARGE_EXPORT_BYTES,
+  MAX_BROWSER_BUNDLE_BYTES,
+  payloadBytes,
 } from "@/lib/inspect";
-import { isGrowing, POLL_MS, runBadge, shouldPoll } from "@/lib/recorder-view";
+import { RUNS_PER_PAGE } from "@/lib/paging";
+import {
+  DEFAULT_QUERY,
+  formatQuery,
+  parseQuery,
+  type QueryState,
+  runFilters,
+} from "@/lib/query-state";
+import { describeAnchors, isGrowing, POLL_MS, shouldPoll } from "@/lib/recorder-view";
 import { trustedStore } from "@/lib/trusted-store";
 
 import { DropZone } from "./dropzone";
 import { Logo } from "./logo";
 import { ErrorBoundary } from "@/components/error-boundary";
 import { RunFeed } from "./run-feed";
+import { RunList } from "./run-list";
 import { ThemeToggle } from "./theme-toggle";
 import { Verdict } from "./verdict";
 
@@ -29,7 +49,7 @@ type View = "bundle" | "recorder";
 /** Connection to the recorder API. `locked` means it answered 401 and needs a token. */
 type Recorder =
   | { state: "loading" }
-  | { state: "ready"; runs: RunSummary[] }
+  | { state: "ready"; runs: RunSummary[]; total: number }
   | { state: "locked" }
   | { state: "offline"; message: string };
 
@@ -38,14 +58,39 @@ type Recorder =
  * principal list changes, and browses runs stored in the recorder when one is reachable.
  */
 export function Inspector() {
-  const [view, setView] = useState<View>("bundle");
+  const [query, setQueryState] = useState<QueryState>(DEFAULT_QUERY);
+  const view: View = query.tab;
+  // The URL is the source of truth for tab, run list filters, selected run and step page.
+  useEffect(() => {
+    const read = () => setQueryState(parseQuery(window.location.search));
+    read();
+    window.addEventListener("popstate", read);
+    return () => window.removeEventListener("popstate", read);
+  }, []);
+  const setQuery = useCallback((patch: Partial<QueryState>) => {
+    setQueryState((previous) => {
+      const next = { ...previous, ...patch };
+      const search = formatQuery(next);
+      if (typeof window !== "undefined" && search !== window.location.search) {
+        window.history.pushState(
+          null,
+          "",
+          `${window.location.pathname}${search}${window.location.hash}`,
+        );
+      }
+      return next;
+    });
+  }, []);
+  const setView = useCallback((tab: View) => setQuery({ tab }), [setQuery]);
   const [local, setLocal] = useState<LocalVerification | null>(null);
   const [localRun, setLocalRun] = useState<string | null>(null);
   const [witness, setWitness] = useState<Map<string, WitnessVerdict> | null>(null);
   const [lastFile, setLastFile] = useState<File | null>(null);
   const [recorder, setRecorder] = useState<Recorder>({ state: "loading" });
+  const [anchors, setAnchors] = useState<AnchorStatus | undefined>(undefined);
   const [serverRun, setServerRun] = useState<RunSummary | null>(null);
   const [serverRecords, setServerRecords] = useState<SealedRunRecord[]>([]);
+  const serverPayloadBytes = payloadBytes(serverRecords);
   const previousContext = useRef<{ runId: string; label: string; context: RunContext } | null>(
     null,
   );
@@ -75,13 +120,26 @@ export function Inspector() {
   }, [polling, refreshRuns]);
 
   const shown = useRef<RunSummary | null>(null);
+  const listQuery = useMemo(
+    () => ({
+      q: query.q,
+      ...runFilters({ state: query.state }),
+      limit: RUNS_PER_PAGE,
+      offset: (query.page - 1) * RUNS_PER_PAGE,
+    }),
+    [query.q, query.state, query.page],
+  );
   useEffect(() => {
     let cancelled = false;
     api
-      .runs()
-      .then(async (runs) => {
+      .runs(listQuery)
+      .then(async ({ runs, total }) => {
         if (cancelled) return;
-        setRecorder({ state: "ready", runs });
+        setRecorder({ state: "ready", runs, total });
+        api
+          .identity()
+          .then((identity) => setAnchors(identity.anchors))
+          .catch(() => setAnchors(undefined));
         const selected = shown.current;
         const current = selected && runs.find((run) => run.run_id === selected.run_id);
         if (
@@ -105,7 +163,7 @@ export function Inspector() {
     return () => {
       cancelled = true;
     };
-  }, [refreshTick]);
+  }, [refreshTick, listQuery]);
 
   const verify = useCallback(async (file: File, principals: string) => {
     const data = new Uint8Array(await file.arrayBuffer());
@@ -122,6 +180,12 @@ export function Inspector() {
 
   const onFile = useCallback(
     async (file: File) => {
+      if (file.size > MAX_BROWSER_BUNDLE_BYTES) {
+        setNotice(
+          `${file.name} is ${formatBytes(file.size)}; the browser verifies files up to ${formatBytes(MAX_BROWSER_BUNDLE_BYTES)}. Verify it with the command line (python -m sealedrun ${file.name}) or export the run without payloads.`,
+        );
+        return;
+      }
       setLastFile(file);
       await verify(file, trusted);
     },
@@ -145,9 +209,10 @@ export function Inspector() {
     return true;
   };
 
-  const selectServerRun = async (run: RunSummary) => {
+  const selectServerRun = async (run: RunSummary, fromUser = true) => {
     shown.current = run;
     setServerRun(run);
+    if (fromUser) setQuery({ run: run.run_id, step: 1 });
     try {
       const records = await api.records(run.run_id);
       const context = runContext(records);
@@ -169,10 +234,30 @@ export function Inspector() {
     }
   };
 
-  const exportRun = async (run: RunSummary, end: boolean) => {
+  // A run named in the URL (a shared link, or back/forward) is opened once the list is known.
+  useEffect(() => {
+    if (!query.run || recorder.state !== "ready") return;
+    if (shown.current?.run_id === query.run) return;
+    const listed = recorder.runs.find((run) => run.run_id === query.run);
+    let cancelled = false;
+    (listed ? Promise.resolve(listed) : api.run(query.run))
+      .then((run) => {
+        if (!cancelled) void selectServerRun(run, false);
+      })
+      .catch(() => {
+        if (!cancelled) setNotice(`Run ${query.run} is not in this recorder.`);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // selectServerRun is stable enough for this purpose; it only reads state via refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query.run, recorder.state]);
+
+  const exportRun = async (run: RunSummary, end: boolean, omitPayloads = false) => {
     setNotice(end ? "Closing and exporting…" : "Exporting…");
     try {
-      const file = await api.export(run.run_id, end);
+      const file = await api.export(run.run_id, end, omitPayloads);
       saveFile(file, file.name);
       setLastFile(file);
       await verify(file, trusted);
@@ -232,7 +317,7 @@ export function Inspector() {
         <Tab active={view === "recorder"} onClick={() => setView("recorder")}>
           Runs in the recorder
           {recorder.state === "ready" && (
-            <span className="ml-1.5 text-ink-soft tabular-nums">{recorder.runs.length}</span>
+            <span className="ml-1.5 text-ink-soft tabular-nums">{recorder.total}</span>
           )}
         </Tab>
       </nav>
@@ -309,25 +394,30 @@ export function Inspector() {
               }}
             />
           )}
-          {recorder.state === "ready" && recorder.runs.length === 0 && (
+          {recorder.state === "ready" && anchors && (
+            <p
+              className={`mb-4 text-sm ${describeAnchors(anchors).warn ? "text-warn" : "text-ink-soft"}`}
+              data-testid="anchor-status"
+            >
+              {describeAnchors(anchors).text}
+            </p>
+          )}
+          {recorder.state === "ready" && recorder.total === 0 && !query.q && !query.state && (
             <Empty title="No runs stored yet">
               Point an agent at the proxy, or check a bundle file and choose “Store in the
               recorder”.
             </Empty>
           )}
-          {recorder.state === "ready" && recorder.runs.length > 0 && (
-            <div className="grid gap-8 lg:grid-cols-[20rem_1fr]">
-              <ul className="space-y-2">
-                {recorder.runs.map((run) => (
-                  <li key={run.run_id}>
-                    <RunRow
-                      run={run}
-                      selected={serverRun?.run_id === run.run_id}
-                      onSelect={() => void selectServerRun(run)}
-                    />
-                  </li>
-                ))}
-              </ul>
+          {recorder.state === "ready" && (recorder.total > 0 || query.q || query.state) && (
+            <div className={`grid gap-8 ${serverRun ? "lg:grid-cols-[24rem_1fr]" : ""}`}>
+              <RunList
+                runs={recorder.runs}
+                total={recorder.total}
+                query={query}
+                selected={serverRun?.run_id ?? null}
+                onQuery={(patch) => setQuery(patch)}
+                onSelect={(run) => void selectServerRun(run)}
+              />
               <section className="min-w-0">
                 {serverRun && serverRun.source === "live" && (
                   <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -335,8 +425,19 @@ export function Inspector() {
                       type="button"
                       className="btn"
                       onClick={() => void exportRun(serverRun, false)}
+                      title={
+                        serverPayloadBytes > LARGE_EXPORT_BYTES
+                          ? "A full export of this run is large; the export without payloads keeps the proof and drops the bodies."
+                          : undefined
+                      }
                     >
                       <Download aria-hidden className="size-4" /> Export bundle
+                      {serverRecords.length > 0 && (
+                        <span className="text-ink-soft" data-testid="export-size">
+                          {" "}
+                          ~{formatBytes(serverPayloadBytes)}
+                        </span>
+                      )}
                     </button>
                     {!serverRun.complete && (
                       <button
@@ -347,6 +448,14 @@ export function Inspector() {
                         Close run and export
                       </button>
                     )}
+                    <button
+                      type="button"
+                      className="btn"
+                      title="Records, signatures and receipts only: a long session exports in megabytes instead of gigabytes. Bodies stay in the recorder."
+                      onClick={() => void exportRun(serverRun, false, true)}
+                    >
+                      Export without payloads
+                    </button>
                     {notice && (
                       <p className="text-sm text-ink-soft [overflow-wrap:anywhere]" role="status">
                         {notice}
@@ -360,6 +469,8 @@ export function Inspector() {
                       records={serverRecords}
                       onDownload={downloadPayload}
                       previous={comparedWith}
+                      page={query.step}
+                      onPage={(step) => setQuery({ step })}
                     />
                   </ErrorBoundary>
                 ) : (
@@ -517,49 +628,6 @@ function RunPicker({
         ))}
       </select>
     </label>
-  );
-}
-
-/**
- * A stored run in the recorder list, with its step count and whether the recorder trusts the
- * signer.
- */
-function RunRow({
-  run,
-  selected,
-  onSelect,
-}: {
-  run: RunSummary;
-  selected: boolean;
-  onSelect: () => void;
-}) {
-  const badge = runBadge(run);
-  return (
-    <button
-      type="button"
-      onClick={onSelect}
-      aria-pressed={selected}
-      className={`w-full cursor-pointer rounded-lg border px-4 py-3 text-left ${
-        selected ? "border-seal bg-seal-soft" : "border-line bg-surface hover:border-ink-soft"
-      }`}
-    >
-      <span className="hash block">{run.run_id}</span>
-      {run.run_label ? (
-        <span className="mt-1 block text-sm font-medium text-ink">{run.run_label}</span>
-      ) : null}
-      <span className="mt-1 flex items-center gap-2 text-sm text-ink-soft">
-        <span className={`rounded px-1.5 py-0.5 text-xs font-medium ${badge.tone}`}>
-          {badge.label}
-        </span>
-        {run.record_count} steps
-      </span>
-      <span
-        className={`mt-1 block text-sm font-medium ${run.principal_trusted ? "text-ok" : "text-warn"}`}
-        title={`Principal ${run.principal_id}`}
-      >
-        {run.principal_trusted ? "Signer trusted by this recorder" : "Signer not confirmed"}
-      </span>
-    </button>
   );
 }
 

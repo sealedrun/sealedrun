@@ -217,7 +217,10 @@ def test_anchoring_loop_survives_a_failing_run(
 ) -> None:
     live = _live(tmp_path)
     settings = Settings(
-        data_dir=tmp_path, anchor_tsa_url="http://tsa.test/t", anchor_interval_seconds=0.01
+        data_dir=tmp_path,
+        anchors=["tsa"],
+        anchor_tsa_url="http://tsa.test/t",
+        anchor_interval_seconds=0.01,
     )
     http = httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(500)))
     anchoring = Anchoring(live, http, settings)

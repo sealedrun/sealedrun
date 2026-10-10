@@ -21,9 +21,57 @@ export interface RunSummary {
   labels_self_reported?: Record<string, number>;
   /** X-SealedRun-Run label of a live run opened through the proxy, else null. */
   run_label?: string | null;
+  /** Bytes a full export would carry in bodies; only on `GET /api/runs/{id}`. */
+  payload_bytes?: number;
+}
+
+/** The part of `GET /api/identity` the page shows. */
+export interface Identity {
+  principal_id: string;
+  agent_id: string;
+  anchors?: AnchorStatus;
+}
+
+/** Which anchors a recorder is set to use and how each one fared last. */
+export interface AnchorStatus {
+  configured: string[];
+  last_ok: Record<string, { at: string; url: string }>;
+  last_error: Record<string, { at: string; message: string }>;
 }
 
 const PAGE_SIZE = 1000;
+
+/** Filters and page of the run list, as `GET /api/runs` takes them. */
+export interface RunQuery {
+  /** Run id prefix or part of the run label. */
+  q?: string;
+  complete?: boolean;
+  source?: "live" | "imported";
+  since?: string;
+  until?: string;
+  limit?: number;
+  offset?: number;
+}
+
+/** One page of runs plus how many match the filters before paging. */
+export interface RunPage {
+  runs: RunSummary[];
+  total: number;
+}
+
+/** The query string for `GET /api/runs`, empty when nothing is set. */
+export function runQueryString(query: RunQuery): string {
+  const params = new URLSearchParams();
+  if (query.q?.trim()) params.set("q", query.q.trim());
+  if (query.complete !== undefined) params.set("complete", String(query.complete));
+  if (query.source) params.set("source", query.source);
+  if (query.since) params.set("since", query.since);
+  if (query.until) params.set("until", query.until);
+  if (query.limit !== undefined) params.set("limit", String(query.limit));
+  if (query.offset) params.set("offset", String(query.offset));
+  const text = params.toString();
+  return text ? `?${text}` : "";
+}
 const TOKEN_KEY = "sealedrun.token";
 
 /** Thrown when the recorder answers 401, meaning the API token is missing or wrong. */
@@ -85,8 +133,20 @@ async function getJson<T>(path: string): Promise<T> {
 export const api = {
   /** Liveness probe. */
   health: () => getJson<{ status: string }>("/api/health"),
-  /** All runs stored in the recorder. */
-  runs: () => getJson<RunSummary[]>("/api/runs"),
+  /** The recorder's keys and the state of its anchors. */
+  identity: () => getJson<Identity>("/api/identity"),
+  /** One page of the runs stored in the recorder, latest first, with the total that matches. */
+  runs: async (query: RunQuery = {}): Promise<RunPage> => {
+    const path = `/api/runs${runQueryString(query)}`;
+    const response = await request(path, { headers: { accept: "application/json" } });
+    if (!response.ok) throw new Error(`${path}: ${response.status}`);
+    const runs = (await response.json()) as RunSummary[];
+    const header = response.headers.get("x-total-count");
+    const total = header === null ? Number.NaN : Number(header);
+    return { runs, total: Number.isInteger(total) && total >= 0 ? total : runs.length };
+  },
+  /** One run's summary, with `payload_bytes`. Throws on 404. */
+  run: (runId: string) => getJson<RunSummary>(`/api/runs/${encodeURIComponent(runId)}`),
   /** Every record of a run, fetched page by page until a short page ends the list. */
   records: async (runId: string) => {
     const records: SealedRunRecord[] = [];
@@ -127,16 +187,22 @@ export const api = {
   },
   /**
    * Exports a live run as a bundle signed by the recorder and returns it as a File named like
-   * the recorder's attachment. With `end` the recorder closes the run first. Throws with the
+   * the recorder's attachment. With `end` the recorder closes the run first; with
+   * `omitPayloads` the archive holds no bodies and its manifest says so. Throws with the
    * recorder's own error text on refusal.
    */
-  export: async (runId: string, end = false): Promise<File> => {
-    const path = `/api/runs/${encodeURIComponent(runId)}/export${end ? "?end=true" : ""}`;
+  export: async (runId: string, end = false, omitPayloads = false): Promise<File> => {
+    const query = new URLSearchParams();
+    if (end) query.set("end", "true");
+    if (omitPayloads) query.set("payloads", "omit");
+    const suffix = query.size > 0 ? `?${query.toString()}` : "";
+    const path = `/api/runs/${encodeURIComponent(runId)}/export${suffix}`;
     const response = await request(path, {
       method: "POST",
     });
     if (!response.ok) throw new Error(describeError(await response.json()));
-    return new File([await response.blob()], `sealedrun-${runId}.zip`, {
+    const name = `sealedrun-${runId}${omitPayloads ? "-records" : ""}.zip`;
+    return new File([await response.blob()], name, {
       type: "application/zip",
     });
   },

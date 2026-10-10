@@ -258,6 +258,13 @@ export function assertManifest(value: unknown): asserts value is Manifest {
   }
   checkLength(manifest.runs, "runs", "manifest");
   for (const entry of manifest.runs) check(entry, RUN_ENTRY, "manifest.runs entry");
+  if (
+    manifest.payloads !== undefined &&
+    manifest.payloads !== "included" &&
+    manifest.payloads !== "omitted"
+  ) {
+    throw new VerificationError("schema", "manifest: field payloads is not included or omitted");
+  }
   if (manifest.principal_signatures !== undefined) {
     check(manifest, { principal_signatures: "stringMap" }, "manifest");
   }

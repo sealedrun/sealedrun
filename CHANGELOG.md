@@ -5,6 +5,21 @@ follows Semantic Versioning once 1.0.0 is reached.
 
 ## [Unreleased]
 
+### Added
+
+- `SEALEDRUN_ANCHORS` selects the anchors (`tsa`, `rekor`) in the order tried; anchoring is now ON by default with Sigstore's time-stamp authority (`anchor_tsa_url` defaults to it, `anchor_rekor_url` to the public Rekor log), `[]` turns it off; DigiCert's authority is the default fallback. `GET /api/identity` reports `anchors` (configured, last success, last failure per anchor) and the Inspector's recorder tab shows one line: off, ok, or failing with the reason. Before this an operator could believe runs were anchored while the setting was empty and `anchors` stayed 0.
+
+- Inspector: the recorder tab is two levels. The run list is a table with a text filter (run id or label), state chips (open, closed, imported) and 25 runs per page; a run's steps come 50 per page with kind chips, a text filter over model, tool and labels, and a jump to a step number. Tab, filters, page, run and step page live in the URL, so a run can be linked and the back button works. `GET /api/runs` takes `q`, `since`, `until`, `complete`, `source`; `GET /api/runs/{id}/records` takes `kind`, `outcome`, `q`; both answer `X-Total-Count`.
+
+- Export without payload bodies: `POST /api/runs/{id}/export?payloads=omit` and the Inspector button "Export without payloads" write the records, signatures and receipts only, and the signed manifest says `payloads: "omitted"` (SPEC 13.1). A 362-call Claude Code session exports in 1.3 MB instead of 662 MB. Both verifiers skip the body checks for such a bundle, report `payloads_omitted`, and refuse a bundle that says omitted yet carries a body. Vectors `bundle/payloads-omitted.zip` and `payloads-omitted-with-bodies.zip`.
+
+- `GET /api/runs/{id}` reports `payload_bytes`, the size a full export would carry; the Inspector shows it on the export button and, over 256 MB, points at the export without payloads. A bundle file over 1 GB is not opened in the browser (the page names the command line instead).
+
+### Changed
+
+- Export builds the archive on disk and streams it: each payload body is read from the database while it is written and the manifest is the last entry, so a 1.2 GB run peaks at about 130 MB in the recorder instead of holding the whole archive and every body in memory. `write_bundle` accepts a lazy mapping of bodies.
+- Both verifiers accept archives up to 4 GiB uncompressed (was 512 MiB): a Claude Code session of a few hundred calls exports to about 1 GiB because every request carries the whole context, and the verifiers refused it although the chain was intact. The refusal now names the claimed and the allowed size, and `python -m sealedrun --max-total-bytes N` sets another limit.
+
 ## [0.4.1] - 2026-10-06
 
 Patch release: a run that opens on a wrapped MCP stdio server can name its agent.

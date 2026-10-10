@@ -10,6 +10,19 @@ import {
 } from "../src/index.js";
 import { isHashAlg } from "../src/hashing.js";
 
+/** Rewrites the central-directory uncompressed size of `name`, as a forged archive would. */
+const claimSize = (archive: Uint8Array, name: string, size: number): Uint8Array => {
+  const data = new Uint8Array(archive);
+  const view = new DataView(data.buffer);
+  for (let pos = 0; pos + 46 <= data.length; pos++) {
+    if (view.getUint32(pos, true) !== 0x02014b50) continue;
+    const nameLength = view.getUint16(pos + 28, true);
+    const entry = new TextDecoder().decode(data.subarray(pos + 46, pos + 46 + nameLength));
+    if (entry === name) view.setUint32(pos + 24, size, true);
+  }
+  return data;
+};
+
 const bomb = (size: number) =>
   zipSync({ "manifest.json": new Uint8Array([123, 125]), "payloads/zeros": new Uint8Array(size) });
 
@@ -37,10 +50,16 @@ describe("bundle limits", () => {
       /entry exceeds/,
     );
   });
-  test("total size limit", () => {
+  test("total size limit names both sizes", () => {
     expect(() => readBundle(bomb(2_000_000), { maxTotalBytes: 1_000_000 })).toThrow(
-      /uncompressed size/,
+      /uncompressed size limit \(2 MB claimed, limit 1 MB\)/,
     );
+    expect(() =>
+      readBundle(claimSize(bomb(10), "payloads/zeros", 1_190_000_000), {
+        maxEntryBytes: 2_000_000_000,
+        maxTotalBytes: 1_000_000_000,
+      }),
+    ).toThrow(/1\.19 GB claimed, limit 1 GB/);
   });
   test("manifest size limit", () => {
     const manifest = new Uint8Array(4 * 1024 * 1024 + 1).fill(32);

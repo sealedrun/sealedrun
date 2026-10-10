@@ -9,7 +9,7 @@ from __future__ import annotations
 import io
 import json
 import zipfile
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field
 from typing import Any, BinaryIO
 from uuid import uuid4
@@ -29,7 +29,7 @@ MANIFEST = "manifest.json"
 MAX_ENTRIES = 10_000
 MAX_ENTRY_BYTES = 64 * 1024 * 1024
 MAX_MANIFEST_BYTES = 4 * 1024 * 1024
-MAX_TOTAL_BYTES = 512 * 1024 * 1024
+MAX_TOTAL_BYTES = 4 * 1024 * 1024 * 1024
 
 
 @dataclass
@@ -57,6 +57,8 @@ class BundleReport:
     Attributes:
         principal_trusted: False means integrity only: the Principal was not compared with a
             trust anchor (SPEC 13.2).
+        payloads_omitted: True when the exporter left every payload body out on purpose
+            (`payloads: "omitted"` in the manifest); the bodies were not checked.
     """
 
     bundle_id: str
@@ -64,6 +66,7 @@ class BundleReport:
     principal_id: str
     exporter_agent_id: str
     principal_trusted: bool
+    payloads_omitted: bool = False
 
 
 def _jsonl(records: list[dict[str, Any]]) -> bytes:
@@ -79,19 +82,27 @@ def write_bundle(
     software: str,
     delegations: list[dict[str, Any]],
     runs: list[list[dict[str, Any]]],
-    payloads: dict[str, bytes] | None = None,
+    payloads: Mapping[str, bytes] | None = None,
     anchors: dict[str, dict[str, Any]] | None = None,
     principal: PrivateKeySet | None = None,
     hash_alg: str = DEFAULT_HASH_ALG,
     bundle_id: str | None = None,
     created_at: str | None = None,
+    payloads_omitted: bool = False,
 ) -> dict[str, Any]:
     """Write a bundle archive to `out` and return its sealed manifest.
 
     The exporter signs the manifest; `principal`, when given, countersigns it. `payloads` and
-    `anchors` are keyed as in `Bundle`. Raises ValueError if a payload key is not the digest of
-    its body or if the delegations name more than one principal.
+    `anchors` are keyed as in `Bundle`. `payloads` may be a lazy mapping: each body is fetched
+    once, hashed and written straight into the archive, so a run of gigabytes needs memory for
+    one body at a time; `out` must be seekable and the manifest is the last entry. With
+    `payloads_omitted` the manifest states that no body was written on purpose (SPEC 13.1) and
+    `payloads` must be empty. Raises ValueError if a payload key is not the digest of its body,
+    if bodies are given together with `payloads_omitted`, or if the delegations name more than
+    one principal.
     """
+    if payloads_omitted and payloads:
+        raise ValueError("payloads_omitted excludes payload bodies")
     files: dict[str, bytes] = {}
     for d in delegations:
         files[f"delegations/{d['delegation_id']}.json"] = json.dumps(d, sort_keys=True).encode()
@@ -112,35 +123,43 @@ def write_bundle(
                 "complete": records[-1]["kind"] == "run_end",
             }
         )
-    for body_hash, body in (payloads or {}).items():
-        if body_hash != payload_digest(hash_alg, body):
-            raise ValueError(f"payload key is not the {hash_alg} digest of its body: {body_hash}")
-        files[f"payloads/{hash_alg}/{body_hash}"] = body
     for record_id, receipt in (anchors or {}).items():
         files[f"anchors/{record_id}.json"] = json.dumps(receipt, sort_keys=True).encode()
 
     principal_ids = {d["principal_id"] for d in delegations}
     if len(principal_ids) != 1:
         raise ValueError("bundle must contain delegations of exactly one principal")
-    manifest: dict[str, Any] = {
-        "spec_version": SPEC_VERSION,
-        "bundle_id": bundle_id or str(uuid4()),
-        "created_at": created_at or format_timestamp(now()),
-        "exporter": {"agent_id": exporter.public.kid, "software": software},
-        "principal_id": principal_ids.pop(),
-        "delegations": [d["delegation_id"] for d in delegations],
-        "runs": run_entries,
-        "files": {path: payload_digest(hash_alg, data) for path, data in files.items()},
-        "hash_alg": hash_alg,
-    }
-    manifest = seal(manifest, DOMAIN_MANIFEST, exporter)
-    if principal is not None:
-        manifest = countersign(manifest, DOMAIN_MANIFEST, principal)
-
+    digests = {path: payload_digest(hash_alg, data) for path, data in files.items()}
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr(MANIFEST, json.dumps(manifest, indent=2, sort_keys=True))
         for path, data in sorted(files.items()):
             zf.writestr(path, data)
+        for body_hash in sorted(payloads or {}):
+            body = (payloads or {})[body_hash]
+            if body_hash != payload_digest(hash_alg, body):
+                raise ValueError(
+                    f"payload key is not the {hash_alg} digest of its body: {body_hash}"
+                )
+            path = f"payloads/{hash_alg}/{body_hash}"
+            zf.writestr(path, body)
+            digests[path] = body_hash
+            del body
+        manifest: dict[str, Any] = {
+            "spec_version": SPEC_VERSION,
+            "bundle_id": bundle_id or str(uuid4()),
+            "created_at": created_at or format_timestamp(now()),
+            "exporter": {"agent_id": exporter.public.kid, "software": software},
+            "principal_id": principal_ids.pop(),
+            "delegations": [d["delegation_id"] for d in delegations],
+            "runs": run_entries,
+            "files": digests,
+            "hash_alg": hash_alg,
+        }
+        if payloads_omitted:
+            manifest["payloads"] = "omitted"
+        manifest = seal(manifest, DOMAIN_MANIFEST, exporter)
+        if principal is not None:
+            manifest = countersign(manifest, DOMAIN_MANIFEST, principal)
+        zf.writestr(MANIFEST, json.dumps(manifest, indent=2, sort_keys=True))
     return manifest
 
 
@@ -198,8 +217,13 @@ def _read_archive(data: BinaryIO, max_entry_bytes: int, max_total_bytes: int) ->
             raise VerificationError("bundle", "entries overlap or exceed the archive")
         if any(max(i.file_size, i.compress_size) > max_entry_bytes for i in infos):
             raise VerificationError("bundle", "entry exceeds size limit")
-        if sum(max(i.file_size, i.compress_size) for i in infos) > max_total_bytes:
-            raise VerificationError("bundle", "archive exceeds uncompressed size limit")
+        total = sum(max(i.file_size, i.compress_size) for i in infos)
+        if total > max_total_bytes:
+            raise VerificationError(
+                "bundle",
+                "archive exceeds uncompressed size limit "
+                f"({_human(total)} claimed, limit {_human(max_total_bytes)})",
+            )
         names = {i.filename for i in infos}
         if MANIFEST not in names:
             raise VerificationError("bundle", "manifest.json missing")
@@ -247,6 +271,19 @@ def _must_match(schema: str, doc: Any, path: str) -> None:
     errors = validate(schema, doc, first_only=True)
     if errors:
         raise VerificationError("schema", f"{path}: {errors[0]}")
+
+
+def _human(size: int) -> str:
+    """Format a byte count as a short decimal unit string, for example `1.19 GB`."""
+    value = float(size)
+    unit = "B"
+    for unit in ("B", "kB", "MB", "GB"):
+        if value < 1000 or unit == "GB":
+            break
+        value /= 1000
+    if unit == "B":
+        return f"{value:.0f} B"
+    return f"{value:.2f}".removesuffix(".00") + f" {unit}"
 
 
 def _payload_key(path: str, content: bytes, hash_alg: str) -> str:
@@ -304,6 +341,11 @@ def verify_bundle(
         raise VerificationError("manifest", "delegation list does not match files")
     if {r["run_id"] for r in manifest["runs"]} != set(bundle.runs):
         raise VerificationError("manifest", "run list does not match files")
+    omitted = manifest.get("payloads") == "omitted"
+    if omitted and bundle.payloads:
+        raise VerificationError(
+            "bundle", "payload bodies present although the manifest says omitted"
+        )
 
     reports = []
     for entry in manifest["runs"]:
@@ -312,7 +354,7 @@ def verify_bundle(
         report = verify_run(
             records,
             bundle.delegations,
-            payloads=bundle.payloads,
+            payloads=None if omitted else bundle.payloads,
             expected_prev_hash=expected_prev,
             witnesses=witnesses,
             strict_witness=strict_witness,
@@ -336,6 +378,7 @@ def verify_bundle(
         manifest["principal_id"],
         manifest["exporter"]["agent_id"],
         trusted_principals is not None,
+        payloads_omitted=omitted,
     )
 
 
