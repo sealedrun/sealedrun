@@ -5,10 +5,12 @@ call, memory access, policy decision, human approval — becomes a signed record
 hash chain. Records are exported as an evidence bundle that anyone can verify offline, without
 trusting the operator.
 
-Status: early development. 0.4.1 records every channel of an agent: LLM proxy (OpenAI, Anthropic,
+Status: early development. 0.5.0 records every channel of an agent: LLM proxy (OpenAI, Anthropic,
 Ollama and Gemini wire formats), MCP servers (HTTP proxy and stdio wrapper), A2A agents, self-reported
-steps from the SDKs and OpenTelemetry GenAI spans, anchored in Sigstore Rekor and RFC 3161 witnesses
-that both verifiers check offline, after a security pass over the whole surface.
+steps from the SDKs and OpenTelemetry GenAI spans. Run heads are anchored by default in Sigstore's
+time-stamp authority (DigiCert as fallback, Rekor on request) and both verifiers check the receipts
+offline. Big runs export without payload bodies and stream to disk; the Inspector pages and
+searches runs and steps.
 
 ## Why
 
@@ -89,7 +91,7 @@ print(report.complete, report.labels_sent_to_cloud)
 ```bash
 pip install sealedrun              # Python library: write, read and verify records and bundles
 npm install @sealedrun/core        # TypeScript verifier, runs in Node.js and in the browser
-docker run --rm -p 127.0.0.1:8080:8080 ghcr.io/sealedrun/sealedrun:0.4.1   # recorder + Inspector
+docker run --rm -p 127.0.0.1:8080:8080 ghcr.io/sealedrun/sealedrun:0.5.0   # recorder + Inspector
 ```
 
 Releases are published from GitHub Actions through PyPI and npm trusted publishing; both registries

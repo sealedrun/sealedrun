@@ -1,6 +1,6 @@
 [project]
 name = "sealedrun-recorder"
-version = "0.4.1"
+version = "0.5.0"
 description = "SealedRun recorder service: API and UI host for evidence bundles"
 readme = "README.md"
 license = "Apache-2.0"

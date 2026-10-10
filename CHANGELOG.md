@@ -3,7 +3,9 @@
 All notable changes are documented here. The format follows Keep a Changelog; the project
 follows Semantic Versioning once 1.0.0 is reached.
 
-## [Unreleased]
+## [0.5.0] - 2026-10-10
+
+Anchoring is on by default with Sigstore's time-stamp authority and visible in `/api/identity` and the Inspector; big runs export without payload bodies and stream to disk; the Inspector run and step lists page, filter and link.
 
 ### Added
 
