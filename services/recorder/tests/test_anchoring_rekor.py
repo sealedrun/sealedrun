@@ -54,7 +54,11 @@ def test_both_witnesses_anchor_the_same_head(
     upstream.routes["/api/v1/timestamp/certchain"] = tsa.certchain
     upstream.routes["/api/v1/log/entries"] = rekor_http.entries
     client = make_proxy(
-        CONFIG, anchor_tsa_url=TSA, anchor_rekor_url=REKOR + "/", anchor_interval_seconds=3600
+        CONFIG,
+        anchors=["tsa", "rekor"],
+        anchor_tsa_url=TSA,
+        anchor_rekor_url=REKOR + "/",
+        anchor_interval_seconds=3600,
     )
     with client:
         run_id = start_run(client, steps=2)
@@ -86,7 +90,9 @@ def test_rekor_only_and_rekor_failure(
     log = rekor_module.FakeRekor()
     rekor_http = FakeRekorHttp(log, fail=1)
     upstream.routes["/api/v1/log/entries"] = rekor_http.entries
-    client = make_proxy(CONFIG, anchor_rekor_url=REKOR, anchor_interval_seconds=3600)
+    client = make_proxy(
+        CONFIG, anchors=["rekor"], anchor_rekor_url=REKOR, anchor_interval_seconds=3600
+    )
     with client:
         assert client.app.state.anchoring.enabled is True
         run_id = start_run(client)

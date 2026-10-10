@@ -608,6 +608,7 @@ def bundle_bytes(
     with_payloads: bool = True,
     receipt_override: dict[str, Any] | None = None,
     more_runs: list[list[dict[str, Any]]] | None = None,
+    payloads_omitted: bool = False,
 ) -> bytes:
     """Export one run as a bundle with fixed id and creation time and return the zip bytes.
 
@@ -631,6 +632,7 @@ def bundle_bytes(
         anchors=anchors,
         bundle_id=BUNDLE_ID,
         created_at="2026-09-16T13:00:00.000Z",
+        payloads_omitted=payloads_omitted,
     )
     return out.getvalue()
 
@@ -688,6 +690,26 @@ def poison_payload_name(data: bytes, exporter: PrivateKeySet, principal: Private
     manifest["files"] = {n: payload_digest(alg, c) for n, c in entries.items()}
     manifest = countersign(seal(manifest, DOMAIN_MANIFEST, exporter), DOMAIN_MANIFEST, principal)
 
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as dst:
+        dst.writestr(MANIFEST, json.dumps(manifest, indent=2, sort_keys=True))
+        for name, content in sorted(entries.items()):
+            dst.writestr(name, content)
+    return out.getvalue()
+
+
+def add_payload_entry(
+    data: bytes, exporter: PrivateKeySet, principal: PrivateKeySet, path: str, body: bytes
+) -> bytes:
+    """Add one payload entry to a bundle and re-seal the manifest, keeping its other fields."""
+    with zipfile.ZipFile(io.BytesIO(data)) as src:
+        entries = {name: src.read(name) for name in src.namelist()}
+    manifest = json.loads(entries.pop(MANIFEST))
+    entries[path] = body
+    for key in ("signatures", "principal_signatures", "hash"):
+        manifest.pop(key, None)
+    manifest["files"] = {n: payload_digest(manifest["hash_alg"], c) for n, c in entries.items()}
+    manifest = countersign(seal(manifest, DOMAIN_MANIFEST, exporter), DOMAIN_MANIFEST, principal)
     out = io.BytesIO()
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as dst:
         dst.writestr(MANIFEST, json.dumps(manifest, indent=2, sort_keys=True))
@@ -942,6 +964,7 @@ def generate(spec_dir: Path) -> None:
     with zipfile.ZipFile(io.BytesIO(valid)) as zf:
         payload_path = next(n for n in zf.namelist() if n.startswith("payloads/"))
         payload = bytearray(zf.read(payload_path))
+        original_payload = bytes(payload)
         run_path = next(n for n in zf.namelist() if n.startswith("runs/"))
         run_text = zf.read(run_path).decode()
     payload[0] ^= 0x01
@@ -979,6 +1002,13 @@ def generate(spec_dir: Path) -> None:
     )
     (bundle_dir / "no-payloads.zip").write_bytes(
         bundle_bytes(agent, principal, delegation, run.records, with_payloads=False)
+    )
+    omitted = bundle_bytes(
+        agent, principal, delegation, run.records, with_payloads=False, payloads_omitted=True
+    )
+    (bundle_dir / "payloads-omitted.zip").write_bytes(omitted)
+    (bundle_dir / "payloads-omitted-with-bodies.zip").write_bytes(
+        add_payload_entry(omitted, agent, principal, payload_path, original_payload)
     )
     (bundle_dir / "duplicate-record-id-across-runs.zip").write_bytes(
         bundle_bytes(
@@ -1034,6 +1064,14 @@ def generate(spec_dir: Path) -> None:
             "too-many-delegations.zip": {"ok": False, "check": "schema"},
             "swapped-anchor-receipt.zip": {"ok": False, "check": "anchor"},
             "no-payloads.zip": {"ok": False, "check": "payload", "seq": 1},
+            "payloads-omitted.zip": {
+                "ok": True,
+                "runs": 1,
+                "records": len(run.records),
+                "complete": True,
+                "payloads_omitted": True,
+            },
+            "payloads-omitted-with-bodies.zip": {"ok": False, "check": "bundle"},
             "duplicate-record-id-across-runs.zip": {"ok": False, "check": "record_id", "seq": 0},
         },
     )

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import type { RunSummary } from "./api";
-import { isGrowing, runBadge, shouldPoll } from "./recorder-view";
+import { describeAnchors, isGrowing, runBadge, shouldPoll } from "./recorder-view";
 
 const base: RunSummary = {
   run_id: "r1",
@@ -20,6 +20,30 @@ const base: RunSummary = {
   anchors: 0,
   labels_sent_to_cloud: {},
 };
+
+describe("describeAnchors", () => {
+  test("says off, ok, failing and untried", () => {
+    expect(describeAnchors(undefined)).toEqual({ text: "", warn: false });
+    expect(describeAnchors({ configured: [], last_ok: {}, last_error: {} })).toMatchObject({
+      warn: true,
+    });
+    const ok = describeAnchors({
+      configured: ["tsa", "rekor"],
+      last_ok: { tsa: { at: "2026-10-10T09:00:00.000Z", url: "https://t" } },
+      last_error: {},
+    });
+    expect(ok).toEqual({
+      text: "Anchors: tsa ok 2026-10-10 09:00 · rekor not tried yet",
+      warn: false,
+    });
+    const bad = describeAnchors({
+      configured: ["tsa"],
+      last_ok: {},
+      last_error: { tsa: { at: "2026-10-10T09:00:00.000Z", message: "answered 503" } },
+    });
+    expect(bad).toEqual({ text: "Anchors: tsa failing (answered 503)", warn: true });
+  });
+});
 
 describe("shouldPoll", () => {
   test("polls only the visible recorder tab of a connected recorder", () => {

@@ -12,6 +12,10 @@ import {
   summarize,
   verifyLocally,
   witnessResults,
+  formatBytes,
+  LARGE_EXPORT_BYTES,
+  MAX_BROWSER_BUNDLE_BYTES,
+  payloadBytes,
 } from "./inspect";
 
 function record(extensions?: SealedRunRecord["extensions"]): SealedRunRecord {
@@ -170,6 +174,44 @@ describe("verifyLocally", () => {
       runId: result.bundle?.manifest.runs[1]?.run_id,
       seq: 0,
     });
+  });
+});
+
+describe("verifyLocally with omitted payloads", () => {
+  test("verifies and reports the omission", async () => {
+    const name = "payloads-omitted.zip";
+    const path = join(
+      import.meta.dirname,
+      "..",
+      "..",
+      "..",
+      "..",
+      "spec",
+      "vectors",
+      "bundle",
+      name,
+    );
+    const result = await verifyLocally(name, new Uint8Array(readFileSync(path)));
+    expect(result.failure).toBeNull();
+    expect(result.report?.payloadsOmitted).toBe(true);
+    expect(result.bundle?.payloads.size).toBe(0);
+  });
+});
+
+describe("payload sizes", () => {
+  test("distinct bodies are summed once and formatted", () => {
+    const record = (hash: string, size: number) =>
+      ({
+        payload: { storage: "bundle", request_hash: hash, request_size: size },
+      }) as unknown as SealedRunRecord;
+    const records = [record("a", 1000), record("a", 1000), record("b", 500)];
+    expect(payloadBytes(records)).toBe(1500);
+    expect(payloadBytes([])).toBe(0);
+    expect(formatBytes(999)).toBe("999 B");
+    expect(formatBytes(1500)).toBe("1.5 kB");
+    expect(formatBytes(662_315_543)).toBe("662.3 MB");
+    expect(formatBytes(1_192_050_596)).toBe("1.2 GB");
+    expect(MAX_BROWSER_BUNDLE_BYTES).toBeGreaterThan(LARGE_EXPORT_BYTES);
   });
 });
 

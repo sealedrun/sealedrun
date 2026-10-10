@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Sequence
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -19,6 +20,7 @@ import httpx
 from sealedrun.anchors import rekor, rfc3161
 from sealedrun.anchors.rekor import RekorError
 from sealedrun.anchors.rfc3161 import AnchorError
+from sealedrun.timeutil import format_timestamp, now
 from starlette.concurrency import run_in_threadpool
 
 from sealedrun_recorder.limits import BodyTooLargeError, parse_json, read_reply
@@ -31,14 +33,46 @@ PEM_MARK = "-----BEGIN CERTIFICATE-----"
 WITNESS_REPLY_BYTES = 1024 * 1024
 
 
+class AnchorStatus:
+    """What the operator can see about each selected anchor: last success, last failure."""
+
+    def __init__(self, configured: Sequence[str]):
+        self.configured = list(configured)
+        self.last_ok: dict[str, dict[str, str]] = {}
+        self.last_error: dict[str, dict[str, str]] = {}
+
+    def ok(self, name: str, url: str) -> None:
+        """Record a successful anchor at `url` and clear the anchor's last failure."""
+        self.last_ok[name] = {"at": format_timestamp(now()), "url": url}
+        self.last_error.pop(name, None)
+
+    def failed(self, name: str, message: str) -> None:
+        """Record the latest failure of an anchor; the message is cut to 200 characters."""
+        self.last_error[name] = {"at": format_timestamp(now()), "message": message[:200]}
+
+    def as_json(self) -> dict[str, Any]:
+        """Return the status as `GET /api/identity` reports it."""
+        return {
+            "configured": list(self.configured),
+            "last_ok": dict(self.last_ok),
+            "last_error": dict(self.last_error),
+        }
+
+
 class Anchoring:
     """Time-stamps chain heads at the configured authorities and writes the anchor records."""
 
     def __init__(self, live: LiveRuns, http: httpx.AsyncClient, settings: Settings):
         self._live = live
         self._http = http
-        self._urls = [u for u in (settings.anchor_tsa_url, settings.anchor_tsa_fallback_url) if u]
-        self._rekor = settings.anchor_rekor_url.rstrip("/")
+        self._anchors: list[str] = list(settings.anchors)
+        self._urls = (
+            [u for u in (settings.anchor_tsa_url, settings.anchor_tsa_fallback_url) if u]
+            if "tsa" in self._anchors
+            else []
+        )
+        self._rekor = settings.anchor_rekor_url.rstrip("/") if "rekor" in self._anchors else ""
+        self.status = AnchorStatus(self._anchors)
         self._interval = settings.anchor_interval_seconds
         self._timeout = settings.anchor_timeout_seconds
         self._chains: dict[str, list[str]] = {}
@@ -46,7 +80,7 @@ class Anchoring:
 
     @property
     def enabled(self) -> bool:
-        """True when at least one witness URL is configured."""
+        """True when at least one anchor is selected in `settings.anchors`."""
         return bool(self._urls or self._rekor)
 
     async def loop(self) -> None:
@@ -97,6 +131,7 @@ class Anchoring:
         if self._urls:
             receipt, url = await self._timestamp_any(run_id, head)
             if receipt is not None:
+                self.status.ok("tsa", url)
                 record = await run_in_threadpool(
                     self._write, run_id, "rfc3161", url, seq, head, receipt
                 )
@@ -104,6 +139,7 @@ class Anchoring:
         if self._rekor:
             receipt = await self._publish(run_id, head)
             if receipt is not None:
+                self.status.ok("rekor", self._rekor)
                 record = await run_in_threadpool(
                     self._write, run_id, "rekor", self._rekor, seq, head, receipt
                 )
@@ -134,13 +170,16 @@ class Anchoring:
 
     async def _timestamp_any(self, run_id: str, head: str) -> tuple[dict[str, Any] | None, str]:
         """Try the authority twice, then the fallback twice; None when all failed."""
+        last = ""
         for url in self._urls:
             for attempt in (1, 2):
                 try:
                     return await self._timestamp(url, head), url
                 except (AnchorError, httpx.HTTPError) as error:
+                    last = f"{url}: {error}"
                     log.warning("anchor run=%s tsa=%s try=%d: %s", run_id, url, attempt, error)
         log.error("anchor run=%s: every authority failed, head %s not anchored", run_id, head)
+        self.status.failed("tsa", last)
         return None, ""
 
     async def _publish(self, run_id: str, head: str) -> dict[str, Any] | None:
@@ -161,6 +200,7 @@ class Anchoring:
             return rekor.receipt_from(entry, self._rekor, head, signature, public_key)
         except (RekorError, httpx.HTTPError, ValueError, BodyTooLargeError) as error:
             log.warning("anchor run=%s rekor=%s: %s", run_id, self._rekor, error)
+            self.status.failed("rekor", str(error))
             return None
 
     async def _timestamp(self, url: str, head: str) -> dict[str, Any]:

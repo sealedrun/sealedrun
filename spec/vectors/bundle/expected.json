@@ -22,6 +22,17 @@
     "check": "bundle",
     "ok": false
   },
+  "payloads-omitted-with-bodies.zip": {
+    "check": "bundle",
+    "ok": false
+  },
+  "payloads-omitted.zip": {
+    "complete": true,
+    "ok": true,
+    "payloads_omitted": true,
+    "records": 9,
+    "runs": 1
+  },
   "poisoned-payload-name.zip": {
     "check": "bundle",
     "ok": false

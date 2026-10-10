@@ -115,6 +115,7 @@ def test_bundle_vectors(name: str) -> None:
         assert len(report.runs) == case["runs"]
         assert report.runs[0].record_count == case["records"]
         assert report.runs[0].complete == case["complete"]
+        assert report.payloads_omitted == case.get("payloads_omitted", False)
         return
     with pytest.raises(VerificationError) as info:
         verify_bundle(read_bundle(data), trusted)

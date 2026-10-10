@@ -89,6 +89,12 @@ def make_proxy(
     return _make
 
 
+@pytest.fixture(autouse=True)
+def _anchoring_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Anchoring is on by default; tests must select anchors explicitly, never the network."""
+    monkeypatch.setenv("SEALEDRUN_ANCHORS", "[]")
+
+
 def make_proxy_app(tmp_path: Path, upstream: Any, config: str, **overrides: Any) -> FastAPI:
     """Build the recorder app itself, for tests that drive it as an ASGI app."""
     path = tmp_path / "upstreams.yaml"

@@ -401,14 +401,31 @@ record in the chain (SPEC 8). Two witness types are supported and can run togeth
   (`keys/anchor.pem`, public part in `GET /api/identity`); that key carries no identity claim,
   the chain does.
 
-Anchoring is off by default. Turn it on with URLs:
+Anchoring is on by default with the time-stamp authority. `SEALEDRUN_ANCHORS` names the
+anchors in the order tried; `[]` turns anchoring off:
 
 ```bash
-SEALEDRUN_ANCHOR_TSA_URL=https://timestamp.sigstore.dev/api/v1/timestamp   # free, run by Sigstore
-SEALEDRUN_ANCHOR_TSA_FALLBACK_URL=http://timestamp.digicert.com            # tried when the first fails
-SEALEDRUN_ANCHOR_REKOR_URL=https://rekor.sigstore.dev                        # public transparency log
+SEALEDRUN_ANCHORS='["tsa","rekor"]'                                          # default ["tsa"]
+SEALEDRUN_ANCHOR_TSA_URL=https://timestamp.sigstore.dev/api/v1/timestamp   # default; free, run by Sigstore
+SEALEDRUN_ANCHOR_TSA_FALLBACK_URL=http://timestamp.digicert.com            # default; tried when the first fails
+SEALEDRUN_ANCHOR_REKOR_URL=https://rekor.sigstore.dev                        # default; public transparency log
 SEALEDRUN_ANCHOR_INTERVAL_SECONDS=600                                        # default
 ```
+
+| Anchor  | Who runs it           | What it proves                                 | Needs                    |
+| ------- | --------------------- | ---------------------------------------------- | ------------------------ |
+| `tsa`   | Sigstore (or any TSA) | the head existed no later than the signed time | nothing                  |
+| `rekor` | Sigstore public log   | the head is in an append-only public log       | the recorder's P-256 key |
+
+The recorder keeps no anchor of its own: an anchor is only worth something when the party
+holding it is not the one that could rewrite the run. `GET /api/identity` reports `anchors`
+(configured, last success and last failure per anchor), and the Inspector shows it.
+
+What an anchor does not prove: a time-stamp says the head existed no later than the signed
+time, not that it is the only head the operator ever had; a log entry without independent
+witnesses could in theory be shown differently to different readers (a split view). Two
+independent anchors over the same head, a time-stamp and a public log, are the mitigation
+this release offers; a relying party that needs more re-queries the witness itself.
 
 A witness that is down never blocks a run: the recorder retries once, tries the fallback, then
 logs the failure and carries on; the next cycle anchors the head that moved. Run summaries show

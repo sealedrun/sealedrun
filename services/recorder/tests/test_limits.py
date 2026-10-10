@@ -295,7 +295,9 @@ def test_writers_and_locks_are_bounded_and_dropped_on_end(
 
 def test_anchoring_forgets_idle_locks(tmp_path: Path) -> None:
     live = _live(tmp_path)
-    settings = Settings(data_dir=tmp_path, anchor_tsa_url="http://tsa.test/api/v1/timestamp")
+    settings = Settings(
+        data_dir=tmp_path, anchors=["tsa"], anchor_tsa_url="http://tsa.test/api/v1/timestamp"
+    )
     anchoring = Anchoring(
         live,
         httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(500))),

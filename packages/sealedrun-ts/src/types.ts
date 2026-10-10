@@ -84,5 +84,7 @@ export type Manifest = Sealed & {
     complete: boolean;
   }[];
   files: Record<string, string>;
+  /** `omitted`: the exporter left every payload body out on purpose; absent means included. */
+  payloads?: "included" | "omitted";
   principal_signatures?: Record<string, string>;
 };

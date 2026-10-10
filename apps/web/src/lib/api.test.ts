@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { api, setToken } from "./api";
+import { api, runQueryString, setToken } from "./api";
 
 const store = new Map<string, string>();
 vi.stubGlobal("sessionStorage", {
@@ -29,6 +29,21 @@ describe("api.export", () => {
     expect(file.size).toBe(2);
   });
 
+  test("asks for a bundle without payloads and names the file so", async () => {
+    setToken("t0k");
+    const fetchMock = vi.fn(async () => new Response(new Uint8Array([80, 75]), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const file = await api.export("run-1", false, true);
+    const [url] = fetchMock.mock.calls[0] as unknown as [string];
+    expect(url).toBe("/api/runs/run-1/export?payloads=omit");
+    expect(file.name).toBe("sealedrun-run-1-records.zip");
+    const both = await api.export("run-1", true, true);
+    expect((fetchMock.mock.calls[1] as unknown as [string])[0]).toBe(
+      "/api/runs/run-1/export?end=true&payloads=omit",
+    );
+    expect(both.name).toBe("sealedrun-run-1-records.zip");
+  });
+
   test("surfaces the recorder's refusal text", async () => {
     vi.stubGlobal("fetch", async () => Response.json({ detail: "imported run" }, { status: 409 }));
     await expect(api.export("run-2")).rejects.toThrow("imported run");
@@ -37,6 +52,35 @@ describe("api.export", () => {
   test("a 401 becomes UnauthorizedError", async () => {
     vi.stubGlobal("fetch", async () => new Response(null, { status: 401 }));
     await expect(api.export("run-3")).rejects.toThrow("recorder requires a token");
+  });
+});
+
+describe("api.runs", () => {
+  test("sends the filters and reads the total from the header", async () => {
+    setToken("t0k");
+    const fetchMock = vi.fn(
+      async () => new Response("[]", { status: 200, headers: { "x-total-count": "362" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const page = await api.runs({
+      q: " ab ",
+      complete: false,
+      source: "live",
+      limit: 25,
+      offset: 50,
+    });
+    const [url] = fetchMock.mock.calls[0] as unknown as [string];
+    expect(url).toBe("/api/runs?q=ab&complete=false&source=live&limit=25&offset=50");
+    expect(page).toEqual({ runs: [], total: 362 });
+    expect(runQueryString({})).toBe("");
+    expect(runQueryString({ q: "  ", offset: 0 })).toBe("");
+  });
+  test("falls back to the page length when the header is missing", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("[{}]", { status: 200 })),
+    );
+    expect((await api.runs()).total).toBe(1);
   });
 });
 

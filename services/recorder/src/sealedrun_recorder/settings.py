@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
-from pydantic import SecretStr
+from pydantic import SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -26,13 +27,17 @@ class Settings(BaseSettings):
             agent whose `location` is `cloud`; a call carrying one is refused before any
             upstream contact and recorded as blocked. Empty turns the rule off.
             Env form: SEALEDRUN_POLICY_BLOCK_TO_CLOUD='["nda","secret"]'.
-        anchor_tsa_url: RFC 3161 authority the chain heads are time-stamped at (SPEC 8); empty
-            turns anchoring off. Suggested: https://timestamp.sigstore.dev/api/v1/timestamp.
-        anchor_tsa_fallback_url: Second authority tried when the first fails, for example
-            http://timestamp.digicert.com.
-        anchor_rekor_url: Sigstore Rekor v1 log the heads are also published to (SPEC 8.1.2),
-            for example https://rekor.sigstore.dev; empty = off. The log gives transparency,
-            the authority gives time: use both.
+        anchors: Which witnesses anchor the chain heads (SPEC 8), in the order tried: `tsa`
+            (an RFC 3161 time-stamp authority, `anchor_tsa_url`) and `rekor` (the Sigstore
+            Rekor v1 log, `anchor_rekor_url`). Default `["tsa"]`; `[]` turns anchoring off.
+            Env form: SEALEDRUN_ANCHORS='["tsa","rekor"]'.
+        anchor_tsa_url: RFC 3161 authority the chain heads are time-stamped at. Default
+            Sigstore's public authority.
+        anchor_tsa_fallback_url: Second authority tried when the first fails. Default
+            DigiCert's public authority; empty = no fallback.
+        anchor_rekor_url: Sigstore Rekor v1 log the heads are also published to (SPEC 8.1.2)
+            when `rekor` is among `anchors`. The log gives transparency, the authority gives
+            time: use both.
         anchor_interval_seconds: How often every open run whose head moved is anchored.
         anchor_timeout_seconds: Time allowed for one authority call.
 
@@ -54,11 +59,27 @@ class Settings(BaseSettings):
     proxy_max_body_bytes: int = 32 * 1024 * 1024
     proxy_run_idle_seconds: float = 900.0
     policy_block_to_cloud: list[str] = []
-    anchor_tsa_url: str = ""
-    anchor_tsa_fallback_url: str = ""
-    anchor_rekor_url: str = ""
+    anchors: list[Literal["tsa", "rekor"]] = ["tsa"]
+    anchor_tsa_url: str = "https://timestamp.sigstore.dev/api/v1/timestamp"
+    anchor_tsa_fallback_url: str = "http://timestamp.digicert.com"
+    anchor_rekor_url: str = "https://rekor.sigstore.dev"
     anchor_interval_seconds: float = 600.0
     anchor_timeout_seconds: float = 20.0
+
+    @field_validator("anchors")
+    @classmethod
+    def _distinct_anchors(cls, value: list[str]) -> list[str]:
+        if len(set(value)) != len(value):
+            raise ValueError("anchors must not repeat")
+        return value
+
+    @model_validator(mode="after")
+    def _anchor_urls_present(self) -> Settings:
+        if "tsa" in self.anchors and not self.anchor_tsa_url:
+            raise ValueError("anchors has tsa but anchor_tsa_url is empty")
+        if "rekor" in self.anchors and not self.anchor_rekor_url:
+            raise ValueError("anchors has rekor but anchor_rekor_url is empty")
+        return self
 
     @property
     def trust_anchor(self) -> frozenset[str] | None:

@@ -178,6 +178,7 @@ describe("bundles", () => {
     records?: number;
     complete?: boolean;
     trusted_principals?: string[];
+    payloads_omitted?: boolean;
   };
   const expected = readJson<Record<string, Case>>("bundle", "expected.json");
   test.each(Object.keys(expected))("%s", (name) => {
@@ -190,6 +191,7 @@ describe("bundles", () => {
       expect(report.runs).toHaveLength(c.runs!);
       expect(report.runs[0]!.recordCount).toBe(c.records);
       expect(report.runs[0]!.complete).toBe(c.complete);
+      expect(report.payloadsOmitted).toBe(c.payloads_omitted ?? false);
       return;
     }
     expectFailure(() => verifyBundle(readBundle(data), options), c.check!, c.seq);

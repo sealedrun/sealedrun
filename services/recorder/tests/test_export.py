@@ -178,3 +178,43 @@ def test_recorder_trusts_its_own_principal_only(
     other = imported.json()["runs"][0]
     assert proxy.get(f"/api/runs/{other}", headers=auth).json()["principal_trusted"] is False
     proxy.__exit__(None, None, None)
+
+
+def test_export_without_payloads(
+    make_proxy: Callable[..., TestClient], upstream: Any, auth: dict[str, str]
+) -> None:
+    proxy, run_id = _one_streamed_call(make_proxy, upstream, auth)
+    response = proxy.post(f"/api/runs/{run_id}/export?payloads=omit", headers=auth)
+    assert response.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(response.content)) as zf:
+        assert not [n for n in zf.namelist() if n.startswith("payloads/")]
+        assert json.loads(zf.read("manifest.json"))["payloads"] == "omitted"
+    report = verify_bundle(read_bundle(response.content), [_principal(proxy, auth)])
+    assert report.payloads_omitted is True
+    assert report.runs[0].record_count == 2
+    full = proxy.post(f"/api/runs/{run_id}/export", headers=auth)
+    assert verify_bundle(read_bundle(full.content)).payloads_omitted is False
+    assert proxy.post(f"/api/runs/{run_id}/export?payloads=all", headers=auth).status_code == 422
+
+
+def test_run_summary_reports_payload_bytes_and_export_streams(
+    make_proxy: Callable[..., TestClient], upstream: Any, auth: dict[str, str]
+) -> None:
+    proxy, run_id = _one_streamed_call(make_proxy, upstream, auth)
+    records = proxy.get(f"/api/runs/{run_id}/records", headers=auth).json()
+    sizes = {}
+    for record in records:
+        ref = record.get("payload") or {}
+        for side in ("request", "response"):
+            if ref.get(f"{side}_hash"):
+                sizes[ref[f"{side}_hash"]] = ref[f"{side}_size"]
+    expected = sum(sizes.values())
+    assert expected > 0
+    assert proxy.get(f"/api/runs/{run_id}", headers=auth).json()["payload_bytes"] == expected
+    assert "payload_bytes" not in proxy.get("/api/runs", headers=auth).json()[0]
+    response = proxy.post(f"/api/runs/{run_id}/export", headers=auth)
+    assert int(response.headers["content-length"]) == len(response.content)
+    assert response.headers["content-disposition"].endswith(f'sealedrun-{run_id}.zip"')
+    omitted = proxy.post(f"/api/runs/{run_id}/export?payloads=omit", headers=auth)
+    assert omitted.headers["content-disposition"].endswith(f'sealedrun-{run_id}-records.zip"')
+    assert len(omitted.content) < len(response.content)

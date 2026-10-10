@@ -69,10 +69,15 @@ def records_of(bundle: Any, run_id: str) -> list[dict[str, Any]]:
     return list(bundle.runs[run_id])
 
 
-def test_off_by_default(make_proxy: Any) -> None:
-    client = make_proxy(CONFIG)
+def test_off_when_no_anchor_is_selected(make_proxy: Any) -> None:
+    client = make_proxy(CONFIG, anchors=[])
     with client:
         assert client.app.state.anchoring.enabled is False
+        assert client.get("/api/identity", headers=AUTH).json()["anchors"] == {
+            "configured": [],
+            "last_ok": {},
+            "last_error": {},
+        }
         run_id = start_run(client)
         bundle = export(client, run_id, end=True)
         assert [r["kind"] for r in records_of(bundle, run_id)] == [
@@ -89,7 +94,7 @@ def test_export_anchors_the_head_and_the_bundle_verifies(
 ) -> None:
     tsa = FakeTsa(authority)
     mount(upstream, tsa)
-    client = make_proxy(CONFIG, anchor_tsa_url=TSA, anchor_interval_seconds=3600)
+    client = make_proxy(CONFIG, anchors=["tsa"], anchor_tsa_url=TSA, anchor_interval_seconds=3600)
     with client:
         run_id = start_run(client, steps=2)
         bundle = export(client, run_id)
@@ -130,7 +135,7 @@ def test_full_chain_authority_without_certchain(
 ) -> None:
     tsa = FakeTsa(authority, include="chain")
     mount(upstream, tsa)
-    client = make_proxy(CONFIG, anchor_tsa_url=TSA, anchor_interval_seconds=3600)
+    client = make_proxy(CONFIG, anchors=["tsa"], anchor_tsa_url=TSA, anchor_interval_seconds=3600)
     with client:
         run_id = start_run(client)
         bundle = export(client, run_id)
@@ -145,7 +150,11 @@ def test_retry_then_fallback(make_proxy: Any, upstream: FakeUpstream, authority:
     fallback = FakeTsa(authority, include="chain")
     mount(upstream, primary, fallback)
     client = make_proxy(
-        CONFIG, anchor_tsa_url=TSA, anchor_tsa_fallback_url=FALLBACK, anchor_interval_seconds=3600
+        CONFIG,
+        anchors=["tsa"],
+        anchor_tsa_url=TSA,
+        anchor_tsa_fallback_url=FALLBACK,
+        anchor_interval_seconds=3600,
     )
     with client:
         run_id = start_run(client)
@@ -162,7 +171,7 @@ def test_single_retry_on_one_authority(
 ) -> None:
     tsa = FakeTsa(authority, fail=1)
     mount(upstream, tsa)
-    client = make_proxy(CONFIG, anchor_tsa_url=TSA, anchor_interval_seconds=3600)
+    client = make_proxy(CONFIG, anchors=["tsa"], anchor_tsa_url=TSA, anchor_interval_seconds=3600)
     with client:
         run_id = start_run(client)
         bundle = export(client, run_id)
@@ -175,7 +184,7 @@ def test_witness_failure_never_blocks_the_run(
 ) -> None:
     tsa = FakeTsa(authority, fail=99)
     mount(upstream, tsa)
-    client = make_proxy(CONFIG, anchor_tsa_url=TSA, anchor_interval_seconds=3600)
+    client = make_proxy(CONFIG, anchors=["tsa"], anchor_tsa_url=TSA, anchor_interval_seconds=3600)
     with client:
         run_id = start_run(client)
         with caplog.at_level("WARNING", logger="sealedrun.anchoring"):
@@ -196,7 +205,7 @@ def test_bad_token_is_not_recorded(make_proxy: Any, upstream: FakeUpstream, auth
         return httpx.Response(200, content=authority.respond(request.content, nonce=1))
 
     upstream.routes["/api/v1/timestamp"] = wrong_nonce
-    client = make_proxy(CONFIG, anchor_tsa_url=TSA, anchor_interval_seconds=3600)
+    client = make_proxy(CONFIG, anchors=["tsa"], anchor_tsa_url=TSA, anchor_interval_seconds=3600)
     with client:
         run_id = start_run(client)
         bundle = export(client, run_id)
@@ -208,7 +217,7 @@ def test_background_loop_anchors_open_runs(
 ) -> None:
     tsa = FakeTsa(authority)
     mount(upstream, tsa)
-    client = make_proxy(CONFIG, anchor_tsa_url=TSA, anchor_interval_seconds=0.05)
+    client = make_proxy(CONFIG, anchors=["tsa"], anchor_tsa_url=TSA, anchor_interval_seconds=0.05)
     with client:
         run_id = start_run(client)
         closed = start_run(client)
@@ -252,7 +261,7 @@ def test_anchor_receipt_file_in_zip(
     make_proxy: Any, upstream: FakeUpstream, authority: Any
 ) -> None:
     mount(upstream, FakeTsa(authority))
-    client = make_proxy(CONFIG, anchor_tsa_url=TSA, anchor_interval_seconds=3600)
+    client = make_proxy(CONFIG, anchors=["tsa"], anchor_tsa_url=TSA, anchor_interval_seconds=3600)
     with client:
         run_id = start_run(client)
         reply = client.post(f"/api/runs/{run_id}/export", headers=AUTH)
@@ -274,7 +283,7 @@ def test_oversize_witness_reply_is_a_failed_attempt(
     upstream.routes["/api/v1/timestamp"] = lambda r: httpx.Response(
         200, content=b"\x30" * (WITNESS_REPLY_BYTES + 1)
     )
-    client = make_proxy(CONFIG, anchor_tsa_url=TSA, anchor_interval_seconds=3600)
+    client = make_proxy(CONFIG, anchors=["tsa"], anchor_tsa_url=TSA, anchor_interval_seconds=3600)
     with client:
         run_id = start_run(client)
         with caplog.at_level("WARNING", logger="sealedrun.anchoring"):
@@ -282,3 +291,51 @@ def test_oversize_witness_reply_is_a_failed_attempt(
     assert [r["kind"] for r in records_of(bundle, run_id)] == ["run_start", "tool_call", "run_end"]
     assert "exceeds size limit" in caplog.text
     assert client.app.state.anchoring._busy == {}  # type: ignore[attr-defined]
+
+
+def test_anchors_default_on_and_validated(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    from pydantic import ValidationError
+    from sealedrun_recorder.settings import Settings
+
+    monkeypatch.delenv("SEALEDRUN_ANCHORS", raising=False)
+    default = Settings(data_dir=tmp_path)
+    assert default.anchors == ["tsa"]
+    assert default.anchor_tsa_url.startswith("https://timestamp.sigstore.dev/")
+    assert default.anchor_tsa_fallback_url == "http://timestamp.digicert.com"
+    monkeypatch.setenv("SEALEDRUN_ANCHORS", '["tsa","rekor"]')
+    assert Settings(data_dir=tmp_path).anchors == ["tsa", "rekor"]
+    with pytest.raises(ValidationError, match="repeat"):
+        Settings(data_dir=tmp_path, anchors=["tsa", "tsa"])
+    with pytest.raises(ValidationError):
+        Settings(data_dir=tmp_path, anchors=["sigstore"])
+    with pytest.raises(ValidationError, match="anchor_tsa_url is empty"):
+        Settings(data_dir=tmp_path, anchors=["tsa"], anchor_tsa_url="")
+    with pytest.raises(ValidationError, match="anchor_rekor_url is empty"):
+        Settings(data_dir=tmp_path, anchors=["rekor"], anchor_rekor_url="")
+
+
+def test_identity_reports_anchor_status(
+    make_proxy: Any, upstream: FakeUpstream, authority: Any
+) -> None:
+    tsa = FakeTsa(authority)
+    mount(upstream, tsa)
+    client = make_proxy(
+        CONFIG,
+        anchors=["tsa"],
+        anchor_tsa_url=TSA,
+        anchor_tsa_fallback_url="",
+        anchor_interval_seconds=3600,
+    )
+    with client:
+        status = client.get("/api/identity", headers=AUTH).json()["anchors"]
+        assert status == {"configured": ["tsa"], "last_ok": {}, "last_error": {}}
+        run_id = start_run(client)
+        export(client, run_id)
+        status = client.get("/api/identity", headers=AUTH).json()["anchors"]
+        assert status["last_ok"]["tsa"]["url"] == TSA
+        assert status["last_ok"]["tsa"]["at"].endswith("Z") and status["last_error"] == {}
+        tsa.fail = 99
+        start_run(client)
+        export(client, client.get("/api/runs", headers=AUTH).json()[0]["run_id"])
+        status = client.get("/api/identity", headers=AUTH).json()["anchors"]
+        assert "tsa" in status["last_error"] and TSA in status["last_error"]["tsa"]["message"]

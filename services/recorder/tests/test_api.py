@@ -160,3 +160,44 @@ def test_without_trust_anchor_bundles_are_stored_as_not_authenticated(
     verdict = upload(client, "/api/verify", forged).json()
     assert verdict["ok"] is True and verdict["principal_trusted"] is False
     assert verdict["principal_id"] == stored.json()["principal_id"]
+
+
+def test_list_filters_and_totals(client: TestClient, upload: Any, valid_zip: bytes) -> None:
+    upload(client, "/api/bundles", valid_zip)
+    runs = client.get("/api/runs")
+    assert runs.headers["x-total-count"] == "1"
+    run = runs.json()[0]
+    run_id, started = run["run_id"], run["started_at"]
+
+    assert client.get("/api/runs", params={"q": run_id[:8]}).json()[0]["run_id"] == run_id
+    none = client.get("/api/runs", params={"q": "zzz-no-such"})
+    assert none.json() == [] and none.headers["x-total-count"] == "0"
+    assert client.get("/api/runs", params={"q": "%"}).json() == []
+    assert client.get("/api/runs", params={"since": started}).headers["x-total-count"] == "1"
+    assert client.get("/api/runs", params={"until": started}).headers["x-total-count"] == "0"
+    assert client.get("/api/runs", params={"since": started[:10]}).json()[0]["run_id"] == run_id
+    assert client.get("/api/runs", params={"complete": "true"}).json()[0]["run_id"] == run_id
+    assert client.get("/api/runs", params={"complete": "false"}).json() == []
+    assert client.get("/api/runs", params={"source": "imported"}).json()[0]["run_id"] == run_id
+    assert client.get("/api/runs", params={"source": "live"}).json() == []
+    assert client.get("/api/runs", params={"source": "other"}).status_code == 422
+    assert client.get("/api/runs", params={"since": "yesterday"}).status_code == 422
+    assert client.get("/api/runs", params={"q": "x" * 129}).status_code == 422
+
+    records = client.get(f"/api/runs/{run_id}/records")
+    assert records.headers["x-total-count"] == "9"
+    starts = client.get(f"/api/runs/{run_id}/records", params={"kind": "run_start"})
+    assert starts.headers["x-total-count"] == "1" and starts.json()[0]["seq"] == 0
+    llm = client.get(f"/api/runs/{run_id}/records", params={"kind": "llm_call"}).json()
+    name = llm[0]["target"]["name"]
+    same = [r for r in records.json() if name.lower() in r["target"]["name"].lower()]
+    by_name = client.get(f"/api/runs/{run_id}/records", params={"q": name.upper()})
+    assert int(by_name.headers["x-total-count"]) == len(same) >= 1
+    assert [r["seq"] for r in by_name.json()] == [r["seq"] for r in same]
+    literal = client.get(f"/api/runs/{run_id}/records", params={"q": "%"})
+    assert literal.json() == [] or all("%" in r["target"]["name"] for r in literal.json())
+    blocked = client.get(f"/api/runs/{run_id}/records", params={"outcome": "blocked"})
+    assert all(r["outcome"] == "blocked" for r in blocked.json())
+    paged = client.get(f"/api/runs/{run_id}/records", params={"limit": 2, "offset": 2})
+    assert paged.headers["x-total-count"] == "9" and [r["seq"] for r in paged.json()] == [2, 3]
+    assert client.get("/api/runs/nope/records").status_code == 404

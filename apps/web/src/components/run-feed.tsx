@@ -4,6 +4,8 @@ import type { SealedRunRecord } from "@sealedrun/core";
 import { Check, ChevronDown, Copy, Download } from "lucide-react";
 import { useState } from "react";
 
+import { Pager } from "./pager";
+
 import {
   anchorInfo,
   capText,
@@ -17,6 +19,15 @@ import {
   summarize,
   type WitnessVerdict,
 } from "@/lib/inspect";
+import {
+  clampPage,
+  filterSteps,
+  kindsOf,
+  pageOf,
+  pageOfSeq,
+  type StepFilter,
+  STEPS_PER_PAGE,
+} from "@/lib/paging";
 
 /**
  * Downloads a payload from the recorder. Left undefined for a local bundle, which has no server
@@ -50,6 +61,8 @@ export function RunFeed({
   onDownload,
   witness,
   previous,
+  page = 1,
+  onPage,
 }: {
   records: SealedRunRecord[];
   payloads?: Map<string, Uint8Array> | undefined;
@@ -57,8 +70,27 @@ export function RunFeed({
   /** Per anchor record (see `recordKey`), whether its receipt verified against a trusted witness. */
   witness?: Map<string, WitnessVerdict> | undefined;
   previous?: { label: string; context: RunContext } | null | undefined;
+  /** Step page shown (1-based); the parent keeps it so it can live in the URL. */
+  page?: number;
+  onPage?: ((page: number) => void) | undefined;
 }) {
   const [open, setOpen] = useState<string | null>(null);
+  const [filter, setFilter] = useState<StepFilter>({});
+  const [localPage, setLocalPage] = useState(1);
+  const shown = filterSteps(records, filter);
+  const current = clampPage(onPage ? page : localPage, shown.length, STEPS_PER_PAGE);
+  const setPage = (next: number) => {
+    const target = clampPage(next, shown.length, STEPS_PER_PAGE);
+    if (onPage) onPage(target);
+    else setLocalPage(target);
+  };
+  const visible = pageOf(shown, current, STEPS_PER_PAGE);
+  const jumpTo = (seq: number) => {
+    const target = pageOfSeq(shown, seq, STEPS_PER_PAGE);
+    if (target !== null) setPage(target);
+    const record = shown.find((r) => r.seq === seq);
+    if (record) setOpen(record.record_id);
+  };
   const summary = summarize(records);
   const context = runContext(records);
   const verified = witness
@@ -89,13 +121,24 @@ export function RunFeed({
         {summary.anchors > 0 && witnessSummary(summary.anchors, verified)}
       </p>
       {context && <ContextCard context={context} previous={previous ?? null} />}
-      <ol className="mt-6">
-        {records.map((record, index) => (
+      <StepFilterBar
+        kinds={kindsOf(records)}
+        filter={filter}
+        matches={shown.length}
+        total={records.length}
+        onFilter={(next) => {
+          setFilter(next);
+          setPage(1);
+        }}
+        onJump={jumpTo}
+      />
+      <ol className="mt-4">
+        {visible.map((record, index) => (
           <Step
             key={record.record_id}
             record={record}
             first={index === 0}
-            last={index === records.length - 1}
+            last={index === visible.length - 1}
             open={open === record.record_id}
             onToggle={() => setOpen(open === record.record_id ? null : record.record_id)}
             payloads={payloads}
@@ -104,6 +147,98 @@ export function RunFeed({
           />
         ))}
       </ol>
+      {shown.length === 0 && <p className="mt-2 text-ink-soft">No steps match the filter.</p>}
+      <div className="mt-4">
+        <Pager
+          page={current}
+          total={shown.length}
+          perPage={STEPS_PER_PAGE}
+          onPage={setPage}
+          label="Steps"
+        />
+      </div>
+    </div>
+  );
+}
+
+/** Kind chips, a text filter over target names and labels, and a jump to a step number. */
+function StepFilterBar({
+  kinds,
+  filter,
+  matches,
+  total,
+  onFilter,
+  onJump,
+}: {
+  kinds: string[];
+  filter: StepFilter;
+  matches: number;
+  total: number;
+  onFilter: (filter: StepFilter) => void;
+  onJump: (seq: number) => void;
+}) {
+  const [seq, setSeq] = useState("");
+  return (
+    <div className="mt-5 flex flex-wrap items-center gap-2 text-sm">
+      <div className="flex flex-wrap gap-1" role="group" aria-label="Step kind">
+        <button
+          type="button"
+          aria-pressed={!filter.kind}
+          onClick={() => onFilter({ ...filter, kind: undefined })}
+          className={`rounded px-2 py-1 text-xs font-medium ${
+            !filter.kind ? "bg-seal-soft text-seal" : "bg-line text-ink-soft hover:text-ink"
+          }`}
+        >
+          all
+        </button>
+        {kinds.map((kind) => (
+          <button
+            key={kind}
+            type="button"
+            aria-pressed={filter.kind === kind}
+            onClick={() => onFilter({ ...filter, kind: filter.kind === kind ? undefined : kind })}
+            className={`rounded px-2 py-1 text-xs font-medium ${
+              filter.kind === kind
+                ? "bg-seal-soft text-seal"
+                : "bg-line text-ink-soft hover:text-ink"
+            }`}
+          >
+            {kind.replaceAll("_", " ")}
+          </button>
+        ))}
+      </div>
+      <input
+        type="search"
+        value={filter.text ?? ""}
+        onChange={(event) => onFilter({ ...filter, text: event.target.value })}
+        placeholder="Model, tool, label…"
+        aria-label="Find steps"
+        className="min-w-0 flex-1 rounded border border-line bg-surface px-3 py-1.5"
+      />
+      <form
+        className="flex items-center gap-1"
+        onSubmit={(event) => {
+          event.preventDefault();
+          const value = Number(seq);
+          if (Number.isInteger(value) && value >= 0) onJump(value);
+        }}
+      >
+        <input
+          type="number"
+          min={0}
+          value={seq}
+          onChange={(event) => setSeq(event.target.value)}
+          placeholder="#"
+          aria-label="Step number"
+          className="w-20 rounded border border-line bg-surface px-2 py-1.5 tabular-nums"
+        />
+        <button type="submit" className="btn">
+          Go
+        </button>
+      </form>
+      <span className="text-ink-soft tabular-nums">
+        {matches === total ? `${total} steps` : `${matches} of ${total} steps`}
+      </span>
     </div>
   );
 }
