@@ -55,7 +55,7 @@ def delegation(principal: PrivateKeySet, agent: PrivateKeySet) -> dict[str, Any]
         principal,
         agent.public,
         not_before=START - timedelta(days=1),
-        not_after=START + timedelta(days=30),
+        not_after=START + timedelta(days=3650),
         agent_name="test-agent",
         delegation_id="0192b3c4-5d6e-7f80-9a1b-000000000000",
     )

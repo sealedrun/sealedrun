@@ -20,6 +20,14 @@ import {
   type WitnessVerdict,
 } from "@/lib/inspect";
 import {
+  answerBars,
+  decisionAnswers,
+  type GateView,
+  gateOf,
+  gateOutcome,
+  percent,
+} from "@/lib/decision";
+import {
   clampPage,
   filterSteps,
   kindsOf,
@@ -46,6 +54,9 @@ const TAG_TONES: Record<string, string> = {
   redirect: "bg-warn-soft text-warn",
   require_approval: "bg-warn-soft text-warn",
   "self-reported": "bg-line text-ink-soft",
+  decision: "bg-seal-soft text-seal",
+  approve: "bg-ok-soft text-ok",
+  review: "bg-warn-soft text-warn",
 };
 
 /**
@@ -144,6 +155,9 @@ export function RunFeed({
             payloads={payloads}
             onDownload={onDownload}
             witness={witness?.get(recordKey(record))}
+            gate={gateOf(record, records)}
+            parentSeq={records.find((r) => r.record_id === record.parent_record_id)?.seq ?? null}
+            onJump={jumpTo}
           />
         ))}
       </ol>
@@ -190,6 +204,16 @@ function StepFilterBar({
           }`}
         >
           all
+        </button>
+        <button
+          type="button"
+          aria-pressed={filter.decisions === true}
+          onClick={() => onFilter({ ...filter, decisions: filter.decisions ? undefined : true })}
+          className={`rounded px-2 py-1 text-xs font-medium ${
+            filter.decisions ? "bg-seal-soft text-seal" : "bg-line text-ink-soft hover:text-ink"
+          }`}
+        >
+          decisions
         </button>
         {kinds.map((kind) => (
           <button
@@ -383,6 +407,9 @@ function Step({
   payloads,
   onDownload,
   witness,
+  gate,
+  parentSeq,
+  onJump,
 }: {
   record: SealedRunRecord;
   first: boolean;
@@ -392,12 +419,20 @@ function Step({
   payloads?: Map<string, Uint8Array> | undefined;
   onDownload?: OnDownload;
   witness?: WitnessVerdict | undefined;
+  /** The gate reported on this decision call, when one is in the run. */
+  gate?: GateView | null;
+  /** Sequence number of the record's `parent_record_id`, when it is in the run. */
+  parentSeq?: number | null;
+  onJump?: (seq: number) => void;
 }) {
   const location = record.target.location;
   const decision = record.policy?.decision;
+  const verdict = gateOutcome(record);
   const tags: string[] = [
     ...(location ? [location] : []),
     ...(decision && decision !== "allow" ? [decision] : []),
+    ...(decisionAnswers(record) ? ["decision"] : []),
+    ...(verdict ? [verdict] : []),
     ...(record.outcome !== "success" ? [record.outcome] : []),
     ...(isSelfReported(record) ? ["self-reported"] : []),
   ];
@@ -457,7 +492,15 @@ function Step({
           />
         </button>
         {open && (
-          <Detail record={record} payloads={payloads} onDownload={onDownload} witness={witness} />
+          <Detail
+            record={record}
+            payloads={payloads}
+            onDownload={onDownload}
+            witness={witness}
+            gate={gate ?? null}
+            parentSeq={parentSeq ?? null}
+            onJump={onJump}
+          />
         )}
       </div>
     </li>
@@ -484,12 +527,20 @@ function Detail({
   payloads,
   onDownload,
   witness,
+  gate,
+  parentSeq,
+  onJump,
 }: {
   record: SealedRunRecord;
   payloads?: Map<string, Uint8Array> | undefined;
   onDownload?: OnDownload;
   witness?: WitnessVerdict | undefined;
+  gate: GateView | null;
+  parentSeq: number | null;
+  onJump?: ((seq: number) => void) | undefined;
 }) {
+  const answers = decisionAnswers(record);
+  const verdict = gateOutcome(record);
   const stored = record.payload?.storage === "bundle" || record.payload?.storage === "inline";
   const anchor = anchorInfo(record, witness);
   const proof =
@@ -526,6 +577,10 @@ function Detail({
             ),
         )}
       </dl>
+      {answers && <DecisionCard answers={answers} gate={gate} onJump={onJump} />}
+      {verdict && (
+        <GateCard record={record} verdict={verdict} parentSeq={parentSeq} onJump={onJump} />
+      )}
       {anchor?.entryUrl && (
         <p className="mt-3 text-sm">
           <a
@@ -569,6 +624,150 @@ function Detail({
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * The answers of a decision model (SPEC 10.7): one row per question with a bar per label, and
+ * the gate the application reported on them (SPEC 10.8) with a jump to that step.
+ */
+function DecisionCard({
+  answers,
+  gate,
+  onJump,
+}: {
+  answers: NonNullable<ReturnType<typeof decisionAnswers>>;
+  gate: GateView | null;
+  onJump?: ((seq: number) => void) | undefined;
+}) {
+  return (
+    <section
+      className="mt-4 rounded-lg border border-line bg-paper px-3 py-3"
+      data-testid="decision-card"
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <h4 className="text-sm font-semibold">Decision</h4>
+        {gate ? (
+          <>
+            <Tag tone={TAG_TONES[gate.outcome]}>{gate.outcome}</Tag>
+            <button
+              type="button"
+              className="text-sm underline hover:text-ink"
+              onClick={() => onJump?.(gate.seq)}
+            >
+              gate at step #{gate.seq}
+            </button>
+            {gate.reason && <span className="text-sm text-ink-soft">{gate.reason}</span>}
+          </>
+        ) : (
+          <span className="text-sm text-ink-soft">no gate reported on this verdict</span>
+        )}
+      </div>
+      <ul className="mt-2 space-y-2">
+        {answers.map((answer) => {
+          const bars = answerBars(answer);
+          const threshold = gate?.thresholds[answer.name];
+          return (
+            <li key={answer.name} className="text-sm">
+              <div className="flex flex-wrap items-baseline gap-x-2">
+                <span className="font-medium">{answer.name}</span>
+                <span className="text-xs text-ink-soft">{answer.type}</span>
+                {answer.refused && <Tag tone="bg-bad-soft text-bad">refused</Tag>}
+                {answer.type !== "predicate" && answer.value !== undefined && (
+                  <span className="text-ink-soft">
+                    {typeof answer.value === "number" ? answer.value.toFixed(2) : answer.value}
+                  </span>
+                )}
+                {answer.confidence !== undefined && (
+                  <span className="text-xs text-ink-soft">
+                    confidence {percent(answer.confidence)}
+                  </span>
+                )}
+                {threshold !== undefined && (
+                  <span className="text-xs text-ink-soft">threshold {threshold}</span>
+                )}
+              </div>
+              {bars.map((bar) => (
+                <div key={bar.label} className="mt-1 flex items-center gap-2">
+                  <span className="w-28 shrink-0 truncate text-xs text-ink-soft sm:w-36">
+                    {bar.label}
+                  </span>
+                  <span
+                    className="relative h-2 min-w-0 flex-1 overflow-hidden rounded bg-line"
+                    role="img"
+                    aria-label={`${bar.label} ${percent(bar.share)}`}
+                  >
+                    <span
+                      className={`absolute inset-y-0 left-0 rounded ${bar.chosen ? "bg-seal" : "bg-ink-soft/50"}`}
+                      style={{ width: percent(bar.share) }}
+                    />
+                    {threshold !== undefined && answer.type === "predicate" && (
+                      <span
+                        aria-hidden
+                        className="absolute inset-y-0 w-px bg-bad"
+                        style={{ left: percent(threshold) }}
+                      />
+                    )}
+                  </span>
+                  <span className="w-10 shrink-0 text-right text-xs tabular-nums">
+                    {percent(bar.share)}
+                  </span>
+                </div>
+              ))}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
+/** A gate step (SPEC 10.8): its verdict, thresholds and the decision call it refers to. */
+function GateCard({
+  record,
+  verdict,
+  parentSeq,
+  onJump,
+}: {
+  record: SealedRunRecord;
+  verdict: string;
+  parentSeq: number | null;
+  onJump?: ((seq: number) => void) | undefined;
+}) {
+  const gate = record.extensions?.["sealedrun.gate"] ?? {};
+  const thresholds =
+    typeof gate.thresholds === "object" && gate.thresholds !== null
+      ? Object.entries(gate.thresholds as Record<string, unknown>)
+      : [];
+  return (
+    <section
+      className="mt-4 rounded-lg border border-line bg-paper px-3 py-3"
+      data-testid="gate-card"
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <h4 className="text-sm font-semibold">Gate</h4>
+        <Tag tone={TAG_TONES[verdict]}>{verdict}</Tag>
+        {typeof gate.reason === "string" && (
+          <span className="text-sm text-ink-soft">{gate.reason}</span>
+        )}
+      </div>
+      {thresholds.length > 0 && (
+        <p className="mt-1 text-sm text-ink-soft">
+          Thresholds: {thresholds.map(([name, value]) => `${name} ${String(value)}`).join(", ")}
+        </p>
+      )}
+      {parentSeq !== null && (
+        <p className="mt-1 text-sm">
+          <button
+            type="button"
+            className="underline hover:text-ink"
+            onClick={() => onJump?.(parentSeq)}
+          >
+            decision at step #{parentSeq}
+          </button>
+        </p>
+      )}
+    </section>
   );
 }
 

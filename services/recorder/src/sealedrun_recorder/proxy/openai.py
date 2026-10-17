@@ -1,4 +1,4 @@
-"""OpenAI wire format: Chat Completions, Responses, Embeddings and the model list.
+"""OpenAI wire format: Chat Completions, Responses, Embeddings, Decisions and the model list.
 
 Spoken by OpenAI, Azure OpenAI v1, Gemini's compatibility layer, DeepSeek, Kimi, Qwen, GLM,
 MiniMax, Mistral, xAI, Groq, OpenRouter and the local runtimes (Ollama, LM Studio, vLLM,
@@ -96,6 +96,87 @@ def embeddings_usage(reply: dict[str, Any]) -> dict[str, Any]:
     return _model(reply) | _tokens(mapping(reply.get("usage")), "prompt_tokens", "-")
 
 
+def decisions_usage(reply: dict[str, Any]) -> dict[str, Any]:
+    """Read model, token counts and refusals from a Decisions API reply.
+
+    The beta reply documents `answers` only; `usage` and `model` are read when present. An
+    answer of type `refusal` sets `finish_reason` to `refusal`, since the model gave no verdict
+    for that question.
+    """
+    llm = _model(reply) | _tokens(mapping(reply.get("usage")), "input_tokens", "output_tokens")
+    answers = [mapping(answer) for answer in sequence(reply.get("answers"))]
+    if any(answer.get("type") == "refusal" for answer in answers):
+        llm["finish_reason"] = "refusal"
+    return llm
+
+
+def _question_types(call: dict[str, Any]) -> dict[str, str]:
+    types: dict[str, str] = {}
+    for question in sequence(call.get("questions")):
+        question = mapping(question)
+        name, kind = question.get("name"), question.get("type")
+        if isinstance(name, str) and isinstance(kind, str):
+            types[name] = kind
+    return types
+
+
+def decision_from_openai(call: dict[str, Any], reply: dict[str, Any]) -> dict[str, Any]:
+    """Build `sealedrun.decision` (SPEC 10.7) from a Decisions API reply, list-shaped answers.
+
+    A `refusal` answer keeps the question's type from the request. An answer whose shape is
+    not understood is skipped; no answers means no extension.
+    """
+    types = _question_types(call)
+    answers = []
+    for raw in sequence(reply.get("answers")):
+        raw = mapping(raw)
+        name, kind = raw.get("name"), raw.get("type")
+        if not isinstance(name, str) or not name or not isinstance(kind, str):
+            continue
+        answer: dict[str, Any] = {"name": name}
+        if kind == "refusal":
+            answer["type"] = normalise_type(types.get(name, "predicate"))
+            answer["refused"] = True
+            answers.append(answer)
+            continue
+        answer["type"] = normalise_type(kind)
+        if kind in ("predicate", "noul"):
+            answer.update(_probability("value", raw.get("probability")))
+        elif kind == "choice":
+            if isinstance(raw.get("choice"), str):
+                answer["value"] = raw["choice"]
+            probabilities = {
+                option["value"]: option["probability"]
+                for option in map(mapping, sequence(raw.get("probabilities")))
+                if isinstance(option.get("value"), str)
+                and _is_probability(option.get("probability"))
+            }
+            if probabilities:
+                answer["probabilities"] = probabilities
+        elif kind == "score":
+            score = raw.get("score")
+            if isinstance(score, int | float) and not isinstance(score, bool):
+                answer["value"] = score
+        else:
+            continue
+        answer.update(_probability("confidence", raw.get("confidence")))
+        answers.append(answer)
+    return {"sealedrun.decision": {"answers": answers}} if answers else {}
+
+
+def normalise_type(kind: str) -> str:
+    """Map a provider's question type to the SPEC 10.7 vocabulary; unknown types stay as given."""
+    return "predicate" if kind == "noul" else kind
+
+
+def _is_probability(value: Any) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool) and 0 <= value <= 1
+
+
+def _probability(field: str, value: Any) -> dict[str, Any]:
+    return {field: value} if _is_probability(value) else {}
+
+
 def responses_usage(reply: dict[str, Any]) -> dict[str, Any]:
     """Read model, token counts, status and requested tools from a Responses API reply.
 
@@ -155,6 +236,9 @@ OPENAI = Dialect(
 CHAT = Operation(OPENAI, "chat", "/chat/completions", chat_usage, stream=chat_stream)
 EMBEDDINGS = Operation(OPENAI, "embeddings", "/embeddings", embeddings_usage)
 RESPONSES = Operation(OPENAI, "responses", "/responses", responses_usage, stream=responses_stream)
+DECISIONS = Operation(
+    OPENAI, "decisions", "/decisions", decisions_usage, extract=decision_from_openai
+)
 
 router = APIRouter(prefix="/v1", dependencies=[Depends(require_proxy_token)])
 
@@ -169,6 +253,12 @@ async def chat_completions(request: Request) -> Response:
 async def responses(request: Request) -> Response:
     """Forward a Responses API call and record it as an `llm_call`."""
     return await forward(request, RESPONSES)
+
+
+@router.post("/decisions")
+async def decisions(request: Request) -> Response:
+    """Forward a Decisions API call (typed answers with probabilities) and record it."""
+    return await forward(request, DECISIONS)
 
 
 @router.post("/embeddings")

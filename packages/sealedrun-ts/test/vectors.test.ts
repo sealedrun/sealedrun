@@ -244,3 +244,34 @@ describe("bundles", () => {
 test("hex helpers round-trip", () => {
   expect(hexEncode(hexDecode("00ff10"))).toBe("00ff10");
 });
+
+describe("decision run", () => {
+  const records = readRecords("records", "decision-run.jsonl");
+  const expected = readJson<Record<string, { seq: number; hash: string; prev_hash: string }[]>>(
+    "records",
+    "expected.json",
+  )["decision-run.jsonl"]!;
+  test("hashes reproduce, the gate links the decision, a tampered answer fails", () => {
+    records.forEach((record, i) => {
+      expect(checkHash(record)).toBe(true);
+      expect(record.hash).toBe(expected[i]!.hash);
+    });
+    const report = verifyRun(records, delegationMap(validDelegation()));
+    expect(report.complete).toBe(true);
+    const decision = records[1]!.extensions!["sealedrun.decision"] as {
+      answers: { value: number }[];
+    };
+    expect(decision.answers[0]!.value).toBe(0.97);
+    expect(records[2]!.parent_record_id).toBe(records[1]!.record_id);
+    const tampered = structuredClone(records);
+    (
+      tampered[1]!.extensions!["sealedrun.decision"] as { answers: { value: number }[] }
+    ).answers[0]!.value = 0.01;
+    expect(() => verifyRun(tampered, delegationMap(validDelegation()))).toThrow(/hash/);
+    const malformed = structuredClone(records);
+    (
+      malformed[1]!.extensions!["sealedrun.decision"] as { answers: { type: string }[] }
+    ).answers[0]!.type = "noul";
+    expect(() => verifyRun(malformed, delegationMap(validDelegation()))).toThrow(/not one of/);
+  });
+});

@@ -494,6 +494,8 @@ verification failure. Registered:
 | `sealedrun.otel`       | 11      | OpenTelemetry trace and span ids |
 | `sealedrun.step`       | 10.5    | Self-reported step provenance    |
 | `sealedrun.context`    | 10.6    | What produced the run            |
+| `sealedrun.decision`   | 10.7    | Decision-model answers           |
+| `sealedrun.gate`       | 10.8    | Outcome of a gate on a decision  |
 
 ### 9.1 Compatibility with MCP SEP-3004 and IETF AAT
 
@@ -555,7 +557,8 @@ error codes outside `-32768..-32000`; this specification uses `40000` for a prox
 `40003` for a call the policy rule refused.
 
 ```json
-{ "upstream": "openai", "dialect": "openai" | "anthropic" | "ollama" | "gemini" | "mcp", "operation": "chat",
+{ "upstream": "openai", "dialect": "openai" | "anthropic" | "ollama" | "gemini" | "systemone" | "mcp",
+  "operation": "chat",
   "status": 200, "latency_ms": 412.5, "truncated": true, "run_label": "nightly-report" }
 ```
 
@@ -625,6 +628,58 @@ array of an MCP `tools/list` result, sorted by `name`, first page only, when tha
 first of the run; `tool_inventory_server` names the server it came from. `model_defaults` is a
 free-form object of the caller's defaults. A verifier checks the shape and the `policy` rule of
 5.7 only; matching a digest to a policy file or a tool list is the operator's step.
+
+### 10.7 `sealedrun.decision`
+
+```json
+{
+  "answers": [
+    { "name": "touches_prod", "type": "predicate", "value": 0.97 },
+    {
+      "name": "team",
+      "type": "choice",
+      "value": "engineering",
+      "confidence": 0.9,
+      "probabilities": { "billing": 0.05, "engineering": 0.95 }
+    },
+    {
+      "name": "severity",
+      "type": "score",
+      "value": 2,
+      "confidence": 1,
+      "probabilities": { "harmless": 0, "recoverable": 0, "destructive": 1 }
+    },
+    { "name": "intent", "type": "choice", "refused": true }
+  ]
+}
+```
+
+The answers of a decision model (OpenAI Decisions, the SystemOne format of TypeSafe, OpenRouter
+and Microsoft Foundry), extracted by the recorder from the reply of an `llm_call` whose
+`sealedrun.proxy.operation` is `decisions` and written in the record, so that the verdict
+survives an export without payload bodies (13.1). One entry per question, in reply order. `type`
+is normalised: a yes/no question (`predicate`, `noul`) is `predicate` with `value` the
+probability of yes; `choice` has the chosen label as `value`; `score` has the model's score
+(the expected level on the ordered scale, a number) as `value`. Answer types outside this
+vocabulary (TypeSafe `box`) are not extracted. `probabilities` maps each label (or, without a legend, each index as a string) to its
+probability; `confidence` is the model's own figure when it reports one. An answer the model
+refused carries `refused: true` and no `value`; its `type` is taken from the question. A
+verifier checks the shape only; an application reads `value` against its own thresholds and
+reports what it did with 10.8.
+
+### 10.8 `sealedrun.gate`
+
+```json
+{ "outcome": "approve" | "block" | "review", "thresholds": { "touches_prod": 0.5 }, "reason": "touches_prod above 0.5" }
+```
+
+A self-reported `policy_decision` record (10.5) with which an application states what it did
+with a decision: `parent_record_id` names the `llm_call` that carries the answers (10.7),
+`thresholds` maps question names to the figures compared against `value`, and `outcome` is
+`approve` (the action was allowed to run), `block` (refused) or `review` (handed to a human or
+another check; the record's own `outcome` is then `pending`). The record's `outcome` is `success`
+for `approve` and `blocked` for `block`. The chain then reads: question, model probabilities,
+application threshold, outcome, and the `tool_call` that ran or did not.
 
 ## 11. Mapping to OpenTelemetry GenAI semantic conventions
 
@@ -761,7 +816,9 @@ implementations can prove conformance:
   signed delegations and their expected hashes. The last one carries a high-S `es256` signature
   and MUST be rejected.
 - `records/valid-run.jsonl` with `expected.json`: a complete nine-record run covering every
-  record kind, with the expected `prev_hash` and `hash` per seq.
+  record kind, with the expected `prev_hash` and `hash` per seq. `records/context-run.jsonl`
+  carries `sealedrun.context` (10.6); `records/decision-run.jsonl` a decision call with
+  `sealedrun.decision`, its `sealedrun.gate` step and the tool call it allowed (10.7, 10.8).
 - `chains/*.jsonl` with `expected.json`: negative runs (`tampered-field`,
   `resigned-by-other-key`, `resigned-with-agent-key`, `gap-in-seq`, `reordered`,
   `broken-prev-hash`, `record-after-run-end`, `expired-delegation`, `bad-anchor`,
@@ -778,6 +835,8 @@ implementations can prove conformance:
   and report two runs.
 - `bundle/open-run.zip`: the same run exported before its `run_end`; a verifier MUST accept it
   and report `complete: false`.
+- `bundle/decision-omitted.zip`: the decision run (10.7, 10.8) exported without bodies; a
+  verifier MUST accept it and report `payloads_omitted`.
 - `bundle/payloads-omitted.zip` (verifies, bodies not checked) and
   `payloads-omitted-with-bodies.zip` (refused: a body is present although the manifest says omitted).
 - `bundle/valid.zip`, `tampered-payload.zip`, `tampered-record.zip`, `poisoned-payload-name.zip`,

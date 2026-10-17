@@ -202,6 +202,89 @@ Coding agents on Ollama send prompts of 10k tokens and more, while Ollama may ru
 smaller context and cut the prompt silently, tool definitions included. Raise it with
 `OLLAMA_CONTEXT_LENGTH` or a model alias with `PARAMETER num_ctx 16384`.
 
+### Decision models
+
+Decision models answer typed questions about a state (yes/no, a choice, a score) with
+probabilities, and agents use them as gates before an action. The proxy records those calls
+too, as `llm_call` records with operation `decisions`, so a gate's verdict sits in the run next
+to the action it allowed. Two wire formats are supported:
+
+- OpenAI Decisions (`gpt-6-luna`): `POST /v1/decisions`, routed through an `openai` upstream
+  like chat; `client.decisions.create(...)` with `OPENAI_BASE_URL` pointed at the recorder.
+- SystemOne, the TypeSafe format spoken by OpenRouter (`typesafe/jev-*`) and Microsoft Foundry
+  (Decision-1): `POST /api/alpha/decisions`, `/api/v1/systemone` or
+  `/providers/microsoft/v1/systemone`, routed through a `systemone` upstream and forwarded to
+  `<url>/systemone`.
+
+```yaml
+upstreams:
+  - name: openai
+    url: https://api.openai.com/v1
+    dialect: openai
+    key_env: OPENAI_API_KEY
+    location: cloud
+    models: ["gpt-*"]
+  - name: openrouter-decisions
+    url: https://openrouter.ai/api/v1
+    dialect: systemone
+    key_env: OPENROUTER_API_KEY
+    location: cloud
+    models: ["typesafe/*", "~typesafe/*"]
+  - name: foundry-decisions
+    url: https://YOUR-RESOURCE.services.ai.azure.com/providers/microsoft/v1
+    dialect: systemone
+    key_env: AZURE_FOUNDRY_API_KEY
+    auth: api-key
+    location: cloud
+    models: ["decision-*"]
+```
+
+```bash
+curl -s -X POST http://127.0.0.1:8080/api/v1/systemone -H "Authorization: Bearer change-me" \
+  -H "Content-Type: application/json" -d '{"model": "typesafe/jev-1.13",
+  "state": {"tool": "shell", "command": "rm -rf /var/lib/postgres", "host": "prod-db-1"},
+  "questions": {"touches_prod": {"type": "noul", "instructions": "Touches production data?",
+  "criteria": {"true": "destroys or alters production data", "false": "otherwise"}}}}'
+```
+
+The record keeps the request and reply as payloads, the model snapshot and token counts in
+`sealedrun.llm`, and `dialect: systemone` in `sealedrun.proxy`. The answers themselves are
+extracted into `sealedrun.decision` (SPEC 10.7), one normalised entry per question, so the
+verdict stays in the record when a run is exported without payload bodies. The policy rule
+applies as to any cloud call. Decision calls never stream.
+
+The reply carries the record id in `X-SealedRun-Record`. Hand it to `record_gate` and the run
+shows what your code did with the verdict: a `policy_decision` step linked to the decision
+call by `parent_record_id`, with your thresholds and the outcome (`approve`, `block`,
+`review`), followed by the tool call that ran or did not.
+
+```python
+import httpx
+from sealedrun import Recorder
+
+recorder = Recorder("http://127.0.0.1:8080", token="change-me", run="deploy-42")
+reply = httpx.post(
+    "http://127.0.0.1:8080/api/v1/systemone",
+    headers={"Authorization": "Bearer change-me", "X-SealedRun-Run": "deploy-42"},
+    json={"model": "typesafe/jev-1.13", "state": state, "questions": questions},
+)
+touches_prod = reply.json()["answers"]["touches_prod"]["noul"]
+verdict = "block" if touches_prod > 0.5 else "approve"
+recorder.record_gate(
+    reply.headers["X-SealedRun-Record"],
+    verdict,
+    thresholds={"touches_prod": 0.5},
+    reason=f"touches_prod {touches_prod:.2f}",
+)
+```
+
+```ts
+const verdict = touchesProd > 0.5 ? "block" : "approve";
+await recorder.recordGate(reply.headers.get("x-sealedrun-record")!, verdict, {
+  thresholds: { touches_prod: 0.5 },
+});
+```
+
 ### MCP servers
 
 MCP servers that speak Streamable HTTP go behind the same recorder, listed under `mcp_servers` in

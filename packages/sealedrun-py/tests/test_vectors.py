@@ -1,3 +1,4 @@
+import copy
 import json
 from pathlib import Path
 
@@ -13,7 +14,7 @@ from sealedrun import (
     verify_run,
 )
 from sealedrun.keys import verify_one
-from sealedrun.schema import SCHEMA_DIR
+from sealedrun.schema import SCHEMA_DIR, validate_extensions
 from sealedrun.signing import check_hash
 
 VECTORS = SCHEMA_DIR.parent / "vectors"
@@ -159,3 +160,28 @@ def test_regeneration_is_hash_stable(tmp_path: Path) -> None:
     assert load(tmp_path / "vectors" / "delegations" / "expected.json") == load(
         VECTORS / "delegations" / "expected.json"
     )
+
+
+def test_decision_run_verifies_and_a_tampered_answer_fails() -> None:
+    records = records_of(VECTORS / "records" / "decision-run.jsonl")
+    expected = load(VECTORS / "records" / "expected.json")
+    assert isinstance(expected, dict)
+    for record, exp in zip(records, expected["decision-run.jsonl"], strict=True):
+        assert check_hash(record)
+        assert record["hash"] == exp["hash"]
+    delegation = load(VECTORS / "delegations" / "valid.json")
+    assert isinstance(delegation, dict)
+    delegations = {delegation["delegation_id"]: delegation}
+    assert verify_run(records, delegations).complete
+    decision, gate = records[1], records[2]
+    assert decision["extensions"]["sealedrun.decision"]["answers"][0]["value"] == 0.97
+    assert gate["parent_record_id"] == decision["record_id"]
+    assert gate["extensions"]["sealedrun.gate"]["outcome"] == "block"
+    tampered = copy.deepcopy(records)
+    tampered[1]["extensions"]["sealedrun.decision"]["answers"][0]["value"] = 0.01
+    with pytest.raises(VerificationError) as info:
+        verify_run(tampered, delegations)
+    assert (info.value.check, info.value.seq) == ("hash", 1)
+    malformed = copy.deepcopy(records)
+    malformed[1]["extensions"]["sealedrun.decision"]["answers"][0]["type"] = "noul"
+    assert validate_extensions(malformed[1]["extensions"]) != []

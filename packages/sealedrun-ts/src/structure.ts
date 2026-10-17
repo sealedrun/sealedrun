@@ -1,7 +1,7 @@
 import { VerificationError } from "./errors.js";
 import type { Delegation, Manifest, SealedRunRecord } from "./types.js";
 
-type Kind = "string" | "integer" | "boolean" | "object" | "strings" | "stringMap";
+type Kind = "string" | "integer" | "boolean" | "object" | "strings" | "stringMap" | "objects";
 type Shape = Record<string, Kind>;
 
 const SEALED: Shape = {
@@ -77,7 +77,13 @@ const EXTENSIONS: Record<string, Shape> = {
   "sealedrun.otel": { trace_id: "string", span_id: "string" },
   "sealedrun.imported": { source_format: "string" },
   "sealedrun.context": { recorder_software: "string" },
+  "sealedrun.decision": { answers: "objects" },
+  "sealedrun.gate": { outcome: "string" },
 };
+
+/** Required shape of each entry of `sealedrun.decision.answers` (SPEC 10.7). */
+const ANSWER: Shape = { name: "string", type: "string" };
+const ANSWER_TYPES: readonly string[] = ["predicate", "choice", "score"];
 
 /** Required members of `sealedrun.anchor.receipt` per anchor type (SPEC 8.1.1, 8.1.2). */
 const RECEIPTS: Record<string, Shape> = {
@@ -113,6 +119,7 @@ const EXTENSION_ENUMS: Record<string, Record<string, readonly string[]>> = {
   "sealedrun.anchor": { type: ["rekor", "rfc3161", "scitt", "other"] },
   "sealedrun.mcp": { transport: ["stdio", "http"] },
   "sealedrun.imported": { source_format: ["otel", "aat", "sep-3004", "other"] },
+  "sealedrun.gate": { outcome: ["approve", "block", "review"] },
 };
 
 /** Optional string fields of an extension whose pattern the JSON Schema fixes. */
@@ -153,6 +160,8 @@ function matches(value: unknown, kind: Kind): boolean {
       return Array.isArray(value) && value.every((v) => typeof v === "string");
     case "stringMap":
       return isObject(value) && Object.values(value).every((v) => typeof v === "string");
+    case "objects":
+      return Array.isArray(value) && value.every((v) => isObject(v));
   }
 }
 
@@ -213,6 +222,21 @@ export function assertExtensions(value: unknown): void {
           `extensions/${key}/receipt/inclusion_proof`,
         );
       }
+    }
+    if (key === "sealedrun.decision") {
+      const answers = (ext as Record<string, unknown>).answers as unknown[];
+      if (answers.length === 0) {
+        throw new VerificationError("schema", `extensions/${key}: answers is empty`);
+      }
+      answers.forEach((answer, index) => {
+        check(answer, ANSWER, `extensions/${key}/answers/${index}`);
+        if (!ANSWER_TYPES.includes((answer as Record<string, unknown>).type as string)) {
+          throw new VerificationError(
+            "schema",
+            `extensions/${key}/answers/${index}: type is not one of ${ANSWER_TYPES.join(", ")}`,
+          );
+        }
+      });
     }
     for (const [field, pattern] of Object.entries(EXTENSION_PATTERNS[key] ?? {})) {
       const actual = (ext as Record<string, unknown>)[field];

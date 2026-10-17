@@ -40,6 +40,7 @@ from sealedrun_recorder.proxy.labels import LabelsError, header_labels, label_fi
 from sealedrun_recorder.upstreams import Upstream, Upstreams
 
 RUN_HEADER = "x-sealedrun-run"
+RECORD_HEADER = "x-sealedrun-record"
 RUN_LABEL = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 GEMINI_PATH = re.compile(r"^/(v1beta/|v1/models/[^/]+:)")
 JSON = "application/json"
@@ -117,6 +118,7 @@ class Operation:
     `stream_default` is what the format assumes when the body has no `stream` field; `stream`
     reads the fields from a finished stream, and is None for endpoints that never stream.
     `stream_media_type` is the stream's content type when the upstream does not name one.
+    `extract` reads further extensions (SPEC 10.7) from the request and a successful reply.
     """
 
     dialect: Dialect
@@ -127,6 +129,7 @@ class Operation:
     sampling: BodyFields = top_level_temperature
     stream: StreamFields | None = None
     stream_media_type: str = SSE
+    extract: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]] | None = None
 
 
 class RunGrouper:
@@ -396,7 +399,8 @@ class Exchange:
         except BodyTooLargeError:
             status, answer = self._oversize()
             media_type, headers = JSON, {}
-        await self._record(status, answer, media_type)
+        record = await self._record(status, answer, media_type)
+        headers[RECORD_HEADER] = str(record["record_id"])
         return Response(answer, status_code=status, media_type=media_type, headers=headers)
 
     async def stream(self) -> Response:
@@ -462,8 +466,8 @@ class Exchange:
 
     async def _record(
         self, status: int, answer: bytes | None, media_type: str, truncated: bool = False
-    ) -> None:
-        """Seal the call; `answer` is None for a call that was never sent."""
+    ) -> dict[str, Any]:
+        """Seal the call and return the record; `answer` is None for a call that was never sent."""
         latency_ms = round((time.perf_counter() - self.started) * 1000, 1)
         operation = self.operation
         llm: dict[str, Any] = {
@@ -472,6 +476,7 @@ class Exchange:
             "stream": self.streaming,
         }
         llm.update(operation.sampling(self.call))
+        extracted: dict[str, Any] = {}
         blocked = answer is None
         if answer is None:
             failed = False
@@ -485,6 +490,8 @@ class Exchange:
             parsed = _json_object(answer)
             if parsed is not None:
                 llm.update(operation.usage(parsed))
+                if not failed and operation.extract is not None:
+                    extracted.update(operation.extract(self.call, parsed))
         proxy: dict[str, Any] = {
             "upstream": self.upstream.name,
             "dialect": operation.dialect.name,
@@ -494,7 +501,9 @@ class Exchange:
         }
         if truncated:
             proxy["truncated"] = True
-        fields = label_fields(self.labels or [], {"sealedrun.llm": llm, "sealedrun.proxy": proxy})
+        fields = label_fields(
+            self.labels or [], {"sealedrun.llm": llm, "sealedrun.proxy": proxy, **extracted}
+        )
         if self.policy is not None:
             fields["policy"] = self.policy.document()
         if blocked:
@@ -503,7 +512,7 @@ class Exchange:
             outcome = "error" if failed else "success"
         rule: Rule = self.request.app.state.policy
         agent = header_agent(self.request)
-        await run_in_threadpool(
+        record: dict[str, Any] = await run_in_threadpool(
             self.request.app.state.runs.record,
             self.label,
             "llm_call",
@@ -522,6 +531,7 @@ class Exchange:
             outcome=outcome,
             **fields,
         )
+        return record
 
 
 def upstream_headers(request: Request, upstream: Upstream, dialect: Dialect) -> dict[str, str]:

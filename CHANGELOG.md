@@ -3,6 +3,42 @@
 All notable changes are documented here. The format follows Keep a Changelog; the project
 follows Semantic Versioning once 1.0.0 is reached.
 
+## [Unreleased]
+
+### Added
+
+- Recorder proxy: `POST /v1/decisions` (OpenAI Decisions API, model `gpt-6-luna`) is forwarded
+  and recorded as an `llm_call` with operation `decisions`; token usage and `model` are read
+  when the reply carries them, a `refusal` answer sets `finish_reason: refusal`. The policy rule
+  applies as to any cloud call. Streaming is refused with 400.
+- Recorder proxy: dialect `systemone` for decision models in the TypeSafe wire format
+  (OpenRouter `typesafe/jev-*`, Microsoft Foundry Decision-1). The recorder accepts
+  `POST /api/alpha/decisions`, `/api/v1/systemone` and `/providers/microsoft/v1/systemone`,
+  forwards to `<upstream url>/systemone` and records an `llm_call` with operation `decisions`,
+  the model snapshot and token counts. `api-key` and bearer credentials pass through as for
+  other dialects. SPEC 10.3 and the extension schema list the new dialect;
+  `upstreams.example.yaml` has entries for OpenRouter and Foundry.
+- SPEC 10.7 `sealedrun.decision`: the recorder extracts a decision model's answers from the
+  reply of a `decisions` call into the record, normalised to one list (`predicate`, `choice`,
+  `score`; `value`, `confidence`, `probabilities`, `refused`), so the verdict survives an
+  export without payload bodies. Both verifiers check the shape; vector
+  `records/decision-run.jsonl`.
+- SPEC 10.8 `sealedrun.gate` and SDK `record_gate` / `recordGate` (py, ts): a self-reported
+  `policy_decision` step that names the decision call by `parent_record_id` and states the
+  thresholds and the outcome (`approve`, `block`, `review`). The SDKs' `record` takes
+  `parent_record_id` / `parentRecordId`.
+- Recorder proxy: every buffered reply carries the record id in `X-SealedRun-Record`.
+- Inspector: a decision call shows a "Decision" card with a bar per answer (yes probability,
+  choice or score labels, the chosen one marked, the gate's threshold drawn on it), the gate's
+  verdict and a jump to the gate step; a gate step shows its verdict, thresholds and a jump back
+  to the decision. Row tags `decision` and `approve` / `block` / `review`; a `decisions` filter
+  chip keeps decision calls and their gates; the text filter matches `decision` and the verdict.
+
+### Fixed
+
+- `sealedrun-py` tests: the shared delegation fixture expired on 2026-10-16 and eight tests
+  that write records with the real clock started failing; its validity is now ten years.
+
 ## [0.5.0] - 2026-10-10
 
 Anchoring is on by default with Sigstore's time-stamp authority and visible in `/api/identity` and the Inspector; big runs export without payload bodies and stream to disk; the Inspector run and step lists page, filter and link.

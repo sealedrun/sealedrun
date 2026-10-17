@@ -1,4 +1,11 @@
 {
+  "decision-omitted.zip": {
+    "complete": true,
+    "ok": true,
+    "payloads_omitted": true,
+    "records": 5,
+    "runs": 1
+  },
   "duplicate-record-id-across-runs.zip": {
     "check": "record_id",
     "ok": false,

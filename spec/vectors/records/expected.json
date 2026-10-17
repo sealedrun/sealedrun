@@ -19,6 +19,38 @@
       "seq": 2
     }
   ],
+  "decision-run.jsonl": [
+    {
+      "hash": "27d705a53eca3d375e7d3e860d169b9d2f43321d9250ec256a9c1bec4f0738ff",
+      "kind": "run_start",
+      "prev_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "seq": 0
+    },
+    {
+      "hash": "f0a9d3e7285464e81f0a9bee3d800376493b4582170f19fc3a2489a569fb1c67",
+      "kind": "llm_call",
+      "prev_hash": "27d705a53eca3d375e7d3e860d169b9d2f43321d9250ec256a9c1bec4f0738ff",
+      "seq": 1
+    },
+    {
+      "hash": "6d0062f1f0da520f37318f2bf22ac9ffb916cb3875496dbee3c180564d9b2e59",
+      "kind": "policy_decision",
+      "prev_hash": "f0a9d3e7285464e81f0a9bee3d800376493b4582170f19fc3a2489a569fb1c67",
+      "seq": 2
+    },
+    {
+      "hash": "9db526d15c94b324953f7475aabc1bc69a1e84a52f3887bd53aa94aadd020577",
+      "kind": "tool_call",
+      "prev_hash": "6d0062f1f0da520f37318f2bf22ac9ffb916cb3875496dbee3c180564d9b2e59",
+      "seq": 3
+    },
+    {
+      "hash": "a76b5ad049f167472ad44b344a483f068b1bb0fea2bec76459227d8ac3e89824",
+      "kind": "run_end",
+      "prev_hash": "9db526d15c94b324953f7475aabc1bc69a1e84a52f3887bd53aa94aadd020577",
+      "seq": 4
+    }
+  ],
   "valid-run.jsonl": [
     {
       "hash": "18d39e849b52694684f84e1c3157a832fa3cbb6f58b4528ac3adabbbdcfe2b24",
