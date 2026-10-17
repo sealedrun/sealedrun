@@ -72,3 +72,27 @@ describe("query state", () => {
     expect(runFilters({ state: "imported" })).toEqual({ source: "imported" });
   });
 });
+
+describe("decisions filter", () => {
+  const decision = {
+    ...step(1, "llm_call", "typesafe/jev-1.13"),
+    record_id: "d1",
+    extensions: {
+      "sealedrun.decision": { answers: [{ name: "touches_prod", type: "predicate", value: 0.97 }] },
+    },
+  } as unknown as SealedRunRecord;
+  const gate = {
+    ...step(2, "policy_decision", "gate"),
+    outcome: "pending",
+    parent_record_id: "d1",
+    extensions: { "sealedrun.gate": { outcome: "review" } },
+  } as unknown as SealedRunRecord;
+  const records = [step(0, "run_start", "recorder"), decision, gate, step(3, "tool_call", "shell")];
+
+  test("keeps decision calls and their gates only", () => {
+    expect(filterSteps(records, { decisions: true }).map((r) => r.seq)).toEqual([1, 2]);
+    expect(filterSteps(records, { decisions: true, kind: "tool_call" })).toEqual([]);
+    expect(filterSteps(records, { text: "review" }).map((r) => r.seq)).toEqual([2]);
+    expect(filterSteps(records, { text: "decision" }).map((r) => r.seq)).toEqual([1, 2]);
+  });
+});

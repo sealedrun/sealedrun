@@ -98,6 +98,25 @@ def _llm_calls(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [r for r in records if r["kind"] == "llm_call"]
 
 
+def test_blocked_decision_call_is_recorded_as_blocked(
+    make_proxy: Callable[..., TestClient], upstream: Any, auth: dict[str, str], proxy_records: Any
+) -> None:
+    body = {
+        "model": "gpt-4.1",
+        "input": "client list",
+        "questions": [{"type": "predicate", "name": "ok", "instructions": "May run?"}],
+    }
+    with make_proxy(CONFIG, **RULE) as client:
+        reply = client.post("/v1/decisions", json=body, headers=_labelled(auth, "nda"))
+        assert reply.status_code == 403
+        assert upstream.calls == []
+        [record] = _llm_calls(proxy_records(client))
+    assert record["outcome"] == "blocked"
+    assert record["policy"] == BLOCK
+    assert record["extensions"]["sealedrun.proxy"]["operation"] == "decisions"
+    assert "response_hash" not in record["payload"]
+
+
 def test_blocked_call_never_reaches_the_upstream_and_is_recorded(
     make_proxy: Callable[..., TestClient], upstream: Any, auth: dict[str, str], proxy_records: Any
 ) -> None:

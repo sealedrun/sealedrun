@@ -186,6 +186,34 @@ describe("Recorder", () => {
     expect(String(unreachable)).not.toContain("secret-token");
   });
 
+  test("recordGate links the decision and maps the outcome", async () => {
+    const recorder = new Recorder(url, { token: "tok", run: "job-1" });
+    const record = await recorder.recordGate("0192b3c4-5d6e-7f80-9a1b-000000000201", "block", {
+      thresholds: { touches_prod: 0.5 },
+      reason: "touches_prod 0.97 above 0.5",
+    });
+    expect(record).toEqual({ record_id: "r-1", seq: 1 });
+    expect(posts[0]!.body).toEqual({
+      kind: "policy_decision",
+      target: { type: "none", name: "gate", location: "local" },
+      outcome: "blocked",
+      data_labels: [],
+      extensions: {
+        "sealedrun.gate": {
+          outcome: "block",
+          thresholds: { touches_prod: 0.5 },
+          reason: "touches_prod 0.97 above 0.5",
+        },
+      },
+      parent_record_id: "0192b3c4-5d6e-7f80-9a1b-000000000201",
+    });
+    await recorder.recordGate("0192b3c4-5d6e-7f80-9a1b-000000000201", "review");
+    expect(posts[1]!.body.outcome).toBe("pending");
+    await expect(recorder.recordGate("x", "maybe" as unknown as "approve")).rejects.toThrow(
+      "approve, block or review",
+    );
+  });
+
   test("bad url is refused", () => {
     expect(() => new Recorder("ftp://x")).toThrow(/http/);
   });

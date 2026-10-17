@@ -256,7 +256,7 @@
         },
         "dialect": {
           "type": "string",
-          "enum": ["openai", "anthropic", "ollama", "gemini", "mcp", "a2a"]
+          "enum": ["openai", "anthropic", "ollama", "gemini", "systemone", "mcp", "a2a"]
         },
         "operation": {
           "type": "string",
@@ -520,6 +520,83 @@
         "agent_software": ["agent_source"],
         "agent_version": ["agent_software"],
         "tool_inventory_hash": ["tool_inventory_server"]
+      }
+    },
+    "sealedrun.decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["answers"],
+      "properties": {
+        "answers": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "type"],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "type": {
+                "type": "string",
+                "enum": ["predicate", "choice", "score"]
+              },
+              "value": {
+                "type": ["number", "string"],
+                "maxLength": 256
+              },
+              "confidence": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "probabilities": {
+                "type": "object",
+                "maxProperties": 256,
+                "propertyNames": {
+                  "maxLength": 256
+                },
+                "additionalProperties": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                }
+              },
+              "refused": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      }
+    },
+    "sealedrun.gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["outcome"],
+      "properties": {
+        "outcome": {
+          "type": "string",
+          "enum": ["approve", "block", "review"]
+        },
+        "thresholds": {
+          "type": "object",
+          "maxProperties": 256,
+          "propertyNames": {
+            "maxLength": 128
+          },
+          "additionalProperties": {
+            "type": "number"
+          }
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 1024
+        }
       }
     }
   }

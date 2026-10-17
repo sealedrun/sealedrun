@@ -1,3 +1,4 @@
+import { decisionAnswers, gateOutcome, isDecisionStep } from "./decision";
 import type { SealedRunRecord } from "@sealedrun/core";
 
 /** Runs per page in the recorder list. */
@@ -27,6 +28,8 @@ export function pageOf<T>(items: readonly T[], page: number, perPage: number): T
 export interface StepFilter {
   kind?: string;
   text?: string;
+  /** Only decision calls (SPEC 10.7) and the gates reported on them (SPEC 10.8). */
+  decisions?: boolean;
 }
 
 /** Steps matching `filter`, in their original order. */
@@ -35,6 +38,7 @@ export function filterSteps(records: readonly SealedRunRecord[], filter: StepFil
   const needle = filter.text?.trim().toLowerCase();
   return records.filter((record) => {
     if (kind && record.kind !== kind) return false;
+    if (filter.decisions && !isDecisionStep(record)) return false;
     if (!needle) return true;
     const haystack = [
       record.target.name,
@@ -42,6 +46,8 @@ export function filterSteps(records: readonly SealedRunRecord[], filter: StepFil
       record.kind,
       record.outcome,
       record.policy?.decision ?? "",
+      gateOutcome(record) ?? "",
+      decisionAnswers(record) ? "decision" : "",
       ...record.data_labels,
       String(record.seq),
     ]

@@ -50,7 +50,7 @@ from urllib.parse import urlsplit
 import yaml
 from pydantic import SecretStr
 
-DIALECTS = frozenset({"openai", "anthropic", "ollama", "gemini"})
+DIALECTS = frozenset({"openai", "anthropic", "ollama", "gemini", "systemone"})
 LOCATIONS = frozenset({"local", "cloud", "unknown"})
 CLIENT_AUTH = {"replace": False, "passthrough": True}
 AUTH_STYLES = frozenset({"bearer", "x-api-key", "x-goog-api-key", "api-key", "none"})
@@ -61,6 +61,7 @@ DEFAULT_AUTH = {
     "anthropic": "x-api-key",
     "ollama": "bearer",
     "gemini": "x-goog-api-key",
+    "systemone": "bearer",
 }
 CREDENTIAL_HEADERS = frozenset(
     {"authorization", "x-api-key", "x-goog-api-key", "api-key", "cookie", "proxy-authorization"}

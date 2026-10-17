@@ -1,12 +1,13 @@
 # Upstreams for the SealedRun LLM proxy. Copy to upstreams.yaml and keep what you use.
 #
 # url      Base URL the vendor's own SDK would use for that wire format.
-# dialect  Wire format: openai | anthropic | ollama | gemini. A client reaches an upstream only
-#          through the proxy path of the same format (/v1/chat/completions, /v1/messages, ...).
+# dialect  Wire format: openai | anthropic | ollama | gemini | systemone. A client reaches an
+#          upstream only through the proxy path of the same format (/v1/chat/completions,
+#          /v1/messages, /api/v1/systemone, ...).
 # key_env  Environment variable holding the upstream key. The client never sees it; it sends
 #          SEALEDRUN_API_TOKEN instead. An upstream whose variable is unset answers 503.
 # auth     How the key is sent: bearer | x-api-key | x-goog-api-key | api-key | none.
-#          Defaults: openai bearer, anthropic x-api-key, gemini x-goog-api-key.
+#          Defaults: openai bearer, anthropic x-api-key, gemini x-goog-api-key, systemone bearer.
 # client_auth  replace (default) | passthrough. With passthrough, a client that sends the
 #          recorder token in X-SealedRun-Token keeps its own Authorization / x-api-key for this
 #          upstream (Claude Code on a Pro/Max login); key_env, if set, is used otherwise.
@@ -171,6 +172,25 @@ upstreams:
     headers:
       HTTP-Referer: https://sealedrun.com
       X-Title: SealedRun
+
+  # Decision models (typed answers with probabilities, SystemOne wire format). Clients send
+  # /api/alpha/decisions, /api/v1/systemone or /providers/microsoft/v1/systemone to the
+  # recorder; it forwards to <url>/systemone. OpenAI's own gpt-6-luna goes through the openai
+  # upstream above (/v1/decisions).
+  - name: openrouter-decisions
+    url: https://openrouter.ai/api/v1
+    dialect: systemone
+    key_env: OPENROUTER_API_KEY
+    location: cloud
+    models: ["typesafe/*", "~typesafe/*"]
+  # Microsoft Foundry Decision-1; models are your deployment names.
+  - name: foundry-decisions
+    url: https://YOUR-RESOURCE.services.ai.azure.com/providers/microsoft/v1
+    dialect: systemone
+    key_env: AZURE_FOUNDRY_API_KEY
+    auth: api-key
+    location: cloud
+    models: ["decision-*"]
 
 # MCP servers reachable at /mcp/<name> (Streamable HTTP). url is the server's MCP endpoint;
 # key_env, auth (bearer | x-api-key | api-key | none), client_auth, headers and location work

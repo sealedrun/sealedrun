@@ -57,7 +57,33 @@ export interface StepOptions {
   extensions?: Record<string, unknown>;
   /** Actor of the step; required as `{type: "human"}` for `human_approval`. */
   actor?: { type: "agent" | "human" | "system"; id: string };
+  /**
+   * Record this step follows from (SPEC 5.1), for example the proxied call whose id came back
+   * in the `X-SealedRun-Record` reply header.
+   */
+  parentRecordId?: string;
 }
+
+/** Options of {@link Recorder.recordGate}. */
+export interface GateOptions {
+  /** `target.name` of the gate step; defaults to `gate`. */
+  name?: string;
+  /** Question names mapped to the figures the application compared against (SPEC 10.8). */
+  thresholds?: Record<string, number>;
+  /** Why the gate decided as it did. */
+  reason?: string;
+  /** Data labels the step carries. */
+  dataLabels?: string[];
+}
+
+/** What an application did with a decision-model verdict (SPEC 10.8). */
+export type GateOutcome = "approve" | "block" | "review";
+
+const GATE_OUTCOMES: Record<GateOutcome, string> = {
+  approve: "success",
+  block: "blocked",
+  review: "pending",
+};
 
 /** Options of {@link Recorder.record}: a finished step with its payloads and outcome. */
 export interface RecordOptions extends StepOptions {
@@ -132,6 +158,35 @@ export class Recorder {
       outcome: options.outcome ?? "success",
     });
     return this.post(body);
+  }
+
+  /**
+   * Record what the application did with a decision-model verdict (SPEC 10.8): a
+   * `policy_decision` step whose parent is the `llm_call` carrying the answers.
+   *
+   * @param decisionRecordId - The decision call's record id, from its `X-SealedRun-Record` reply header.
+   * @param outcome - `approve`, `block` or `review`; the step's own outcome follows it.
+   * @param options - Thresholds compared, reason, name and labels.
+   */
+  async recordGate(
+    decisionRecordId: string,
+    outcome: GateOutcome,
+    options: GateOptions = {},
+  ): Promise<Record<string, unknown>> {
+    const stepOutcome = GATE_OUTCOMES[outcome];
+    if (stepOutcome === undefined) throw new Error("outcome must be approve, block or review");
+    const gate: Record<string, unknown> = { outcome };
+    if (options.thresholds && Object.keys(options.thresholds).length > 0) {
+      gate["thresholds"] = { ...options.thresholds };
+    }
+    if (options.reason) gate["reason"] = options.reason;
+    const step: RecordOptions = {
+      outcome: stepOutcome,
+      extensions: { "sealedrun.gate": gate },
+      parentRecordId: decisionRecordId,
+    };
+    if (options.dataLabels) step.dataLabels = options.dataLabels;
+    return this.record("policy_decision", options.name ?? "gate", step);
   }
 
   /**
@@ -249,6 +304,7 @@ function stepBody(
     extensions: options.extensions ?? {},
   };
   if (options.actor) body["actor"] = options.actor;
+  if (options.parentRecordId) body["parent_record_id"] = options.parentRecordId;
   for (const [side, value] of [
     ["request", step.request],
     ["response", step.response],

@@ -149,6 +149,22 @@ EXAMPLE_ROUTES = [
         "authorization",
         "OPENROUTER_API_KEY",
     ),
+    (
+        "systemone",
+        "typesafe/jev-1.13",
+        "openrouter-decisions",
+        "https://openrouter.ai/api/v1",
+        "authorization",
+        "OPENROUTER_API_KEY",
+    ),
+    (
+        "systemone",
+        "decision-1",
+        "foundry-decisions",
+        "https://YOUR-RESOURCE.services.ai.azure.com/providers/microsoft/v1",
+        "api-key",
+        "AZURE_FOUNDRY_API_KEY",
+    ),
 ]
 
 
@@ -260,6 +276,7 @@ def test_key_style_follows_dialect(tmp_path: Path) -> None:
         "  - {name: g, url: http://g, dialect: gemini, key_env: K}\n"
         "  - {name: o, url: http://o, dialect: openai, key_env: K}\n"
         "  - {name: n, url: http://n, dialect: openai, key_env: K, auth: none}\n"
+        "  - {name: s, url: http://s, dialect: systemone, key_env: K}\n"
     )
     auth = {u.name: u.request_headers() for u in load_upstreams(path, environ={"K": "v"})}
     assert auth == {
@@ -267,4 +284,5 @@ def test_key_style_follows_dialect(tmp_path: Path) -> None:
         "g": {"x-goog-api-key": "v"},
         "o": {"authorization": "Bearer v"},
         "n": {},
+        "s": {"authorization": "Bearer v"},
     }

@@ -675,6 +675,80 @@ def second_run(
     return writer.records
 
 
+DECISION_RUN_ID = "0192b3c4-5d6e-7f80-9a1b-000000000d0c"
+
+
+def decision_run(agent: PrivateKeySet, delegation: dict[str, Any]) -> list[dict[str, Any]]:
+    """Write a run with a decision call, the gate step on it and the tool call it refused.
+
+    Covers `sealedrun.decision` and `sealedrun.gate` (SPEC 10.7, 10.8) with record ids of its
+    own; the decision call carries no payload references, as an export without bodies would.
+    """
+    ids = Ids(start=0x200)
+    writer = RunWriter(agent, delegation, run_id=DECISION_RUN_ID, clock=Clock(), id_factory=ids)
+    writer.start()
+    decision = writer.append(
+        "llm_call",
+        target={
+            "type": "model",
+            "name": "typesafe/jev-1.13",
+            "endpoint": "https://openrouter.ai/api/v1/systemone",
+            "location": "cloud",
+            "provider": "openrouter",
+        },
+        extensions={
+            "sealedrun.llm": {
+                "model": "typesafe/jev-1.13-20260917",
+                "provider": "openrouter",
+                "stream": False,
+                "input_tokens": 383,
+                "output_tokens": 36,
+            },
+            "sealedrun.proxy": {
+                "upstream": "openrouter",
+                "dialect": "systemone",
+                "operation": "decisions",
+                "status": 200,
+                "latency_ms": 316.2,
+            },
+            "sealedrun.decision": {
+                "answers": [
+                    {"name": "touches_prod", "type": "predicate", "value": 0.97},
+                    {
+                        "name": "severity",
+                        "type": "score",
+                        "value": 2,
+                        "confidence": 1,
+                        "probabilities": {"harmless": 0, "recoverable": 0, "destructive": 1},
+                    },
+                ]
+            },
+        },
+    )
+    writer.append(
+        "policy_decision",
+        target={"type": "none", "name": "shell-gate", "location": "local"},
+        outcome="blocked",
+        parent_record_id=decision["record_id"],
+        extensions={
+            "sealedrun.step": {"source": "self_reported", "via": "sealedrun-py"},
+            "sealedrun.gate": {
+                "outcome": "block",
+                "thresholds": {"touches_prod": 0.5},
+                "reason": "touches_prod 0.97 above 0.5",
+            },
+        },
+    )
+    writer.append(
+        "tool_call",
+        target={"type": "tool", "name": "shell", "location": "local"},
+        outcome="blocked",
+        extensions={"sealedrun.step": {"source": "self_reported", "via": "sealedrun-py"}},
+    )
+    writer.end()
+    return writer.records
+
+
 def poison_payload_name(data: bytes, exporter: PrivateKeySet, principal: PrivateKeySet) -> bytes:
     """Rename a payload entry to a digest it does not have, then re-seal the manifest."""
     with zipfile.ZipFile(io.BytesIO(data)) as src:
@@ -931,6 +1005,8 @@ def generate(spec_dir: Path) -> None:
     (vectors / "records" / "valid-run.jsonl").write_text(jsonl(run.records))
     context_run = second_run(agent, delegation, reuse_ids=False)
     (vectors / "records" / "context-run.jsonl").write_text(jsonl(context_run))
+    decisions = decision_run(agent, delegation)
+    (vectors / "records" / "decision-run.jsonl").write_text(jsonl(decisions))
     dump(
         vectors / "records" / "expected.json",
         {
@@ -941,6 +1017,7 @@ def generate(spec_dir: Path) -> None:
             for name, records in (
                 ("valid-run.jsonl", run.records),
                 ("context-run.jsonl", context_run),
+                ("decision-run.jsonl", decisions),
             )
         },
     )
@@ -1007,6 +1084,11 @@ def generate(spec_dir: Path) -> None:
         agent, principal, delegation, run.records, with_payloads=False, payloads_omitted=True
     )
     (bundle_dir / "payloads-omitted.zip").write_bytes(omitted)
+    (bundle_dir / "decision-omitted.zip").write_bytes(
+        bundle_bytes(
+            agent, principal, delegation, decisions, with_payloads=False, payloads_omitted=True
+        )
+    )
     (bundle_dir / "payloads-omitted-with-bodies.zip").write_bytes(
         add_payload_entry(omitted, agent, principal, payload_path, original_payload)
     )
@@ -1072,6 +1154,13 @@ def generate(spec_dir: Path) -> None:
                 "payloads_omitted": True,
             },
             "payloads-omitted-with-bodies.zip": {"ok": False, "check": "bundle"},
+            "decision-omitted.zip": {
+                "ok": True,
+                "runs": 1,
+                "records": 5,
+                "complete": True,
+                "payloads_omitted": True,
+            },
             "duplicate-record-id-across-runs.zip": {"ok": False, "check": "record_id", "seq": 0},
         },
     )

@@ -218,3 +218,32 @@ def test_redirects_are_never_followed(fake: FakeRecorder, recorder: Recorder) ->
         server.shutdown()
         server.server_close()
     assert fake.posts == []
+
+
+def test_record_gate_links_the_decision(fake: FakeRecorder, recorder: Recorder) -> None:
+    record = recorder.record_gate(
+        "0192b3c4-5d6e-7f80-9a1b-000000000201",
+        "block",
+        thresholds={"touches_prod": 0.5},
+        reason="touches_prod 0.97 above 0.5",
+    )
+    assert record == {"record_id": "r-1", "seq": 1}
+    [(_, body)] = fake.posts
+    assert body == {
+        "kind": "policy_decision",
+        "target": {"type": "none", "name": "gate", "location": "local"},
+        "outcome": "blocked",
+        "data_labels": [],
+        "extensions": {
+            "sealedrun.gate": {
+                "outcome": "block",
+                "thresholds": {"touches_prod": 0.5},
+                "reason": "touches_prod 0.97 above 0.5",
+            }
+        },
+        "parent_record_id": "0192b3c4-5d6e-7f80-9a1b-000000000201",
+    }
+    recorder.record_gate("0192b3c4-5d6e-7f80-9a1b-000000000201", "review")
+    assert fake.posts[1][1]["outcome"] == "pending"
+    with pytest.raises(ValueError, match="approve, block, review"):
+        recorder.record_gate("0192b3c4-5d6e-7f80-9a1b-000000000201", "maybe")

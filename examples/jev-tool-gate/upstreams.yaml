@@ -1,0 +1,7 @@
+upstreams:
+  - name: openrouter-decisions
+    url: https://openrouter.ai/api/v1
+    dialect: systemone
+    key_env: OPENROUTER_API_KEY
+    location: cloud
+    models: ["typesafe/*", "~typesafe/*"]

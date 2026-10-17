@@ -44,6 +44,8 @@ TARGET_TYPES = {
     "note": "none",
 }
 
+GATE_OUTCOMES = {"approve": "success", "block": "blocked", "review": "pending"}
+
 P = ParamSpec("P")
 R = TypeVar("R")
 
@@ -138,6 +140,7 @@ class Step:
     data_labels: list[str] = field(default_factory=list)
     extensions: dict[str, Any] = field(default_factory=dict)
     actor: dict[str, str] | None = None
+    parent_record_id: str | None = None
     record: dict[str, Any] | None = None
 
     def body(self) -> dict[str, Any]:
@@ -151,6 +154,8 @@ class Step:
         }
         if self.actor is not None:
             body["actor"] = self.actor
+        if self.parent_record_id is not None:
+            body["parent_record_id"] = self.parent_record_id
         for side, value in (("request", self.request), ("response", self.response)):
             text = _text(value)
             if text is not None:
@@ -198,8 +203,13 @@ class Recorder:
         data_labels: list[str] | None = None,
         extensions: dict[str, Any] | None = None,
         actor: dict[str, str] | None = None,
+        parent_record_id: str | None = None,
     ) -> dict[str, Any]:
-        """Post one finished step and return the signed record."""
+        """Post one finished step and return the signed record.
+
+        `parent_record_id` names the record this step follows from (SPEC 5.1), for example the
+        proxied call whose id came back in the `X-SealedRun-Record` reply header.
+        """
         step = Step(
             kind,
             self._target(kind, name, provider, location, endpoint, target_type),
@@ -209,8 +219,42 @@ class Recorder:
             data_labels=list(data_labels or []),
             extensions=dict(extensions or {}),
             actor=actor,
+            parent_record_id=parent_record_id,
         )
         return self.post(step)
+
+    def record_gate(
+        self,
+        decision_record_id: str,
+        outcome: str,
+        *,
+        name: str = "gate",
+        thresholds: dict[str, float] | None = None,
+        reason: str | None = None,
+        data_labels: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Record what the application did with a decision-model verdict (SPEC 10.8).
+
+        `decision_record_id` is the `llm_call` that carries the answers (the proxy returns it
+        in the `X-SealedRun-Record` header of the decision reply). `outcome` is `approve`,
+        `block` or `review`; the step's own outcome follows it (`success`, `blocked`,
+        `pending`). `thresholds` maps question names to the figures compared, `reason` says why.
+        """
+        if outcome not in GATE_OUTCOMES:
+            raise ValueError(f"outcome must be one of {', '.join(sorted(GATE_OUTCOMES))}")
+        gate: dict[str, Any] = {"outcome": outcome}
+        if thresholds:
+            gate["thresholds"] = dict(thresholds)
+        if reason:
+            gate["reason"] = reason
+        return self.record(
+            "policy_decision",
+            name,
+            outcome=GATE_OUTCOMES[outcome],
+            data_labels=data_labels,
+            extensions={"sealedrun.gate": gate},
+            parent_record_id=decision_record_id,
+        )
 
     def step(
         self,

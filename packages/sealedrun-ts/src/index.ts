@@ -28,6 +28,8 @@ export { VerificationError } from "./errors.js";
 export {
   Recorder,
   RecorderError,
+  type GateOptions,
+  type GateOutcome,
   type RecorderOptions,
   type RecordOptions,
   type Step,

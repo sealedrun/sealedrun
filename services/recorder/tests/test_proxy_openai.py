@@ -82,6 +82,34 @@ RESPONSES_REPLY = {
     ],
     "usage": {"input_tokens": 30, "output_tokens": 9, "total_tokens": 39},
 }
+DECISIONS_REPLY = {
+    "answers": [
+        {"type": "predicate", "name": "touches_prod", "probability": 0.93},
+        {
+            "type": "choice",
+            "name": "team",
+            "choice": "engineering",
+            "probabilities": [
+                {"value": "billing", "probability": 0.05},
+                {"value": "engineering", "probability": 0.95},
+            ],
+            "confidence": 0.9,
+        },
+    ]
+}
+DECISIONS_BODY = {
+    "model": "gpt-6-luna",
+    "input": "rm -rf /var/lib/postgres on prod-db-1",
+    "questions": [
+        {"type": "predicate", "name": "touches_prod", "instructions": "Touches production?"},
+        {
+            "type": "choice",
+            "name": "team",
+            "instructions": "Which team?",
+            "choices": [{"value": "billing"}, {"value": "engineering"}],
+        },
+    ],
+}
 EMBEDDINGS_REPLY = {
     "object": "list",
     "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
@@ -103,6 +131,7 @@ def proxy(make_proxy: Callable[..., TestClient], upstream: Any) -> Iterator[Test
             "/chat/completions": CHAT_REPLY,
             "/responses": RESPONSES_REPLY,
             "/embeddings": EMBEDDINGS_REPLY,
+            "/decisions": DECISIONS_REPLY,
             "/models": _models,
         }
     )
@@ -230,6 +259,115 @@ def test_embeddings_recorded_with_usage(
     assert llm["input_tokens"] == 5
     assert "output_tokens" not in llm
     assert "finish_reason" not in llm
+
+
+def test_decisions_forwarded_unchanged_and_recorded(
+    proxy: TestClient, upstream: Any, auth: dict[str, str], proxy_records: Any
+) -> None:
+    response = proxy.post("/v1/decisions", json=DECISIONS_BODY, headers=auth)
+    assert response.status_code == 200
+    assert response.json() == DECISIONS_REPLY
+    sent = upstream.calls[0]
+    assert str(sent.url) == "https://cloud.example/v1/decisions"
+    assert json.loads(sent.content) == DECISIONS_BODY
+    call = proxy_records(proxy)[1]
+    assert call["kind"] == "llm_call"
+    assert call["outcome"] == "success"
+    assert call["target"]["endpoint"] == "https://cloud.example/v1/decisions"
+    assert call["extensions"]["sealedrun.llm"] == {
+        "model": "gpt-6-luna",
+        "provider": "cloudai",
+        "stream": False,
+    }
+    assert call["extensions"]["sealedrun.proxy"]["operation"] == "decisions"
+    assert validate_extensions(call["extensions"]) == []
+    stored = proxy.get(f"/api/records/{call['record_id']}/payload/response", headers=auth)
+    assert json.loads(stored.content) == DECISIONS_REPLY
+
+
+def test_decisions_answers_are_extracted_and_the_record_id_returned(
+    proxy: TestClient, upstream: Any, auth: dict[str, str], proxy_records: Any
+) -> None:
+    response = proxy.post("/v1/decisions", json=DECISIONS_BODY, headers=auth)
+    call = proxy_records(proxy)[1]
+    assert response.headers["x-sealedrun-record"] == call["record_id"]
+    assert call["extensions"]["sealedrun.decision"] == {
+        "answers": [
+            {"name": "touches_prod", "type": "predicate", "value": 0.93},
+            {
+                "name": "team",
+                "type": "choice",
+                "value": "engineering",
+                "confidence": 0.9,
+                "probabilities": {"billing": 0.05, "engineering": 0.95},
+            },
+        ]
+    }
+    assert validate_extensions(call["extensions"]) == []
+
+
+def test_decisions_refusal_keeps_the_question_type_and_errors_carry_no_answers(
+    proxy: TestClient, upstream: Any, auth: dict[str, str], proxy_records: Any
+) -> None:
+    upstream.routes["/decisions"] = {
+        "answers": [
+            {"type": "refusal", "name": "team", "refusal": "unsafe"},
+            {"type": "score", "name": "severity", "score": 3, "confidence": 0.8},
+            {"type": "mystery", "name": "x"},
+        ]
+    }
+    proxy.post("/v1/decisions", json=DECISIONS_BODY, headers=auth)
+    assert proxy_records(proxy)[1]["extensions"]["sealedrun.decision"]["answers"] == [
+        {"name": "team", "type": "choice", "refused": True},
+        {"name": "severity", "type": "score", "value": 3, "confidence": 0.8},
+    ]
+    upstream.routes["/decisions"] = {"error": {"message": "overloaded"}}
+    upstream.fail = "500"
+    proxy.post("/v1/decisions", json=DECISIONS_BODY, headers=auth)
+    assert "sealedrun.decision" not in proxy_records(proxy)[2]["extensions"]
+
+
+def test_decisions_usage_and_refusal_when_present(
+    proxy: TestClient, upstream: Any, auth: dict[str, str], proxy_records: Any
+) -> None:
+    upstream.routes["/decisions"] = {
+        "model": "gpt-6-luna-2026-09-22",
+        "answers": [{"type": "refusal", "name": "touches_prod", "refusal": "unsafe"}],
+        "usage": {"input_tokens": 77, "output_tokens": 0},
+    }
+    response = proxy.post("/v1/decisions", json=DECISIONS_BODY, headers=auth)
+    assert response.status_code == 200
+    llm = proxy_records(proxy)[1]["extensions"]["sealedrun.llm"]
+    assert llm["model"] == "gpt-6-luna-2026-09-22"
+    assert llm["input_tokens"] == 77
+    assert llm["output_tokens"] == 0
+    assert llm["finish_reason"] == "refusal"
+
+
+def test_decisions_never_stream(proxy: TestClient, auth: dict[str, str]) -> None:
+    response = proxy.post("/v1/decisions", json={**DECISIONS_BODY, "stream": True}, headers=auth)
+    assert response.status_code == 400
+    assert "streaming is not supported" in response.json()["error"]["message"]
+
+
+def test_decisions_upstream_error_and_unknown_model(
+    proxy: TestClient, upstream: Any, auth: dict[str, str], proxy_records: Any
+) -> None:
+    upstream.fail = "503"
+    response = proxy.post("/v1/decisions", json=DECISIONS_BODY, headers=auth)
+    assert response.status_code == 503
+    call = proxy_records(proxy)[1]
+    assert call["outcome"] == "error"
+    assert call["extensions"]["sealedrun.proxy"] | {"latency_ms": 0} == {
+        "upstream": "cloudai",
+        "dialect": "openai",
+        "operation": "decisions",
+        "status": 503,
+        "latency_ms": 0,
+    }
+    upstream.fail = None
+    body = {**DECISIONS_BODY, "model": "luna-unknown"}
+    assert proxy.post("/v1/decisions", json=body, headers=auth).status_code == 404
 
 
 def test_upstream_error_passed_through_and_recorded(

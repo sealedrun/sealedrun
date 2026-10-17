@@ -197,6 +197,48 @@ def test_export_without_payloads(
     assert proxy.post(f"/api/runs/{run_id}/export?payloads=all", headers=auth).status_code == 422
 
 
+def test_export_without_payloads_keeps_the_decision_and_its_gate(
+    make_proxy: Callable[..., TestClient], upstream: Any, auth: dict[str, str]
+) -> None:
+    upstream.routes["/decisions"] = {
+        "answers": [{"type": "predicate", "name": "touches_prod", "probability": 0.93}]
+    }
+    body = {
+        "model": "gpt-4.1",
+        "input": "rm -rf /",
+        "questions": [{"type": "predicate", "name": "touches_prod", "instructions": "?"}],
+    }
+    with make_proxy(UPSTREAMS) as proxy:
+        decision = proxy.post("/v1/decisions", json=body, headers=auth)
+        decision_id = decision.headers["x-sealedrun-record"]
+        gate = proxy.post(
+            "/api/steps",
+            json={
+                "kind": "policy_decision",
+                "target": {"type": "none", "name": "shell-gate", "location": "local"},
+                "outcome": "blocked",
+                "parent_record_id": decision_id,
+                "extensions": {
+                    "sealedrun.gate": {"outcome": "block", "thresholds": {"touches_prod": 0.5}}
+                },
+            },
+            headers=auth,
+        )
+        assert gate.status_code == 201, gate.text
+        run_id = proxy.get("/api/runs", headers=auth).json()[0]["run_id"]
+        exported = proxy.post(
+            f"/api/runs/{run_id}/export?payloads=omit&end=true", headers=auth
+        ).content
+        report = verify_bundle(read_bundle(exported), [_principal(proxy, auth)])
+    assert report.payloads_omitted is True
+    [records] = read_bundle(exported).runs.values()
+    call, step = records[1], records[2]
+    assert call["extensions"]["sealedrun.decision"]["answers"][0]["value"] == 0.93
+    assert step["parent_record_id"] == call["record_id"]
+    assert step["extensions"]["sealedrun.gate"]["outcome"] == "block"
+    assert step["extensions"]["sealedrun.step"]["source"] == "self_reported"
+
+
 def test_run_summary_reports_payload_bytes_and_export_streams(
     make_proxy: Callable[..., TestClient], upstream: Any, auth: dict[str, str]
 ) -> None:
