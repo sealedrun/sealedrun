@@ -5,6 +5,12 @@ follows Semantic Versioning once 1.0.0 is reached.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-18
+
+Decision models: the recorder proxies and records OpenAI Decisions and TypeSafe `systemone`
+calls (OpenRouter Jev, Microsoft Foundry Decision-1), extracts the verdict into the record,
+the SDKs report the gate that acted on it, and the Inspector shows both.
+
 ### Added
 
 - Recorder proxy: `POST /v1/decisions` (OpenAI Decisions API, model `gpt-6-luna`) is forwarded
