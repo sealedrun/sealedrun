@@ -24,7 +24,7 @@ COPY services/recorder services/recorder
 COPY spec/schema spec/schema
 RUN uv sync --frozen --no-dev --all-packages
 
-FROM python:3.12-slim-bookworm@sha256:392307d22300de8b5986851a12d9176dfc0fc073e65bf6523ebd7dcbeb23564e
+FROM python:3.12-slim-bookworm@sha256:54c85f3c47607a77f32adec749d3c81d1348bf25833671f512b26a9b6d778cb3
 WORKDIR /app
 ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1 \
     SEALEDRUN_DATA_DIR=/data SEALEDRUN_UI_DIR=/app/ui SEALEDRUN_HOST=0.0.0.0 SEALEDRUN_PORT=8080 \
