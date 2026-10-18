@@ -182,8 +182,8 @@ upstreams:
     dialect: systemone
     key_env: OPENROUTER_API_KEY
     location: cloud
-    models: ["typesafe/*", "~typesafe/*"]
-  # Microsoft Foundry Decision-1; models are your deployment names.
+    models: ["typesafe/*", "~typesafe/*", "microsoft/microsoft-decision-1"]
+  # Microsoft Decision-1 straight from Foundry; models are your deployment names.
   - name: foundry-decisions
     url: https://YOUR-RESOURCE.services.ai.azure.com/providers/microsoft/v1
     dialect: systemone

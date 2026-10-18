@@ -5,9 +5,11 @@ call, memory access, policy decision, human approval — becomes a signed record
 hash chain. Records are exported as an evidence bundle that anyone can verify offline, without
 trusting the operator.
 
-Status: early development. 0.5.0 records every channel of an agent: LLM proxy (OpenAI, Anthropic,
-Ollama and Gemini wire formats), MCP servers (HTTP proxy and stdio wrapper), A2A agents, self-reported
-steps from the SDKs and OpenTelemetry GenAI spans. Run heads are anchored by default in Sigstore's
+Status: early development. 0.6.0 records every channel of an agent: LLM proxy (OpenAI, Anthropic,
+Ollama and Gemini wire formats), decision models (OpenAI Decisions, OpenRouter Jev and Microsoft
+Decision-1 in the `systemone` format, with the verdict and the gate that acted on it in the record),
+MCP servers (HTTP proxy and stdio wrapper), A2A agents, self-reported steps from the SDKs and
+OpenTelemetry GenAI spans. Run heads are anchored by default in Sigstore's
 time-stamp authority (DigiCert as fallback, Rekor on request) and both verifiers check the receipts
 offline. Big runs export without payload bodies and stream to disk; the Inspector pages and
 searches runs and steps.
@@ -91,7 +93,7 @@ print(report.complete, report.labels_sent_to_cloud)
 ```bash
 pip install sealedrun              # Python library: write, read and verify records and bundles
 npm install @sealedrun/core        # TypeScript verifier, runs in Node.js and in the browser
-docker run --rm -p 127.0.0.1:8080:8080 ghcr.io/sealedrun/sealedrun:0.5.0   # recorder + Inspector
+docker run --rm -p 127.0.0.1:8080:8080 ghcr.io/sealedrun/sealedrun:0.6.0   # recorder + Inspector
 ```
 
 Releases are published from GitHub Actions through PyPI and npm trusted publishing; both registries
@@ -241,7 +243,7 @@ upstreams:
 
 ```bash
 curl -s -X POST http://127.0.0.1:8080/api/v1/systemone -H "Authorization: Bearer change-me" \
-  -H "Content-Type: application/json" -d '{"model": "typesafe/jev-1.13",
+  -H "Content-Type: application/json" -d '{"model": "typesafe/jev-1.14",
   "state": {"tool": "shell", "command": "rm -rf /var/lib/postgres", "host": "prod-db-1"},
   "questions": {"touches_prod": {"type": "noul", "instructions": "Touches production data?",
   "criteria": {"true": "destroys or alters production data", "false": "otherwise"}}}}'
@@ -266,7 +268,7 @@ recorder = Recorder("http://127.0.0.1:8080", token="change-me", run="deploy-42")
 reply = httpx.post(
     "http://127.0.0.1:8080/api/v1/systemone",
     headers={"Authorization": "Bearer change-me", "X-SealedRun-Run": "deploy-42"},
-    json={"model": "typesafe/jev-1.13", "state": state, "questions": questions},
+    json={"model": "typesafe/jev-1.14", "state": state, "questions": questions},
 )
 touches_prod = reply.json()["answers"]["touches_prod"]["noul"]
 verdict = "block" if touches_prod > 0.5 else "approve"

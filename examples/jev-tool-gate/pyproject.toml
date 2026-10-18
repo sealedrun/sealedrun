@@ -11,5 +11,3 @@ dev = ["pytest>=8.3"]
 [tool.uv]
 package = false
 
-[tool.uv.sources]
-sealedrun = { path = "../../packages/sealedrun-py", editable = true }
