@@ -5,6 +5,14 @@ follows Semantic Versioning once 1.0.0 is reached.
 
 ## [Unreleased]
 
+### Added
+
+- OTLP receiver: OpenRouter Broadcast traces are recorded in full. Payloads fall back to
+  `gen_ai.prompt` / `gen_ai.completion` and `span.input` / `span.output`, the string
+  `gen_ai.response.finish_reason` is read when the array is absent, `decisions` spans become
+  `llm_call` records with `sealedrun.decision` built from the completion, and `openrouter` and
+  `typesafe` count as cloud providers. README has the Broadcast setup.
+
 ## [0.6.0] - 2026-10-18
 
 Decision models: the recorder proxies and records OpenAI Decisions and TypeSafe `systemone`

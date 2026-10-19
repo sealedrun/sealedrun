@@ -1,0 +1,295 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "openrouter"
+            }
+          },
+          {
+            "key": "openrouter.trace.id",
+            "value": {
+              "stringValue": "gen-dec-1792403140-OtwvKRYHsUMCq4Zr3xvA"
+            }
+          },
+          {
+            "key": "service.version",
+            "value": {
+              "stringValue": "1.0.0"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "openrouter"
+          },
+          "spans": [
+            {
+              "traceId": "6c329748dd5f3829afe6382338ddb299",
+              "spanId": "6c329748dd5f3829",
+              "name": "LLM Generation",
+              "kind": 3,
+              "startTimeUnixNano": "1792403140185000000",
+              "endTimeUnixNano": "1792403140645000000",
+              "status": {
+                "code": 1
+              },
+              "attributes": [
+                {
+                  "key": "trace.name",
+                  "value": {
+                    "stringValue": "OpenRouter Request"
+                  }
+                },
+                {
+                  "key": "trace.metadata.provider_responses",
+                  "value": {
+                    "stringValue": "[{\"provider_name\":\"TypeSafe\",\"status\":200,\"latency\":217,\"is_byok\":false,\"endpoint_id\":\"9fa158c1-f2e9-441a-8e03-d5dab0afdc8c\",\"model_permaslug\":\"typesafe/jev-1.14-20261014\"}]"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "generation"
+                  }
+                },
+                {
+                  "key": "span.level",
+                  "value": {
+                    "stringValue": "DEFAULT"
+                  }
+                },
+                {
+                  "key": "span.metadata.provider_responses",
+                  "value": {
+                    "stringValue": "[{\"provider_name\":\"TypeSafe\",\"status\":200,\"latency\":217,\"is_byok\":false,\"endpoint_id\":\"9fa158c1-f2e9-441a-8e03-d5dab0afdc8c\",\"model_permaslug\":\"typesafe/jev-1.14-20261014\"}]"
+                  }
+                },
+                {
+                  "key": "span.input",
+                  "value": {
+                    "stringValue": "{\"prompt\":\"{\\n  \\\"state\\\": {\\n    \\\"tool\\\": \\\"shell\\\",\\n    \\\"command\\\": \\\"cat /etc/hostname\\\",\\n    \\\"host\\\": \\\"db-prod-1\\\"\\n  },\\n  \\\"questions\\\": {\\n    \\\"touches_prod\\\": {\\n      \\\"type\\\": \\\"noul\\\",\\n      \\\"instructions\\\": \\\"Does the command alter or destroy production data?\\\",\\n      \\\"criteria\\\": {\\n        \\\"true\\\": \\\"writes to or deletes production data\\\",\\n        \\\"false\\\": \\\"reads only\\\"\\n      }\\n    }\\n  }\\n}\"}"
+                  }
+                },
+                {
+                  "key": "span.output",
+                  "value": {
+                    "stringValue": "{\"completion\":\"{\\n  \\\"touches_prod\\\": {\\n    \\\"type\\\": \\\"noul\\\",\\n    \\\"noul\\\": 0.02\\n  }\\n}\",\"reasoning\":null,\"rawRequest\":{\"model\":\"typesafe/jev-1.14\",\"state\":{\"tool\":\"shell\",\"command\":\"cat /etc/hostname\",\"host\":\"db-prod-1\"},\"questions\":{\"touches_prod\":{\"type\":\"noul\",\"instructions\":\"Does the command alter or destroy production data?\",\"criteria\":{\"true\":\"writes to or deletes production data\",\"false\":\"reads only\"}}}}}"
+                  }
+                },
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "decisions"
+                  }
+                },
+                {
+                  "key": "gen_ai.system",
+                  "value": {
+                    "stringValue": "typesafe"
+                  }
+                },
+                {
+                  "key": "gen_ai.provider.name",
+                  "value": {
+                    "stringValue": "typesafe"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "typesafe/jev-1.14-20261014"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.model",
+                  "value": {
+                    "stringValue": "typesafe/jev-1.14-20261014"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.id",
+                  "value": {
+                    "stringValue": "gen-dec-1792403140-OtwvKRYHsUMCq4Zr3xvA"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.input_tokens",
+                  "value": {
+                    "intValue": 330
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.output_tokens",
+                  "value": {
+                    "intValue": 23
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.total_tokens",
+                  "value": {
+                    "intValue": 353
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.input_cost",
+                  "value": {
+                    "doubleValue": 1.386e-5
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.output_cost",
+                  "value": {
+                    "doubleValue": 0
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.total_cost",
+                  "value": {
+                    "doubleValue": 1.386e-5
+                  }
+                },
+                {
+                  "key": "gen_ai.prompt",
+                  "value": {
+                    "stringValue": "{\"prompt\":\"{\\n  \\\"state\\\": {\\n    \\\"tool\\\": \\\"shell\\\",\\n    \\\"command\\\": \\\"cat /etc/hostname\\\",\\n    \\\"host\\\": \\\"db-prod-1\\\"\\n  },\\n  \\\"questions\\\": {\\n    \\\"touches_prod\\\": {\\n      \\\"type\\\": \\\"noul\\\",\\n      \\\"instructions\\\": \\\"Does the command alter or destroy production data?\\\",\\n      \\\"criteria\\\": {\\n        \\\"true\\\": \\\"writes to or deletes production data\\\",\\n        \\\"false\\\": \\\"reads only\\\"\\n      }\\n    }\\n  }\\n}\"}"
+                  }
+                },
+                {
+                  "key": "gen_ai.completion",
+                  "value": {
+                    "stringValue": "{\"completion\":\"{\\n  \\\"touches_prod\\\": {\\n    \\\"type\\\": \\\"noul\\\",\\n    \\\"noul\\\": 0.02\\n  }\\n}\",\"reasoning\":null,\"rawRequest\":{\"model\":\"typesafe/jev-1.14\",\"state\":{\"tool\":\"shell\",\"command\":\"cat /etc/hostname\",\"host\":\"db-prod-1\"},\"questions\":{\"touches_prod\":{\"type\":\"noul\",\"instructions\":\"Does the command alter or destroy production data?\",\"criteria\":{\"true\":\"writes to or deletes production data\",\"false\":\"reads only\"}}}}}"
+                  }
+                },
+                {
+                  "key": "trace.metadata.openrouter.source",
+                  "value": {
+                    "stringValue": "openrouter"
+                  }
+                },
+                {
+                  "key": "trace.metadata.openrouter.provider_name",
+                  "value": {
+                    "stringValue": "TypeSafe"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "openrouter"
+            }
+          },
+          {
+            "key": "openrouter.trace.id",
+            "value": {
+              "stringValue": "gen-dec-1792403140-OtwvKRYHsUMCq4Zr3xvA"
+            }
+          },
+          {
+            "key": "service.version",
+            "value": {
+              "stringValue": "1.0.0"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "openrouter"
+          },
+          "spans": [
+            {
+              "traceId": "6c329748dd5f3829afe6382338ddb299",
+              "spanId": "d4628fa8ad18f72d",
+              "parentSpanId": "6c329748dd5f3829",
+              "name": "provider attempt 1: TypeSafe",
+              "kind": 2,
+              "startTimeUnixNano": "1792403140185000000",
+              "endTimeUnixNano": "1792403140402000000",
+              "status": {
+                "code": 1
+              },
+              "attributes": [
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "span"
+                  }
+                },
+                {
+                  "key": "span.level",
+                  "value": {
+                    "stringValue": "DEFAULT"
+                  }
+                },
+                {
+                  "key": "span.metadata.attempt_index",
+                  "value": {
+                    "intValue": 0
+                  }
+                },
+                {
+                  "key": "span.metadata.status_code",
+                  "value": {
+                    "intValue": 200
+                  }
+                },
+                {
+                  "key": "span.metadata.is_byok",
+                  "value": {
+                    "boolValue": false
+                  }
+                },
+                {
+                  "key": "span.metadata.endpoint_id",
+                  "value": {
+                    "stringValue": "9fa158c1-f2e9-441a-8e03-d5dab0afdc8c"
+                  }
+                },
+                {
+                  "key": "span.metadata.model_permaslug",
+                  "value": {
+                    "stringValue": "typesafe/jev-1.14-20261014"
+                  }
+                },
+                {
+                  "key": "gen_ai.provider.name",
+                  "value": {
+                    "stringValue": "typesafe"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.id",
+                  "value": {
+                    "stringValue": "gen-dec-1792403140-OtwvKRYHsUMCq4Zr3xvA:attempt-0"
+                  }
+                },
+                {
+                  "key": "trace.metadata.openrouter.provider_name",
+                  "value": {
+                    "stringValue": "TypeSafe"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

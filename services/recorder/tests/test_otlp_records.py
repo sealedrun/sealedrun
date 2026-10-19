@@ -1,5 +1,6 @@
 import json
 from collections.abc import Callable, Iterator
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -281,7 +282,13 @@ def test_a_span_that_would_not_verify_is_reported_as_partial_success(
 
 @pytest.mark.parametrize(
     ("provider", "location"),
-    [("openai", "cloud"), ("ollama", "local"), ("langchain", "unknown"), (None, "unknown")],
+    [
+        ("openai", "cloud"),
+        ("openrouter", "cloud"),
+        ("ollama", "local"),
+        ("langchain", "unknown"),
+        (None, "unknown"),
+    ],
 )
 def test_model_location_follows_the_provider(
     client: TestClient, auth: dict[str, str], provider: str | None, location: str
@@ -350,3 +357,126 @@ def test_conversation_id_is_inherited_from_parent_spans(
     assert tool["extensions"]["sealedrun.otel"]["conversation"] == "thread-7"
     [chat] = runs[f"otel:{TRACE_B}"][1:]
     assert "conversation" not in chat["extensions"]["sealedrun.otel"]
+
+
+OPENROUTER_PROMPT = json.dumps([{"role": "user", "content": "Approve the refund?"}])
+OPENROUTER_COMPLETION = json.dumps([{"role": "assistant", "content": "No"}])
+
+
+def _openrouter_span(**extra: Any) -> dict[str, Any]:
+    """The generation span OpenRouter Broadcast sends to an OpenTelemetry Collector."""
+    attributes = {
+        "gen_ai.operation.name": "chat",
+        "gen_ai.system": "openrouter",
+        "gen_ai.provider.name": "openrouter",
+        "gen_ai.request.model": "openrouter/jev-1.14",
+        "gen_ai.response.model": "openrouter/jev-1.14",
+        "gen_ai.usage.input_tokens": 40,
+        "gen_ai.usage.output_tokens": 1,
+        "gen_ai.usage.total_tokens": 41,
+        "gen_ai.usage.total_cost": 0.00012,
+        "gen_ai.response.finish_reason": "stop",
+        "trace.metadata.openrouter.generation_id": "gen-1",
+        **extra,
+    }
+    return {"name": "LLM Generation", "attributes": attributes}
+
+
+def _send_json(client: TestClient, spans: list[dict[str, Any]], **headers: str) -> Any:
+    from google.protobuf.json_format import MessageToJson
+
+    document = json.loads(MessageToJson(export_with(spans)))
+    for scope in document["resourceSpans"][0]["scopeSpans"]:
+        for span in scope["spans"]:
+            span["traceId"], span["spanId"] = TRACE_A, "0000000000000001"
+    headers = {**headers, "Content-Type": "application/json"}
+    return client.post("/otlp/v1/traces", content=json.dumps(document).encode(), headers=headers)
+
+
+@pytest.mark.parametrize(
+    ("request_key", "response_key"),
+    [("gen_ai.prompt", "gen_ai.completion"), ("span.input", "span.output")],
+)
+def test_openrouter_broadcast_span_keeps_prompt_and_completion(
+    client: TestClient,
+    auth: dict[str, str],
+    secrets: dict[str, str],
+    request_key: str,
+    response_key: str,
+) -> None:
+    span = _openrouter_span(**{request_key: OPENROUTER_PROMPT, response_key: OPENROUTER_COMPLETION})
+    assert _send_json(client, [span], **auth).status_code == 200
+    [(_, records)] = _runs(client).items()
+    record = records[1]
+    assert record["kind"] == "llm_call"
+    assert record["target"]["location"] == "cloud"
+    assert record["target"]["provider"] == "openrouter"
+    llm = record["extensions"]["sealedrun.llm"]
+    assert llm["finish_reason"] == "stop"
+    assert (llm["input_tokens"], llm["output_tokens"]) == (40, 1)
+    api = {"Authorization": f"Bearer {secrets['token']}"}
+    assert _payload(client, record, "request", api) == OPENROUTER_PROMPT.encode()
+    assert _payload(client, record, "response", api) == OPENROUTER_COMPLETION.encode()
+
+
+def test_semantic_convention_messages_win_over_openrouter_keys(
+    client: TestClient, auth: dict[str, str], secrets: dict[str, str]
+) -> None:
+    messages = [{"role": "user", "parts": [{"type": "text", "content": "hi"}]}]
+    span = _openrouter_span(**{"gen_ai.input.messages": messages, "gen_ai.prompt": "other"})
+    span["attributes"]["gen_ai.response.finish_reasons"] = ["length"]
+    assert _send_json(client, [span], **auth).status_code == 200
+    [(_, records)] = _runs(client).items()
+    record = records[1]
+    assert record["extensions"]["sealedrun.llm"]["finish_reason"] == "length"
+    api = {"Authorization": f"Bearer {secrets['token']}"}
+    assert json.loads(_payload(client, record, "request", api)) == messages
+
+
+def test_openrouter_privacy_mode_span_has_no_payloads(
+    client: TestClient, auth: dict[str, str]
+) -> None:
+    assert _send_json(client, [_openrouter_span()], **auth).status_code == 200
+    [(_, records)] = _runs(client).items()
+    payload = records[1].get("payload", {})
+    assert "request_hash" not in payload and "response_hash" not in payload
+
+
+def test_real_openrouter_decisions_export_yields_a_decision_record(
+    client: TestClient, auth: dict[str, str], secrets: dict[str, str]
+) -> None:
+    """A captured OpenRouter Broadcast export of a Jev call (2026-10-19, account ids removed)."""
+    body = (Path(__file__).parent / "fixtures" / "openrouter-broadcast-decisions.json").read_bytes()
+    headers = {**auth, "Content-Type": "application/json"}
+    assert client.post("/otlp/v1/traces", content=body, headers=headers).status_code == 200
+    [(label, records)] = _runs(client).items()
+    assert label == "otel:6c329748dd5f3829afe6382338ddb299"
+    assert [r["kind"] for r in records] == ["run_start", "llm_call"]
+    record = records[1]
+    assert record["target"] == {
+        "type": "model",
+        "name": "typesafe/jev-1.14-20261014",
+        "location": "cloud",
+        "provider": "typesafe",
+    }
+    assert record["extensions"]["sealedrun.otel"]["operation"] == "decisions"
+    assert record["extensions"]["sealedrun.llm"]["input_tokens"] == 330
+    assert record["extensions"]["sealedrun.decision"] == {
+        "answers": [{"name": "touches_prod", "type": "predicate", "value": 0.02}]
+    }
+    assert validate_extensions(record["extensions"]) == []
+    api = {"Authorization": f"Bearer {secrets['token']}"}
+    request = json.loads(_payload(client, record, "request", api))
+    assert "cat /etc/hostname" in request["prompt"]
+    delegation = client.get("/api/identity", headers=api).json()["delegation"]
+    verify_run(records, {delegation["delegation_id"]: delegation})
+
+
+def test_decisions_span_without_a_parseable_completion_has_no_decision(
+    client: TestClient, auth: dict[str, str]
+) -> None:
+    span = _openrouter_span(**{"gen_ai.operation.name": "decisions", "gen_ai.completion": "plain"})
+    assert _send_json(client, [span], **auth).status_code == 200
+    [(_, records)] = _runs(client).items()
+    assert records[1]["kind"] == "llm_call"
+    assert "sealedrun.decision" not in records[1]["extensions"]
