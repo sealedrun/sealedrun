@@ -465,6 +465,28 @@ anything else `unknown`. A span with status
 `ERROR` gives outcome `error`; a span whose record would not verify is counted in the OTLP
 `partial_success` reply and skipped; a re-sent span is recorded once. SPEC 11 has the mapping.
 
+### OpenRouter Broadcast
+
+OpenRouter can send a trace of every call made with an API key to an OpenTelemetry collector
+(Settings > Observability > Broadcast, destination "OpenTelemetry Collector"). A recorder is
+such a collector, so calls that go to OpenRouter directly, without the proxy, still land in a
+sealed run. Set:
+
+- Endpoint: `https://<your recorder>/otlp/v1/traces` (the recorder must be reachable from the
+  internet over HTTPS, and its `allowed_hosts` must list that host name)
+- Headers: `{"X-SealedRun-Token": "<SEALEDRUN_API_TOKEN>"}`
+
+"Test Connection" posts an empty export and expects a 2xx. After that each OpenRouter call
+becomes one run `otel:<trace id>` with one `llm_call` record: model, upstream provider, token
+usage and finish reason in `sealedrun.llm`, the prompt and completion as payloads (OpenRouter
+puts them in `gen_ai.prompt` / `gen_ai.completion`; Privacy Mode leaves them out). A decision
+call (`/api/v1/systemone`, `/api/alpha/decisions`) arrives with operation `decisions`; the
+recorder reads the answers out of the completion into `sealedrun.decision`, the same extension
+the proxy writes, so a gate's verdict is on the record either way. OpenRouter's own routing
+span ("provider attempt") carries no GenAI operation and is not recorded. Runs made this way
+have no `X-SealedRun-Run` grouping and no `sealedrun.gate` record unless your code reports one
+through the SDK with the record id from the Inspector.
+
 Servers that log users in with OAuth cannot do that through the proxy: their tokens are bound to
 the server's own URL, and clients refuse the discovery answer for a different address. Give such
 a server a static token (`key_env`, for example a GitHub personal access token), or mark it

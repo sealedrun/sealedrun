@@ -698,9 +698,13 @@ gen-ai/1.42.0). The mapping is informative and tracks that repository:
 A recorder that receives OTLP spans (`POST /otlp/v1/traces`) turns GenAI spans into records by
 `gen_ai.operation.name`: `execute_tool` -> `tool_call` (`gen_ai.tool.name`, payloads from
 `gen_ai.tool.call.arguments` / `gen_ai.tool.call.result`); `chat`, `text_completion`,
-`generate_content`, `embeddings`, `fetch_response` -> `llm_call` (`sealedrun.llm` from
-`gen_ai.request.model`, `gen_ai.provider.name`, `gen_ai.usage.*`, `gen_ai.response.finish_reasons`;
-payloads from `gen_ai.input.messages` / `gen_ai.output.messages` when the emitter includes them);
+`generate_content`, `embeddings`, `fetch_response`, `decisions` -> `llm_call` (`sealedrun.llm` from
+`gen_ai.request.model`, `gen_ai.provider.name`, `gen_ai.usage.*`, `gen_ai.response.finish_reasons`
+or, failing that, the string `gen_ai.response.finish_reason`; payloads from the first present of
+`gen_ai.input.messages`, `gen_ai.prompt`, `span.input` and of `gen_ai.output.messages`,
+`gen_ai.completion`, `span.output`, the latter pairs being what OpenRouter Broadcast emits; a
+`decisions` span whose completion is `{"completion": "<SystemOne answers>", "rawRequest": {...}}`
+also gets `sealedrun.decision` (10.7) from it);
 `retrieval`, `search_memory` -> `memory_read`; `create_memory`, `update_memory`, `upsert_memory`,
 `delete_memory` -> `memory_write`. Other spans are not recorded. Spans of one trace share one run:
 the `X-SealedRun-Run` header, else `otel:<trace_id>`. `gen_ai.conversation.id`, own or inherited

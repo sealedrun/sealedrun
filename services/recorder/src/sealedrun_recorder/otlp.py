@@ -44,6 +44,7 @@ from sealedrun_recorder.limits import BodyTooLargeError, parse_json, read_body
 from sealedrun_recorder.live import TARGET_LIMITS, InvalidRecordError
 from sealedrun_recorder.proxy.context import otel_agent, run_context
 from sealedrun_recorder.proxy.core import RUN_HEADER, RUN_LABEL, require_proxy_token
+from sealedrun_recorder.proxy.systemone import decision_from_systemone
 
 PROTOBUF = "application/x-protobuf"
 JSON = "application/json"
@@ -55,6 +56,7 @@ KINDS = {
     "generate_content": "llm_call",
     "embeddings": "llm_call",
     "fetch_response": "llm_call",
+    "decisions": "llm_call",
     "retrieval": "memory_read",
     "search_memory": "memory_read",
     "create_memory": "memory_write",
@@ -85,7 +87,9 @@ CLOUD_PROVIDERS = frozenset(
         "mistral_ai",
         "moonshot_ai",
         "openai",
+        "openrouter",
         "perplexity",
+        "typesafe",
         "x_ai",
     }
 )
@@ -334,6 +338,8 @@ def map_span(item: OtlpSpan) -> tuple[str, dict[str, Any]] | None:
     if kind == "llm_call":
         extensions["sealedrun.llm"] = _llm(name, provider, attributes)
     request, response = _payloads(kind, attributes)
+    if operation == "decisions" and response is not None:
+        extensions.update(_decision(response))
     fields: dict[str, Any] = {
         "target": target,
         "outcome": "error" if failed else "success",
@@ -422,23 +428,58 @@ def _llm(model: str, provider: str | None, attributes: dict[str, Any]) -> dict[s
     reasons = attributes.get("gen_ai.response.finish_reasons")
     if isinstance(reasons, list) and reasons and all(isinstance(r, str) for r in reasons):
         llm["finish_reason"] = reasons[0]
+    elif isinstance(reason := attributes.get("gen_ai.response.finish_reason"), str) and reason:
+        llm["finish_reason"] = reason
     temperature = attributes.get("gen_ai.request.temperature")
     if isinstance(temperature, int | float) and not isinstance(temperature, bool):
         llm["temperature"] = temperature
     return llm
 
 
+MESSAGES = ("gen_ai.input.messages", "gen_ai.output.messages")
 PAYLOAD_KEYS = {
-    "tool_call": ("gen_ai.tool.call.arguments", "gen_ai.tool.call.result"),
-    "llm_call": ("gen_ai.input.messages", "gen_ai.output.messages"),
-    "memory_read": ("gen_ai.input.messages", "gen_ai.output.messages"),
-    "memory_write": ("gen_ai.input.messages", "gen_ai.output.messages"),
+    "tool_call": (("gen_ai.tool.call.arguments",), ("gen_ai.tool.call.result",)),
+    "llm_call": (
+        ("gen_ai.input.messages", "gen_ai.prompt", "span.input"),
+        ("gen_ai.output.messages", "gen_ai.completion", "span.output"),
+    ),
+    "memory_read": ((MESSAGES[0],), (MESSAGES[1],)),
+    "memory_write": ((MESSAGES[0],), (MESSAGES[1],)),
 }
 
 
 def _payloads(kind: str, attributes: dict[str, Any]) -> tuple[bytes | None, bytes | None]:
-    request_key, response_key = PAYLOAD_KEYS[kind]
-    return _payload(attributes.get(request_key)), _payload(attributes.get(response_key))
+    """Return the request and response payloads, trying the keys of each side in order.
+
+    The semantic-convention keys come first; `gen_ai.prompt`/`gen_ai.completion` and
+    `span.input`/`span.output` are what OpenRouter Broadcast puts on its generation span.
+    """
+    request_keys, response_keys = PAYLOAD_KEYS[kind]
+    return _first_payload(request_keys, attributes), _first_payload(response_keys, attributes)
+
+
+def _decision(response: bytes) -> dict[str, Any]:
+    """Build `sealedrun.decision` from the completion of an OpenRouter Broadcast decisions span.
+
+    OpenRouter puts `{"completion": "<answers map as JSON>", "rawRequest": {...questions}}` in
+    `gen_ai.completion`; the answers map is the SystemOne reply without its envelope.
+    """
+    try:
+        document = json.loads(response)
+        answers = json.loads(document["completion"])
+    except (ValueError, TypeError, KeyError):
+        return {}
+    if not isinstance(document, dict) or not isinstance(answers, dict):
+        return {}
+    call = document.get("rawRequest")
+    return decision_from_systemone(call if isinstance(call, dict) else {}, {"answers": answers})
+
+
+def _first_payload(keys: tuple[str, ...], attributes: dict[str, Any]) -> bytes | None:
+    for key in keys:
+        if (value := attributes.get(key)) is not None:
+            return _payload(value)
+    return None
 
 
 def _payload(value: Any) -> bytes | None:
