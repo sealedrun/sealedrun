@@ -5,6 +5,11 @@ follows Semantic Versioning once 1.0.0 is reached.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-31
+
+Evidence, not a log: the verifier reports every record outside the Principal's scope, checks the
+changed system's own receipt on each step, and follows parent links between delegated runs.
+
 ### Added
 
 - SPEC 6.5 scope check: four keys of `Delegation.scope` now have a defined meaning
