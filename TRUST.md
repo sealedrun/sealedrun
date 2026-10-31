@@ -14,16 +14,18 @@ License: CC-BY-4.0. Companion to `SPEC.md`.
 
 ## What a valid bundle proves
 
-| Claim                                                                                                                                                             | Mechanism                                                                        |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| These records were produced in this order and none was inserted, removed or reordered later                                                                       | Hash chain over JCS bytes with `seq` and `prev_hash`                             |
-| Each record was signed by the key set identified by `agent_id`                                                                                                    | Hybrid Ed25519 + ML-DSA-65 signatures over the record hash                       |
-| That agent was authorised by the Principal for the time window of the run                                                                                         | Delegation signed by Principal keys, bound in `run_start`                        |
-| The request and response bodies, if present, are the ones the agent saw                                                                                           | Payload digests inside the signed record                                         |
-| A body that is now missing existed with this digest and was removed at this time for this reason                                                                  | `tombstone` record                                                               |
-| The chain head existed no later than the witness time, when the witness is in the verifier's trust list (SPEC 8.4); otherwise once re-checked against the witness | `anchor` record with a witness receipt (RFC 3161 token or Rekor inclusion proof) |
-| A labelled item went to this endpoint under this policy rule                                                                                                      | `data_labels`, `target`, `policy` inside the signed record                       |
-| The bundle files were not altered after export                                                                                                                    | Manifest `files` digests and exporter signature                                  |
+| Claim                                                                                                                                                             | Mechanism                                                                          |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| These records were produced in this order and none was inserted, removed or reordered later                                                                       | Hash chain over JCS bytes with `seq` and `prev_hash`                               |
+| Each record was signed by the key set identified by `agent_id`                                                                                                    | Hybrid Ed25519 + ML-DSA-65 signatures over the record hash                         |
+| That agent was authorised by the Principal for the time window of the run                                                                                         | Delegation signed by Principal keys, bound in `run_start`                          |
+| The request and response bodies, if present, are the ones the agent saw                                                                                           | Payload digests inside the signed record                                           |
+| A body that is now missing existed with this digest and was removed at this time for this reason                                                                  | `tombstone` record                                                                 |
+| The chain head existed no later than the witness time, when the witness is in the verifier's trust list (SPEC 8.4); otherwise once re-checked against the witness | `anchor` record with a witness receipt (RFC 3161 token or Rekor inclusion proof)   |
+| A labelled item went to this endpoint under this policy rule                                                                                                      | `data_labels`, `target`, `policy` inside the signed record                         |
+| Every step stayed within the targets, locations, labels and record budget the Principal allowed, or the verifier names the steps that did not                     | Delegation `scope` checked record by record (SPEC 6.5); findings `scope.*`         |
+| The reply the proxied call recorded is the reply the upstream returned; a self-reported step names what the changed system returned (commit, file digest, tx id)  | `sealedrun.receipt` (SPEC 10.9), `proxy` receipts bound to `payload.response_hash` |
+| The bundle files were not altered after export                                                                                                                    | Manifest `files` digests and exporter signature                                    |
 
 Every row above is relative to the Principal named in the bundle. The keys inside a bundle are
 not a root of trust: anyone can create a Principal and produce a bundle that is consistent end to
@@ -37,6 +39,17 @@ shown integrity, not origin, and its report says so.
   recorded. A tool that calls the network directly, a model reached without the proxy, or an SDK
   that was bypassed leaves no record. Completeness depends on deployment: the recorder must be
   the only egress for the agent (network policy, no direct credentials in the agent).
+- **That a self-reported step happened as described.** A step posted through the SDK is the
+  agent's own account, and so is a `self_reported` receipt attached to it: the agent marks its
+  own homework. The record proves what the agent claimed and when, signed and chained, not that
+  the claim is true. A `proxy` receipt is different in one respect: the recorder, not the agent,
+  read the upstream's reply and wrote its digest, so the agent could not have invented that
+  reply. Neither kind replaces the target system's own log; a receipt gives the auditor the
+  `ref`, `digest` and `issuer` to look it up with. A receipt signed by the target itself is
+  reserved for a later version.
+- **That an out-of-scope step was harmful, or an in-scope one harmless.** A scope finding says
+  the Principal did not allow that target, location or label. Whether the step mattered is for
+  the reader; the verifier only makes sure the step is named rather than buried.
 - **That the model output is true or the reasoning was sound.** SealedRun records what was sent and
   received, not whether it was correct.
 - **That the labels are correct.** A label is the output of a classifier, a regex, or a source
@@ -63,6 +76,9 @@ shown integrity, not origin, and its report says so.
 | Mint a new Principal and sign a whole bundle with it            | `principal_id` is not in the verifier's trusted set: check `trust` | Verifier must hold the trusted `principal_id` out of band; else the report says "not authenticated"                                                    |
 | Claim a DID as `principal_id` while signing with unrelated keys | Verifier rejects every `did:` principal                            | No DID resolver in 0.1; `principal_id` must equal the key set `kid`                                                                                    |
 | Record steps under an expired or future delegation              | `occurred_at` outside `[not_before, not_after]`                    |                                                                                                                                                        |
+| Agent touches a system the Principal did not allow              | Finding `scope.target` / `scope.location` / `scope.label` with seq | Reported, not hidden; `strict_scope` turns it into a failure. Needs a delegation with a scope (recorder: `SEALEDRUN_SCOPE`)                            |
+| Agent fabricates a "proxy" receipt on a step it reported itself | Check `receipt`: no `sealedrun.proxy` on the record                | The recorder also refuses such a posted step                                                                                                           |
+| Operator swaps the recorded reply but keeps the receipt         | Check `receipt`: digest differs from `payload.response_hash`       | Both sit in the same signed record, so the swap also breaks `hash`                                                                                     |
 | Quantum adversary forges Ed25519 signatures                     | ML-DSA-65 signature still required                                 | Hybrid profile                                                                                                                                         |
 | Implementation bug in the ML-DSA library                        | Ed25519 signature still required                                   | Hybrid profile                                                                                                                                         |
 | Verifier and operator disagree on canonical bytes               | RFC 8785 and the test vectors                                      | Conformance is byte-for-byte                                                                                                                           |
@@ -85,6 +101,11 @@ remain verifiable.
    deployments); the Principal keys are offline.
 4. Payload bodies that matter for evidence are retained or their deletion is tombstoned with a
    stated legal basis.
+5. The delegation carries a `scope` that states what the agent may touch (`SEALEDRUN_SCOPE` on
+   the recorder), so that "the agent stayed within its mandate" is a verifier result and not a
+   reading exercise.
+6. Steps that change a system outside the recorder's view carry a receipt (`receipt_for` /
+   `receiptFor`), so that the auditor can check them against that system's log.
 
 ## Privacy
 

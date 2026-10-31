@@ -103,6 +103,25 @@ def test_negative_chains(name: str) -> None:
     assert (info.value.check, info.value.seq) == (case["check"], case["seq"])
 
 
+@pytest.mark.parametrize("name", sorted(p.name for p in (VECTORS / "scope").glob("*.jsonl")))
+def test_scope_vectors(name: str) -> None:
+    expected = load(VECTORS / "scope" / "expected.json")
+    delegation = load(VECTORS / "scope" / "scoped.delegation.json")
+    assert isinstance(expected, dict) and isinstance(delegation, dict)
+    case = expected[name]
+    records = records_of(VECTORS / "scope" / name)
+    delegations = {delegation["delegation_id"]: delegation}
+    report = verify_run(records, delegations)
+    assert report.complete
+    assert [{"check": f.check, "seq": f.seq} for f in report.findings] == case["findings"]
+    if "strict" not in case:
+        assert verify_run(records, delegations, strict_scope=True).findings == []
+        return
+    with pytest.raises(VerificationError) as info:
+        verify_run(records, delegations, strict_scope=True)
+    assert (info.value.check, info.value.seq) == (case["strict"]["check"], case["strict"]["seq"])
+
+
 @pytest.mark.parametrize("name", sorted(p.name for p in (VECTORS / "bundle").glob("*.zip")))
 def test_bundle_vectors(name: str) -> None:
     expected = load(VECTORS / "bundle" / "expected.json")
@@ -117,6 +136,7 @@ def test_bundle_vectors(name: str) -> None:
         assert report.runs[0].record_count == case["records"]
         assert report.runs[0].complete == case["complete"]
         assert report.payloads_omitted == case.get("payloads_omitted", False)
+        assert report.parents_unresolved == case.get("parents_unresolved", [])
         return
     with pytest.raises(VerificationError) as info:
         verify_bundle(read_bundle(data), trusted)
@@ -132,6 +152,17 @@ def test_unknown_principal_without_trust_anchor_is_integrity_only() -> None:
     assert report.principal_trusted is False
     assert report.principal_id == keys["attacker"]["kid"]
     assert report.exporter_agent_id != ""
+
+
+def test_receipt_run_verifies() -> None:
+    records = records_of(VECTORS / "records" / "receipt-run.jsonl")
+    delegation = load(VECTORS / "delegations" / "valid.json")
+    assert isinstance(delegation, dict)
+    report = verify_run(records, {delegation["delegation_id"]: delegation})
+    assert report.complete
+    assert (report.receipts_proxy, report.receipts_self_reported) == (1, 1)
+    receipt = records[1]["extensions"]["sealedrun.receipt"]
+    assert receipt["digest"] == records[1]["payload"]["response_hash"]
 
 
 def test_context_run_verifies() -> None:

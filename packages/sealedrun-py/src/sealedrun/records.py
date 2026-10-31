@@ -121,18 +121,28 @@ class RunWriter:
         """Hash of the last record, or the all-zero hash before the first one."""
         return self._head
 
-    def start(self, **fields: Any) -> dict[str, Any]:
+    def start(self, *, parent: dict[str, str] | None = None, **fields: Any) -> dict[str, Any]:
         """Write the `run_start` record and bind the run to the delegation (SPEC 6.4).
 
-        `fields` are passed to `append`. Raises ValueError if the run has already started.
+        `parent` names the step of another run that asked for this one: `run_id`, `record_id`
+        and `delegation_hash`. `fields` are passed to `append`. Raises ValueError if the run has
+        already started or `parent` lacks one of its three values.
         """
         if self._seq:
             raise ValueError("run already started")
         extensions = dict(fields.pop("extensions", {}))
-        extensions["sealedrun.delegation"] = {
+        binding: dict[str, Any] = {
             "delegation_id": self._delegation["delegation_id"],
             "hash": self._delegation["hash"],
         }
+        if parent is not None:
+            missing = {"run_id", "record_id", "delegation_hash"} - parent.keys()
+            if missing:
+                raise ValueError(f"parent lacks {', '.join(sorted(missing))}")
+            binding["parent_run_id"] = parent["run_id"]
+            binding["parent_record_id"] = parent["record_id"]
+            binding["parent_delegation_hash"] = parent["delegation_hash"]
+        extensions["sealedrun.delegation"] = binding
         return self.append(
             "run_start",
             target={"type": "none", "name": "run"},
@@ -193,11 +203,14 @@ class RunWriter:
         parent_record_id: str | None = None,
         extensions: dict[str, Any] | None = None,
         occurred_at: datetime | None = None,
+        record_id: str | None = None,
     ) -> dict[str, Any]:
         """Build the next record's unsigned document without touching the chain.
 
-        `data_labels` are deduplicated and sorted, and `actor` defaults to the agent. Raises
-        ValueError if the run is closed or if the first record is not `run_start`.
+        `data_labels` are deduplicated and sorted, and `actor` defaults to the agent.
+        `record_id` replaces the generated id, for a caller that had to announce the id before
+        the step finished (SPEC 6.4). Raises ValueError if the run is closed or if the first
+        record is not `run_start`.
         """
         if self.closed:
             raise ValueError("run is closed")
@@ -205,7 +218,7 @@ class RunWriter:
             raise ValueError("first record must be run_start")
         doc: dict[str, Any] = {
             "spec_version": SPEC_VERSION,
-            "record_id": self._new_id(),
+            "record_id": record_id or self._new_id(),
             "run_id": self.run_id,
             "seq": self.seq,
             "occurred_at": format_timestamp(occurred_at or self._clock()),

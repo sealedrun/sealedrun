@@ -7,7 +7,13 @@ import { type HashAlg, isHashAlg, payloadDigest } from "./hashing.js";
 import { assertDelegation, assertManifest, assertRecord } from "./structure.js";
 import { checkHash, checkSignatures, DOMAIN_MANIFEST } from "./signing.js";
 import type { SealedRunRecord, Delegation, Manifest } from "./types.js";
-import { type RunReport, verifyRun, verifyWitnesses, type WitnessOptions } from "./verify.js";
+import {
+  checkParentLinks,
+  type RunReport,
+  verifyRun,
+  verifyWitnesses,
+  type WitnessOptions,
+} from "./verify.js";
 
 /**
  * Parsed content of a bundle archive (SPEC 13). Parsing proves digests and structure, not signatures.
@@ -34,12 +40,16 @@ export interface BundleReport {
   principalTrusted: boolean;
   /** True when the exporter left every payload body out on purpose; the bodies were not checked. */
   payloadsOmitted: boolean;
+  /** Runs whose `run_start` names a parent run that is not in this bundle (SPEC 6.4). */
+  parentsUnresolved: string[];
 }
 
 /** Optional inputs of {@link verifyBundle}. */
 export interface VerifyBundleOptions {
   /** Principal ids obtained out of band. The keys inside a bundle are not a root of trust. */
   trustedPrincipals?: Iterable<string>;
+  /** Fail on the first record outside its delegation's scope instead of listing it (SPEC 6.5). */
+  strictScope?: boolean;
 }
 
 /**
@@ -289,6 +299,7 @@ export function verifyBundle(bundle: Bundle, options: VerifyBundleOptions = {}):
     const report = verifyRun(records, bundle.delegations, {
       ...(omitted ? {} : { payloads: bundle.payloads }),
       ...(entry.first_seq > 0 ? { expectedPrevHash: entry.first_hash } : {}),
+      ...(options.strictScope ? { strictScope: true } : {}),
     });
     if (report.recordCount !== entry.record_count || report.lastHash !== entry.last_hash) {
       throw new VerificationError("manifest", "run entry does not match records", entry.run_id);
@@ -307,6 +318,7 @@ export function verifyBundle(bundle: Bundle, options: VerifyBundleOptions = {}):
   });
   checkRecordIds(bundle);
   checkAnchorFiles(bundle);
+  const parentsUnresolved = checkParentLinks(bundle.runs, bundle.delegations);
   return {
     bundleId: manifest.bundle_id,
     runs,
@@ -314,6 +326,7 @@ export function verifyBundle(bundle: Bundle, options: VerifyBundleOptions = {}):
     exporterAgentId: manifest.exporter.agent_id,
     principalTrusted: trusted !== undefined,
     payloadsOmitted: omitted,
+    parentsUnresolved,
   };
 }
 

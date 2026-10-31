@@ -21,6 +21,9 @@ from sealedrun_recorder import __version__
 from sealedrun_recorder.policy import Rule
 
 AGENT_HEADER = "x-sealedrun-agent"
+PARENT_HEADER = "x-sealedrun-parent"
+UUID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+PARENT = re.compile(rf"^({UUID})/({UUID})/([0-9a-f]{{64}}|[0-9a-f]{{96}})$")
 AGENT_NAME = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 AGENT_VERSION = re.compile(r"^[A-Za-z0-9._+-]{1,32}$")
 CLIENT_INFO = "io.modelcontextprotocol/clientInfo"
@@ -43,6 +46,26 @@ def header_agent(request: Request) -> tuple[str, str] | None:
     if not slash or not AGENT_NAME.match(name) or not AGENT_VERSION.match(version):
         raise AgentError(f"{AGENT_HEADER} must be <name>/<version>: {AGENT_NAME.pattern}")
     return name, version
+
+
+def header_parent(request: Request) -> dict[str, str] | None:
+    """Return the parent link from `X-SealedRun-Parent` (SPEC 6.4); None when absent.
+
+    The value is `<parent_run_id>/<parent_record_id>/<parent_delegation_hash>`, as a recorder
+    that relayed an A2A call sent it to the callee. Raises AgentError on any other shape.
+    """
+    raw = request.headers.get(PARENT_HEADER)
+    if raw is None:
+        return None
+    match = PARENT.match(raw.strip())
+    if match is None:
+        raise AgentError(f"{PARENT_HEADER} must be <run_id>/<record_id>/<delegation_hash>")
+    return {"run_id": match[1], "record_id": match[2], "delegation_hash": match[3]}
+
+
+def parent_header(run_id: str, record_id: str, delegation_hash: str) -> str:
+    """Build the `X-SealedRun-Parent` value a recorder sends with a relayed A2A call."""
+    return f"{run_id}/{record_id}/{delegation_hash}"
 
 
 def client_info_agent(message: Any) -> tuple[str, str] | None:

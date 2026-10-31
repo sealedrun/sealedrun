@@ -51,6 +51,32 @@
       "seq": 4
     }
   ],
+  "receipt-run.jsonl": [
+    {
+      "hash": "194acb5b06f11ff45ab4f7d9f09f0a1073aceecb4ef3043b415258ae49d77d19",
+      "kind": "run_start",
+      "prev_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "seq": 0
+    },
+    {
+      "hash": "94ca9b69c6c825d99ceefcccb7de6645b6d3f1645d839ead8d5c49b175eb2f70",
+      "kind": "llm_call",
+      "prev_hash": "194acb5b06f11ff45ab4f7d9f09f0a1073aceecb4ef3043b415258ae49d77d19",
+      "seq": 1
+    },
+    {
+      "hash": "c4551d4421500083e5b77d9ccf76a4559c61aba448cc379fc6acd8d1a282328a",
+      "kind": "tool_call",
+      "prev_hash": "94ca9b69c6c825d99ceefcccb7de6645b6d3f1645d839ead8d5c49b175eb2f70",
+      "seq": 2
+    },
+    {
+      "hash": "d4c3bc3ec6eb221b64cf925bbe600d250aa9550153402ab61995a5282b823fb0",
+      "kind": "run_end",
+      "prev_hash": "c4551d4421500083e5b77d9ccf76a4559c61aba448cc379fc6acd8d1a282328a",
+      "seq": 3
+    }
+  ],
   "valid-run.jsonl": [
     {
       "hash": "18d39e849b52694684f84e1c3157a832fa3cbb6f58b4528ac3adabbbdcfe2b24",

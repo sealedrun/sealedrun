@@ -11,7 +11,7 @@ from typing import Any
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
-from sealedrun import PrivateKeySet, covers, create_delegation, verify_delegation
+from sealedrun import PrivateKeySet, Scope, covers, create_delegation, verify_delegation
 from sealedrun.anchors import rekor
 from sealedrun.hashing import b64url_decode, b64url_encode
 
@@ -47,12 +47,18 @@ class Identity:
         return rekor.public_pem(self.anchor_key)
 
 
-def load_identity(data_dir: Path, *, agent_name: str = "sealedrun-recorder") -> Identity:
+def load_identity(
+    data_dir: Path,
+    *,
+    agent_name: str = "sealedrun-recorder",
+    scope: dict[str, Any] | None = None,
+) -> Identity:
     """Load the keys under `data_dir/keys`, generating whatever is missing.
 
     Seeds are written with mode 0600 into a 0700 directory and never leave the file system.
     The delegation is reissued when its file is missing, fails verification, was issued for
-    other keys, or no longer covers the current time. `anchor.pem` is the P-256 key for Rekor
+    other keys, no longer covers the current time, or carries another `scope` than the one
+    given (SPEC 6.5; an empty scope means none). `anchor.pem` is the P-256 key for Rekor
     anchors (SPEC 8.1.2), carrying no identity claim.
     """
     key_dir = data_dir / KEY_DIR
@@ -62,8 +68,11 @@ def load_identity(data_dir: Path, *, agent_name: str = "sealedrun-recorder") -> 
     agent = _load_or_create_keys(key_dir / AGENT_FILE)
     delegation_path = key_dir / DELEGATION_FILE
     delegation = _read_json(delegation_path)
-    if not _delegation_usable(delegation, principal, agent):
-        delegation = create_delegation(principal, agent.public, agent_name=agent_name)
+    wanted = scope or None
+    if wanted is not None:
+        Scope.parse(wanted)
+    if not _delegation_usable(delegation, principal, agent, wanted):
+        delegation = create_delegation(principal, agent.public, agent_name=agent_name, scope=wanted)
         _write_private(delegation_path, json.dumps(delegation, indent=2).encode())
     assert delegation is not None
     return Identity(principal, agent, delegation, _load_or_create_anchor_key(key_dir / ANCHOR_FILE))
@@ -97,7 +106,10 @@ def _load_or_create_keys(path: Path) -> PrivateKeySet:
 
 
 def _delegation_usable(
-    delegation: dict[str, Any] | None, principal: PrivateKeySet, agent: PrivateKeySet
+    delegation: dict[str, Any] | None,
+    principal: PrivateKeySet,
+    agent: PrivateKeySet,
+    scope: dict[str, Any] | None,
 ) -> bool:
     if delegation is None:
         return False
@@ -110,6 +122,7 @@ def _delegation_usable(
         delegation["principal_id"] == principal.public.kid
         and delegation["agent_id"] == agent.public.kid
         and covers(delegation, datetime.now(UTC))
+        and delegation.get("scope") == scope
     )
 
 

@@ -11,7 +11,7 @@ def test_cli_reports_witness_verified_anchors(capsys: pytest.CaptureFixture[str]
     assert main([str(BUNDLES / "valid.zip")]) == 0
     out = capsys.readouterr().out
     assert "OK bundle" in out and "principal not confirmed" in out
-    assert "anchors 1, witness verified 1" in out
+    assert "anchors 1, witness verified 1, scope findings 0" in out
 
 
 def test_cli_trusted_principal_and_failures(
@@ -67,3 +67,37 @@ def test_cli_reports_omitted_payloads(capsys: pytest.CaptureFixture[str]) -> Non
     assert "payloads omitted by exporter (bodies not checked)" in capsys.readouterr().out
     assert main([str(BUNDLES / "valid.zip")]) == 0
     assert "omitted" not in capsys.readouterr().out
+
+
+def test_cli_lists_scope_findings_and_strict_flag(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    import io
+
+    from sealedrun import PrivateKeySet, RunWriter, create_delegation, write_bundle
+
+    principal, agent = PrivateKeySet.generate(), PrivateKeySet.generate()
+    delegation = create_delegation(
+        principal, agent.public, scope={"allowed_locations": ["local"], "denied_labels": ["pii"]}
+    )
+    writer = RunWriter(agent, delegation)
+    writer.start()
+    writer.append(
+        "llm_call",
+        target={"type": "model", "name": "gpt-4.1", "location": "cloud", "provider": "openai"},
+        data_labels=["pii"],
+    )
+    writer.end()
+    out = io.BytesIO()
+    write_bundle(
+        out, exporter=agent, software="test/0", delegations=[delegation], runs=[writer.records]
+    )
+    path = tmp_path / "scoped.zip"
+    path.write_bytes(out.getvalue())
+    assert main([str(path)]) == 0
+    text = capsys.readouterr().out
+    assert "scope findings 2" in text
+    assert "seq 1 scope.location: location cloud is not in allowed_locations" in text
+    assert "seq 1 scope.label: labels pii are denied" in text
+    assert main(["--strict-scope", str(path)]) == 1
+    assert capsys.readouterr().out.startswith("FAIL scope.location")

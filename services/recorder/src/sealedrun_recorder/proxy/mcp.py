@@ -52,6 +52,7 @@ from sealedrun_recorder.proxy.context import (
     AgentError,
     client_info_agent,
     header_agent,
+    header_parent,
     run_context,
     tool_inventory_digest,
 )
@@ -62,6 +63,7 @@ from sealedrun_recorder.proxy.core import (
     SSE,
     client_credentials,
     mapping,
+    proxy_receipt,
     require_proxy_token,
     sse_data,
 )
@@ -118,6 +120,7 @@ async def mcp(server: str, request: Request) -> Response:
     try:
         labels = header_labels(request)
         header_agent(request)
+        header_parent(request)
     except (LabelsError, AgentError) as problem:
         return error(400, str(problem))
     upstreams: Upstreams = request.app.state.upstreams
@@ -344,7 +347,9 @@ async def _record(
     context = _context(request, target, call, body, result)
     list_key = None
     if call.method == "tools/list" and message is not None and "result" in message:
-        run_id = await run_in_threadpool(runs.run_for, label, context=context)
+        run_id = await run_in_threadpool(
+            runs.run_for, label, context=context, parent=header_parent(request)
+        )
         list_key = (run_id, target.name, "http", call.cursor)
         if not seen.changed(list_key, result):
             return
@@ -393,6 +398,7 @@ async def _record(
         label,
         "tool_call",
         context=context,
+        parent=header_parent(request),
         target={
             "type": "tool",
             "name": call.name,
@@ -402,6 +408,7 @@ async def _record(
         },
         request=body,
         response=answer,
+        receipt=None if blocked else proxy_receipt(target.url, status),
         request_media_type=JSON,
         response_media_type=media_type.partition(";")[0].strip() or None,
         outcome=outcome,

@@ -1,7 +1,7 @@
 import { createServer, type Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
-import { Recorder, RecorderError } from "../src/index.js";
+import { payloadDigest, Recorder, RecorderError, receiptFor } from "../src/index.js";
 
 type Post = { headers: Record<string, string>; body: Record<string, unknown> };
 
@@ -184,6 +184,35 @@ describe("Recorder", () => {
     expect(unreachable).toBeInstanceOf(RecorderError);
     expect((unreachable as RecorderError).status).toBe(0);
     expect(String(unreachable)).not.toContain("secret-token");
+  });
+
+  test("parent link is sent as a header", async () => {
+    const link =
+      "0192b3c4-5d6e-7f80-9a1b-0000000000a7/0192b3c4-5d6e-7f80-9a1b-000000000701/" + "c".repeat(64);
+    const recorder = new Recorder(url, { token: "tok", run: "job-1", parent: link });
+    await recorder.record("tool_call", "x");
+    expect(posts[0]!.headers["x-sealedrun-parent"]).toBe(link);
+  });
+
+  test("record with a receipt marks it self_reported", async () => {
+    const recorder = new Recorder(url, { token: "tok", run: "job-1" });
+    await recorder.record("tool_call", "out.txt", {
+      provider: "fs",
+      receipt: receiptFor("file_hash", {
+        ref: "/tmp/out.txt",
+        data: new TextEncoder().encode("hello"),
+      }),
+      extensions: { "sealedrun.mcp": { server: "fs", transport: "stdio", method: "tools/call" } },
+    });
+    const extensions = posts[0]!.body.extensions as Record<string, Record<string, unknown>>;
+    expect(extensions["sealedrun.receipt"]).toEqual({
+      kind: "file_hash",
+      ref: "/tmp/out.txt",
+      digest: payloadDigest("sha-256", new TextEncoder().encode("hello")),
+      digest_alg: "sha-256",
+      observed_by: "self_reported",
+    });
+    expect(extensions["sealedrun.mcp"]!["server"]).toBe("fs");
   });
 
   test("recordGate links the decision and maps the outcome", async () => {

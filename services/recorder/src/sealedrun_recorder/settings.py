@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -20,6 +20,11 @@ class Settings(BaseSettings):
             from any other Principal are refused; when empty, everything consistent is stored
             and reported as not authenticated.
             Env form: SEALEDRUN_TRUSTED_PRINCIPALS='["qJtR..."]'.
+        scope: Limits the Principal places on the agent, written into the recorder's own
+            delegation (SPEC 6.5) and checked by every verifier of its bundles: `allowed_targets`,
+            `allowed_locations`, `denied_labels`, `max_records`. Changing it reissues the
+            delegation. Empty means no limit.
+            Env form: SEALEDRUN_SCOPE='{"allowed_locations":["local"],"denied_labels":["pii"]}'.
         upstreams_file: YAML file with the model providers the LLM proxy forwards to.
         proxy_run_idle_seconds: Proxy calls without an X-SealedRun-Run header join the current
             run until it has been idle this long; the next call then starts a new run.
@@ -54,6 +59,7 @@ class Settings(BaseSettings):
     api_token: SecretStr | None = None
     allowed_hosts: list[str] = ["127.0.0.1", "localhost"]
     trusted_principals: list[str] = []
+    scope: dict[str, Any] = {}
     upstreams_file: Path = Path("upstreams.yaml")
     proxy_timeout_seconds: float = 600.0
     proxy_max_body_bytes: int = 32 * 1024 * 1024

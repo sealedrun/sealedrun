@@ -7,6 +7,37 @@ follows Semantic Versioning once 1.0.0 is reached.
 
 ### Added
 
+- SPEC 6.5 scope check: four keys of `Delegation.scope` now have a defined meaning
+  (`allowed_targets` with `*` globs on `name`, `allowed_locations`, `denied_labels`,
+  `max_records`); other keys stay free-form. Both verifiers report every record outside the
+  scope as a finding (`scope.target`, `scope.location`, `scope.label`, `scope.max_records`)
+  with its seq and record id, so an auditor sees where the agent went beyond what the Principal
+  allowed without reading the run. `strict_scope` / `strictScope` and the CLI flag
+  `--strict-scope` turn the first finding into a failure. The CLI prints the findings per run.
+  Vectors `spec/vectors/scope/`. The recorder writes `SEALEDRUN_SCOPE` into its own delegation
+  and reissues it when the scope changes.
+- SPEC 10.9 `sealedrun.receipt`: a record can carry the changed system's own proof of the step
+  (digest of the HTTP reply, commit sha, file digest, transaction id). The recorder proxy writes
+  a `proxy` receipt on every relayed call (LLM, MCP, A2A) from the reply it saw; SDK
+  `receipt_for` / `receiptFor` and the `receipt` option of `record` attach a `self_reported`
+  one, and a posted step claiming `proxy` is refused. Both verifiers fail with check `receipt`
+  when a proxy receipt sits on a record the recorder did not relay, is not an `http_response`,
+  or its digest differs from `payload.response_hash`, and count accepted receipts by observer;
+  the CLI prints the counts. Vectors `records/receipt-run.jsonl` and three negative chains.
+- SPEC 6.4 parent link: a run started on behalf of another run names the record that asked
+  for it (`parent_run_id`, `parent_record_id`, `parent_delegation_hash` in
+  `sealedrun.delegation`). The recorder's A2A proxy announces its record to the callee in the
+  `X-SealedRun-Parent` header before the call, and accepts the header on proxied calls and
+  posted steps that open a run; the SDKs send it (`parent=` / `parent:`). Both verifiers resolve
+  the link among the runs they hold (`check_parent_links` / `checkParentLinks`, run by
+  `verify_bundle`): the asking record must exist and be a `tool_call`, the child must not start
+  before the parent run, the delegation hash must match and the child's scope must be within
+  the parent's (`parent.record`, `parent.kind`, `parent.time`, `parent.delegation`,
+  `parent.scope`); a parent in another bundle is reported as unresolved, not failed. Vectors
+  `bundle/parent-*.zip`.
+- TRUST.md states what a self-reported step and a receipt do and do not prove (the agent marks
+  its own homework; a `proxy` receipt is the recorder's observation, not the agent's), and
+  README has the three questions the verifier now answers.
 - OTLP receiver: OpenRouter Broadcast traces are recorded in full. Payloads fall back to
   `gen_ai.prompt` / `gen_ai.completion` and `span.input` / `span.output`, the string
   `gen_ai.response.finish_reason` is read when the array is absent, `decisions` spans become

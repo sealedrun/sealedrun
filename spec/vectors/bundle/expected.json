@@ -29,6 +29,47 @@
     "check": "bundle",
     "ok": false
   },
+  "parent-child.zip": {
+    "complete": true,
+    "ok": true,
+    "parents_unresolved": [],
+    "records": 3,
+    "runs": 2
+  },
+  "parent-unresolved.zip": {
+    "complete": true,
+    "ok": true,
+    "parents_unresolved": [
+      "0192b3c4-5d6e-7f80-9a1b-0000000000a8"
+    ],
+    "records": 3,
+    "runs": 1
+  },
+  "parent-wider-scope.zip": {
+    "check": "parent.scope",
+    "ok": false,
+    "seq": 0
+  },
+  "parent-wrong-delegation.zip": {
+    "check": "parent.delegation",
+    "ok": false,
+    "seq": 0
+  },
+  "parent-wrong-kind.zip": {
+    "check": "parent.kind",
+    "ok": false,
+    "seq": 0
+  },
+  "parent-wrong-record.zip": {
+    "check": "parent.record",
+    "ok": false,
+    "seq": 0
+  },
+  "parent-wrong-time.zip": {
+    "check": "parent.time",
+    "ok": false,
+    "seq": 0
+  },
   "payloads-omitted-with-bodies.zip": {
     "check": "bundle",
     "ok": false

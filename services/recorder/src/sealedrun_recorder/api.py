@@ -23,6 +23,7 @@ from sealedrun_recorder.policy import Rule
 from sealedrun_recorder.proxy.context import (
     AgentError,
     header_agent,
+    header_parent,
     run_context,
     tool_inventory_digest,
 )
@@ -373,6 +374,7 @@ async def post_step(request: Request) -> Response | dict[str, Any]:
         raise HTTPException(400, f"{RUN_HEADER} must match {RUN_LABEL.pattern}")
     try:
         agent = header_agent(request)
+        parent = header_parent(request)
     except AgentError as problem:
         raise HTTPException(400, str(problem)) from problem
     step = await _read_step(request)
@@ -386,13 +388,13 @@ async def post_step(request: Request) -> Response | dict[str, Any]:
     rule: Rule = request.app.state.policy
     context = run_context(rule, agent, "header" if agent else None, tools=tools)
     if listing is not None:
-        run_id = await run_in_threadpool(runs.run_for, label, context=context)
+        run_id = await run_in_threadpool(runs.run_for, label, context=context, parent=parent)
         if not _list_changed(request, run_id, listing):
             return _unchanged_list()
     record: dict[str, Any]
     try:
         record = await run_in_threadpool(
-            runs.record, label, step.kind, context=context, **step.fields()
+            runs.record, label, step.kind, context=context, parent=parent, **step.fields()
         )
     except InvalidRecordError as error:
         raise HTTPException(400, str(error)) from error

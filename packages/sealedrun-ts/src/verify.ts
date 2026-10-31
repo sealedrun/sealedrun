@@ -2,6 +2,7 @@ import { covers, verifyDelegation } from "./delegation.js";
 import { VerificationError } from "./errors.js";
 import { digestSize, type HashAlg, isHashAlg, payloadDigest, zeroHash } from "./hashing.js";
 import { assertRecord } from "./structure.js";
+import { type Finding, parseScope, scopeFindings, scopeWithin } from "./scope.js";
 import { checkHash, checkSignatures, DOMAIN_RECORD } from "./signing.js";
 import { parseTimestamp } from "./time.js";
 import { type RekorReceipt, verifyRekor } from "./anchors/rekor.js";
@@ -28,6 +29,15 @@ export interface RunReport {
   anchorsWitnessVerified: number;
   /** Per data label, the number of non-blocked records whose target location is `cloud`. */
   labelsSentToCloud: Record<string, number>;
+  /**
+   * Records outside the delegation's scope (SPEC 6.5), in seq order. They do not break
+   * integrity; under `strictScope` the first one fails the run instead.
+   */
+  findings: Finding[];
+  /** Receipts the recorder wrote from the reply it relayed (SPEC 10.9). */
+  receiptsProxy: number;
+  /** Receipts the caller supplied. */
+  receiptsSelfReported: number;
 }
 
 /** Optional inputs of {@link verifyRun}. */
@@ -39,6 +49,8 @@ export interface VerifyRunOptions {
   payloads?: Map<string, Uint8Array>;
   /** `prev_hash` the first record must carry when the slice does not start at seq 0. */
   expectedPrevHash?: string;
+  /** Fail with the finding's check (`scope.target` and the like) on the first scope finding. */
+  strictScope?: boolean;
 }
 
 /** Optional inputs of {@link verifyRunAsync}, on top of {@link VerifyRunOptions}. */
@@ -52,7 +64,8 @@ export interface WitnessOptions {
 /**
  * Verifies one run or a contiguous slice of it: structure, seq contiguity, hash chain, record
  * hashes, delegation binding and validity, agent signatures, anchors, and nothing after `run_end`
- * (SPEC 13.2 steps 3 to 5).
+ * (SPEC 13.2 steps 3 to 5). Records outside the delegation's scope are listed as findings
+ * (SPEC 6.5).
  *
  * @remarks
  * All records are checked against a single Delegation. For a run that starts at seq 0 it is the
@@ -82,6 +95,13 @@ export function verifyRun(
     throw new VerificationError("chain", "run starts at seq 0 but prev hash is not zero", runId, 0);
   }
   const delegation = delegationForRun(first, delegations, runId);
+  let scope;
+  try {
+    scope = parseScope(delegation.scope);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new VerificationError("schema", message, runId, firstSeq);
+  }
   const last = records[records.length - 1] ?? first;
   const report: RunReport = {
     runId,
@@ -92,6 +112,9 @@ export function verifyRun(
     anchors: 0,
     anchorsWitnessVerified: 0,
     labelsSentToCloud: {},
+    findings: [],
+    receiptsProxy: 0,
+    receiptsSelfReported: 0,
   };
   let ended = false;
   let policySetHash: string | undefined;
@@ -145,6 +168,14 @@ export function verifyRun(
     }
     if (record.kind === "run_end") ended = true;
     policySetHash = checkContext(record, policySetHash, runId, seq);
+    const observedBy = checkReceipt(record, runId, seq);
+    if (observedBy === "proxy") report.receiptsProxy += 1;
+    else if (observedBy === "self_reported") report.receiptsSelfReported += 1;
+    for (const finding of scopeFindings(scope, record, index + 1)) {
+      if (options.strictScope)
+        throw new VerificationError(finding.check, finding.reason, runId, seq);
+      report.findings.push(finding);
+    }
     if (record.target.location === "cloud" && record.outcome !== "blocked") {
       for (const label of record.data_labels) {
         report.labelsSentToCloud[label] = (report.labelsSentToCloud[label] ?? 0) + 1;
@@ -217,6 +248,47 @@ function checkContext(
     );
   }
   return policySetHash;
+}
+
+/**
+ * Applies SPEC 10.9 to one record and returns the receipt's `observed_by`, if any: a `proxy`
+ * receipt sits on a proxied record, is an `http_response` and carries the digest of the response
+ * body the record already names; a proxied record carries no other receipt.
+ */
+function checkReceipt(record: SealedRunRecord, runId: string, seq: number): string | undefined {
+  const extensions = record.extensions ?? {};
+  const receipt = extensions["sealedrun.receipt"];
+  const proxied = extensions["sealedrun.proxy"] !== undefined;
+  if (receipt === undefined) return undefined;
+  const observedBy = String(receipt["observed_by"]);
+  if (observedBy === "proxy") {
+    if (!proxied) {
+      throw new VerificationError(
+        "receipt",
+        "proxy receipt on a record without sealedrun.proxy",
+        runId,
+        seq,
+      );
+    }
+    if (receipt["kind"] !== "http_response") {
+      throw new VerificationError("receipt", "proxy receipt is not an http_response", runId, seq);
+    }
+    const digest = receipt["digest"];
+    if (digest === undefined || digest !== record.payload?.response_hash) {
+      throw new VerificationError(
+        "receipt",
+        "receipt digest differs from payload.response_hash",
+        runId,
+        seq,
+      );
+    }
+    if ((receipt["digest_alg"] ?? record.hash_alg) !== record.hash_alg) {
+      throw new VerificationError("receipt", "receipt digest_alg differs from run", runId, seq);
+    }
+  } else if (proxied) {
+    throw new VerificationError("receipt", "self-reported receipt on a proxied record", runId, seq);
+  }
+  return observedBy;
 }
 
 function checkPayload(
@@ -340,4 +412,92 @@ function checkAnchor(
       seq,
     );
   }
+}
+
+/** The parent link a run's `run_start` names (SPEC 6.4). */
+export interface ParentLink {
+  runId: string;
+  recordId: string;
+  delegationHash: string;
+}
+
+/** Returns the parent link named in a run's `run_start`, if any. */
+export function parentOf(records: SealedRunRecord[]): ParentLink | undefined {
+  const first = records[0];
+  if (!first || first.kind !== "run_start") return undefined;
+  const binding = first.extensions?.["sealedrun.delegation"];
+  const runId = binding?.["parent_run_id"];
+  if (binding === undefined || runId === undefined) return undefined;
+  return {
+    runId: String(runId),
+    recordId: String(binding["parent_record_id"]),
+    delegationHash: String(binding["parent_delegation_hash"]),
+  };
+}
+
+/**
+ * Applies the `parent.*` checks of SPEC 6.4 to every run that names a parent among `runs`, each
+ * of which has passed {@link verifyRun}. Returns the ids of runs whose parent run is not among
+ * `runs`.
+ *
+ * @throws VerificationError with check `parent.record`, `parent.kind`, `parent.time`,
+ * `parent.delegation` or `parent.scope` on the child run.
+ */
+export function checkParentLinks(
+  runs: Map<string, SealedRunRecord[]>,
+  delegations: Map<string, Delegation>,
+): string[] {
+  const unresolved: string[] = [];
+  for (const [runId, records] of runs) {
+    const parent = parentOf(records);
+    if (!parent) continue;
+    const parentRecords = runs.get(parent.runId);
+    if (!parentRecords) {
+      unresolved.push(runId);
+      continue;
+    }
+    const start = records[0];
+    const asked = parentRecords.find((r) => r.record_id === parent.recordId);
+    if (!asked)
+      throw new VerificationError("parent.record", "parent record not in parent run", runId, 0);
+    if (asked.kind !== "tool_call") {
+      throw new VerificationError("parent.kind", "parent record is not a tool_call", runId, 0);
+    }
+    const parentStart = parentRecords[0];
+    if (
+      start &&
+      parentStart &&
+      parseTimestamp(start.occurred_at) < parseTimestamp(parentStart.occurred_at)
+    ) {
+      throw new VerificationError(
+        "parent.time",
+        "run_start is before the parent run's run_start",
+        runId,
+        0,
+      );
+    }
+    const parentBinding = parentRecords[0]?.extensions?.["sealedrun.delegation"];
+    if (parentBinding?.["hash"] !== parent.delegationHash) {
+      throw new VerificationError(
+        "parent.delegation",
+        "parent_delegation_hash differs from parent run",
+        runId,
+        0,
+      );
+    }
+    const problem = scopeWithin(
+      parseScope(boundDelegation(records, delegations)?.scope),
+      parseScope(boundDelegation(parentRecords, delegations)?.scope),
+    );
+    if (problem !== undefined) throw new VerificationError("parent.scope", problem, runId, 0);
+  }
+  return unresolved;
+}
+
+function boundDelegation(
+  records: SealedRunRecord[],
+  delegations: Map<string, Delegation>,
+): Delegation | undefined {
+  const binding = records[0]?.extensions?.["sealedrun.delegation"];
+  return binding ? delegations.get(String(binding["delegation_id"])) : undefined;
 }

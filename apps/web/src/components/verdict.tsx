@@ -3,6 +3,8 @@
 import { Check, Copy, ShieldAlert, ShieldCheck, ShieldX } from "lucide-react";
 import { useState } from "react";
 
+import type { BundleReport } from "@sealedrun/core";
+
 import type { LocalVerification } from "@/lib/inspect";
 
 /** Colours and icon for each verdict: verified, intact but signer unknown, failed. */
@@ -40,6 +42,7 @@ export function Verdict({ verification }: { verification: LocalVerification }) {
             {failure &&
               `Check "${failure.check}"${failure.seq !== undefined ? ` at step #${failure.seq}` : ""}: ${failure.message}`}
           </p>
+          {report && <Mandate report={report} />}
           {report?.payloadsOmitted && (
             <p className="mt-2 max-w-[70ch] text-sm" data-testid="payloads-omitted">
               Payloads omitted by the exporter: the records carry every body hash and size, but the
@@ -68,6 +71,52 @@ export function Verdict({ verification }: { verification: LocalVerification }) {
         </div>
       </div>
     </section>
+  );
+}
+
+/**
+ * What the verifier found beyond integrity (SPEC 6.4, 6.5, 10.9): steps outside the
+ * delegation's scope, receipts from the systems the agent touched, and runs whose parent run is
+ * in another bundle.
+ */
+function Mandate({ report }: { report: BundleReport }) {
+  const findings = report.runs.flatMap((run) =>
+    run.findings.map((finding) => ({ runId: run.runId, ...finding })),
+  );
+  const proxy = report.runs.reduce((n, run) => n + run.receiptsProxy, 0);
+  const self = report.runs.reduce((n, run) => n + run.receiptsSelfReported, 0);
+  const several = report.runs.length > 1;
+  return (
+    <div className="mt-3 space-y-2 text-sm" data-testid="mandate">
+      <p className={findings.length > 0 ? "text-warn" : ""}>
+        {findings.length === 0
+          ? "Every step stayed within the delegation's scope."
+          : `${findings.length} step${findings.length === 1 ? "" : "s"} outside the delegation's scope:`}
+      </p>
+      {findings.length > 0 && (
+        <ul className="list-disc space-y-0.5 pl-5">
+          {findings.map((f) => (
+            <li key={`${f.runId}/${f.seq}/${f.check}`}>
+              {several && <span className="hash mr-1">{f.runId.slice(0, 8)}</span>}
+              step #{f.seq} <span className="font-mono">{f.check}</span>: {f.reason}
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="text-ink-soft">
+        Receipts from the systems touched: {proxy} seen by the recorder, {self} reported by the
+        agent.
+        {proxy + self === 0 && " None: the record is the agent's account alone."}
+      </p>
+      {report.parentsUnresolved.length > 0 && (
+        <p className="text-warn" data-testid="parents-unresolved">
+          {report.parentsUnresolved.length === 1
+            ? "This run was started by a run in another bundle; "
+            : `${report.parentsUnresolved.length} runs were started by runs in other bundles; `}
+          the link is checked only when both bundles are verified together.
+        </p>
+      )}
+    </div>
   );
 }
 

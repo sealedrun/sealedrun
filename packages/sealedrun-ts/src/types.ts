@@ -56,6 +56,8 @@ export type Delegation = Sealed & {
   principal_keys: Record<string, string>;
   agent_id: string;
   agent_keys: Record<string, string>;
+  /** Limits on the agent; the keys of SPEC 6.5 are checked by verifiers. */
+  scope?: Record<string, Json>;
   not_before: string;
   not_after: string;
 };

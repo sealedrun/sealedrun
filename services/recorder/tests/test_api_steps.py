@@ -371,3 +371,29 @@ def test_self_reported_cloud_labels_are_counted_apart(
     summary = client.get(f"/api/runs/{run_id}", headers=api).json()
     assert summary["labels_sent_to_cloud"] == {"nda": 1}
     assert summary["labels_self_reported"] == {"nda": 2}
+
+
+def test_step_receipt_is_kept_and_proxy_claim_refused(
+    client: TestClient, api: dict[str, str]
+) -> None:
+    own = {"kind": "git_commit", "observed_by": "self_reported", "ref": "9fceb02"}
+    step = _step(extensions={"sealedrun.receipt": own})
+    reply = _post(client, api, step)
+    assert reply.status_code == 201, reply.text
+    assert reply.json()["extensions"]["sealedrun.receipt"] == own
+    claim = _step(extensions={"sealedrun.receipt": {**own, "observed_by": "proxy"}})
+    reply = _post(client, api, claim)
+    assert reply.status_code == 400
+    assert "sealedrun.receipt/observed_by" in reply.json()["detail"]
+
+
+def test_parent_header_on_a_step_opens_a_linked_run(
+    client: TestClient, api: dict[str, str]
+) -> None:
+    link = "0192b3c4-5d6e-7f80-9a1b-0000000000a7/0192b3c4-5d6e-7f80-9a1b-000000000701/" + "c" * 64
+    reply = _post(client, api, _step(), **{"X-SealedRun-Run": "child", "X-SealedRun-Parent": link})
+    assert reply.status_code == 201, reply.text
+    [run] = [r for r in _runs(client) if r.run_label == "child"]
+    start = _records(client, run.run_id)[0]
+    assert start["extensions"]["sealedrun.delegation"]["parent_run_id"] == link.split("/")[0]
+    assert _post(client, api, _step(), **{"X-SealedRun-Parent": "x/y/z"}).status_code == 400

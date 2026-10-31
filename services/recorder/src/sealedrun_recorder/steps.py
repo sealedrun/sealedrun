@@ -171,8 +171,9 @@ def _mark_self_reported(extensions: dict[str, Any]) -> dict[str, Any]:
 
     A step is the caller's own account of what happened. It must not look like something the
     recorder saw itself (`sealedrun.proxy`, `sealedrun.otel`), a witness receipt, a delegation
-    binding or an import, and a label on a step can only have been asserted by the caller
-    (`manual`, `header`), never found by a classifier.
+    binding or an import, a label on a step can only have been asserted by the caller
+    (`manual`, `header`), never found by a classifier, and its receipt (SPEC 10.9) can only be
+    `self_reported`.
     """
     reserved = sorted(RESERVED_EXTENSIONS & extensions.keys())
     if reserved:
@@ -184,6 +185,11 @@ def _mark_self_reported(extensions: dict[str, Any]) -> dict[str, Any]:
             if source not in STEP_LABEL_SOURCES:
                 allowed = ", ".join(sorted(STEP_LABEL_SOURCES))
                 raise StepError(f"extensions/sealedrun.labels/{label}: source must be {allowed}")
+    receipt = extensions.get("sealedrun.receipt")
+    if isinstance(receipt, dict) and receipt.get("observed_by") != "self_reported":
+        raise StepError(
+            "extensions/sealedrun.receipt/observed_by: a step's receipt is self_reported"
+        )
     own = extensions.get(STEP_EXTENSION)
     marker = {**(own if isinstance(own, dict) else {}), "source": "self_reported"}
     return {**extensions, STEP_EXTENSION: marker}
