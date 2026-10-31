@@ -1,0 +1,57 @@
+{
+  "denied-label.jsonl": {
+    "findings": [
+      {
+        "check": "scope.label",
+        "seq": 1
+      }
+    ],
+    "strict": {
+      "check": "scope.label",
+      "seq": 1
+    }
+  },
+  "in-scope.jsonl": {
+    "findings": []
+  },
+  "location-not-allowed.jsonl": {
+    "findings": [
+      {
+        "check": "scope.target",
+        "seq": 1
+      },
+      {
+        "check": "scope.location",
+        "seq": 1
+      }
+    ],
+    "strict": {
+      "check": "scope.target",
+      "seq": 1
+    }
+  },
+  "target-not-allowed.jsonl": {
+    "findings": [
+      {
+        "check": "scope.target",
+        "seq": 1
+      }
+    ],
+    "strict": {
+      "check": "scope.target",
+      "seq": 1
+    }
+  },
+  "too-many-records.jsonl": {
+    "findings": [
+      {
+        "check": "scope.max_records",
+        "seq": 4
+      }
+    ],
+    "strict": {
+      "check": "scope.max_records",
+      "seq": 4
+    }
+  }
+}

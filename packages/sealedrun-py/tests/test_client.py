@@ -247,3 +247,35 @@ def test_record_gate_links_the_decision(fake: FakeRecorder, recorder: Recorder) 
     assert fake.posts[1][1]["outcome"] == "pending"
     with pytest.raises(ValueError, match="approve, block, review"):
         recorder.record_gate("0192b3c4-5d6e-7f80-9a1b-000000000201", "maybe")
+
+
+def test_record_with_receipt_marks_it_self_reported(fake: FakeRecorder, recorder: Recorder) -> None:
+    from sealedrun import receipt_for
+
+    recorder.record(
+        "tool_call",
+        "git/commit",
+        provider="git",
+        receipt=receipt_for("git_commit", ref="9fceb02", issuer="github.com/acme/repo"),
+        extensions={
+            "sealedrun.mcp": {"server": "git", "transport": "stdio", "method": "tools/call"}
+        },
+    )
+    [(_, body)] = fake.posts
+    assert body["extensions"]["sealedrun.receipt"] == {
+        "kind": "git_commit",
+        "ref": "9fceb02",
+        "issuer": "github.com/acme/repo",
+        "observed_by": "self_reported",
+    }
+    assert body["extensions"]["sealedrun.mcp"]["server"] == "git"
+
+
+def test_parent_header_is_sent_and_validated(fake: FakeRecorder) -> None:
+    link = "0192b3c4-5d6e-7f80-9a1b-0000000000a7/0192b3c4-5d6e-7f80-9a1b-000000000701/" + "c" * 64
+    recorder = Recorder(fake.url, token="t", run="job", parent=link)
+    recorder.record("tool_call", "x")
+    [(headers, _)] = fake.posts
+    assert headers["x-sealedrun-parent"] == link
+    with pytest.raises(ValueError, match="parent must be"):
+        Recorder(fake.url, parent="not-a-link")

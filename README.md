@@ -34,6 +34,39 @@ as a bundle that any third party verifies offline.
 
 Read [SPEC.md](SPEC.md) for the format and [TRUST.md](TRUST.md) for what a bundle proves.
 
+## What the verifier answers
+
+A signed, chained log shows that nobody edited it afterwards. An auditor asks three more
+questions, and `python -m sealedrun bundle.zip` answers them without reading the records:
+
+- **Did the agent stay within its mandate?** The Principal writes what the agent may touch into
+  the delegation `scope` (targets with `*` masks, locations, denied labels, record budget). The
+  verifier checks every record against it and lists each step outside it with its seq and
+  check (`scope.target`, `scope.location`, `scope.label`, `scope.max_records`). Findings do
+  not break verification; `--strict-scope` makes the first one fail it.
+- **Does the changed system confirm the step?** Each proxied call carries a `proxy` receipt the
+  recorder wrote from the upstream's reply (digest, status, host). Steps reported from your own
+  code attach what the target returned (commit sha, file digest, transaction id) as a
+  `self_reported` receipt. The verifier checks the receipts against the records and counts them
+  by observer; the auditor compares `ref` and `digest` with the target system's own log.
+- **Who allowed it?** Every run is bound to a Principal-signed delegation, and the report says
+  whether that Principal matched a trusted id obtained out of band.
+- **Is the chain across agents one chain?** When agent A asks agent B over the A2A proxy, the
+  recorder tells B which record asked (`X-SealedRun-Parent`), B's recorder writes it into the
+  run it opens, and the verifier binds the two runs: the asking record exists, B started after
+  A's run, B's delegation is within A's scope. A → B → C → D becomes one provable sequence, and
+  a parent held in another bundle is reported as unresolved until both are verified together.
+
+```text
+OK bundle 0192b3c4-…: 1 run(s), principal trusted
+  run 0192b3c4-…: 9 records, complete, anchors 1, witness verified 1, scope findings 1, receipts 7 proxy / 1 self-reported
+    seq 5 scope.target: target filesystem/write_file is not in allowed_targets
+```
+
+Set the scope on the recorder with `SEALEDRUN_SCOPE` (JSON; the delegation is reissued when it
+changes), for example `{"allowed_locations":["local"],"denied_labels":["pii","secret"]}`.
+[TRUST.md](TRUST.md) says what a receipt proves and what it does not.
+
 ## Five minutes to a verified run
 
 ```bash
@@ -438,6 +471,30 @@ await recorder.step(
 const fetchPage = recorder.wrap(fetchPageImpl, "fetch_page", { location: "cloud" });
 ```
 
+When a step changes a system outside the recorder's view, attach what that system returned, so
+the auditor can check the record against its log (SPEC 10.9):
+
+```python
+from sealedrun import receipt_for
+
+recorder.record(
+    "tool_call",
+    "git/commit",
+    provider="git",
+    response=output,
+    receipt=receipt_for("git_commit", ref=sha, issuer="github.com/acme/repo"),
+)
+```
+
+```ts
+import { receiptFor } from "@sealedrun/core";
+
+await recorder.record("tool_call", "out.txt", {
+  provider: "fs",
+  receipt: receiptFor("file_hash", { ref: "/data/out.txt", data: bytesAfterWrite }),
+});
+```
+
 A step whose body throws is recorded with outcome `error` and the error is rethrown. A recorder
 that refuses a step (schema) or cannot be reached raises `RecorderError`; unlike the MCP wrapper
 there is no fail-open, because the caller asked for the record.
@@ -583,6 +640,7 @@ On top of that sits one policy rule, off by default:
 
 ```bash
 SEALEDRUN_POLICY_BLOCK_TO_CLOUD=["nda","secret"]   # labels that must not reach a cloud target
+SEALEDRUN_SCOPE={"allowed_locations":["local"]}    # what the delegation allows; verifiers report the rest
 ```
 
 A call that carries one of those labels to an upstream, MCP server or A2A agent whose

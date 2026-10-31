@@ -92,8 +92,8 @@ def keys_for(prefix: str, profile: str = "sealedrun-hybrid-1") -> PrivateKeySet:
 class Clock:
     """Deterministic clock: each call returns a time one second after the previous one."""
 
-    def __init__(self) -> None:
-        self.current = START
+    def __init__(self, start: datetime = START) -> None:
+        self.current = start
 
     def __call__(self) -> datetime:
         """Advance by one second and return the new time; the first call gives START + 1 s."""
@@ -580,6 +580,353 @@ def negative_chains(
     moved[1] = seal(moved[1], DOMAIN_RECORD, agent)
     cases["context-on-llm-call"] = (moved, {"check": "context", "seq": 1})
 
+    # Receipts (SPEC 10.9), each re-sealed by the agent so that only the receipt check catches it.
+    receipts = receipt_run(agent, delegation)
+    wrong_digest = copy.deepcopy(receipts)
+    wrong_digest[1]["extensions"]["sealedrun.receipt"]["digest"] = payload_digest(
+        delegation["hash_alg"], b"another body"
+    )
+    wrong_digest[1] = seal(wrong_digest[1], DOMAIN_RECORD, agent)
+    cases["receipt-not-response"] = (wrong_digest, {"check": "receipt", "seq": 1})
+
+    claims_proxy = copy.deepcopy(receipts)
+    claims_proxy[2]["extensions"]["sealedrun.receipt"] = {
+        "kind": "http_response",
+        "observed_by": "proxy",
+        "digest": payload_digest(delegation["hash_alg"], b"x"),
+    }
+    claims_proxy[2] = seal(claims_proxy[2], DOMAIN_RECORD, agent)
+    cases["receipt-proxy-without-proxy"] = (claims_proxy, {"check": "receipt", "seq": 2})
+
+    self_on_proxy = copy.deepcopy(receipts)
+    self_on_proxy[1]["extensions"]["sealedrun.receipt"] = {
+        "kind": "opaque",
+        "observed_by": "self_reported",
+        "ref": "token",
+    }
+    self_on_proxy[1] = seal(self_on_proxy[1], DOMAIN_RECORD, agent)
+    cases["receipt-self-reported-on-proxy"] = (self_on_proxy, {"check": "receipt", "seq": 1})
+
+    return cases
+
+
+RECEIPT_RUN_ID = UUID_PREFIX + "0000000000a6"
+
+
+def receipt_run(agent: PrivateKeySet, delegation: dict[str, Any]) -> list[dict[str, Any]]:
+    """Write a run with a `proxy` receipt and a self-reported `git_commit` receipt (SPEC 10.9)."""
+    alg = delegation["hash_alg"]
+    writer = RunWriter(
+        agent, delegation, run_id=RECEIPT_RUN_ID, clock=Clock(), id_factory=Ids(start=0x600)
+    )
+    writer.start()
+    payload = payload_ref(alg, PAYLOADS["chat_request"], PAYLOADS["chat_response"])
+    writer.append(
+        "llm_call",
+        target={
+            "type": "model",
+            "name": "gpt-4.1",
+            "endpoint": "https://api.openai.com/v1/chat/completions",
+            "location": "cloud",
+            "provider": "openai",
+        },
+        payload=payload,
+        extensions={
+            "sealedrun.llm": {"model": "gpt-4.1", "provider": "openai"},
+            "sealedrun.proxy": {
+                "upstream": "openai",
+                "dialect": "openai",
+                "operation": "chat",
+                "status": 200,
+            },
+            "sealedrun.receipt": {
+                "kind": "http_response",
+                "observed_by": "proxy",
+                "digest": payload["response_hash"],
+                "digest_alg": alg,
+                "issuer": "api.openai.com",
+                "status": 200,
+            },
+        },
+    )
+    writer.append(
+        "tool_call",
+        target={"type": "tool", "name": "git/commit", "location": "local", "provider": "git"},
+        extensions={
+            "sealedrun.step": {"source": "self_reported", "via": "sealedrun-py"},
+            "sealedrun.receipt": {
+                "kind": "git_commit",
+                "observed_by": "self_reported",
+                "ref": "9fceb02d0ae598e95dc970b74767f19372d61af8",
+                "issuer": "github.com/acme/repo",
+            },
+        },
+    )
+    writer.end()
+    return writer.records
+
+
+PARENT_RUN_ID = UUID_PREFIX + "0000000000a7"
+CHILD_RUN_ID = UUID_PREFIX + "0000000000a8"
+CHILD_DELEGATION_ID = UUID_PREFIX + "0000000000d8"
+PARENT_SCOPE: dict[str, Any] = {
+    "allowed_locations": ["local", "cloud"],
+    "denied_labels": ["secret"],
+}
+
+
+def parent_child_runs(
+    principal: PrivateKeySet, agent: PrivateKeySet
+) -> dict[str, tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any], dict[str, Any]]]:
+    """Build a parent run that asks another agent over A2A and the child run it started.
+
+    Maps a case name to (parent records, child records, parent delegation, child delegation)
+    and the outcome a bundle holding both must give (SPEC 6.4): the valid pair, and one
+    broken variant per `parent.*` check.
+    """
+    not_before, not_after = START - timedelta(days=1), START + timedelta(days=30)
+    parent_delegation = create_delegation(
+        principal,
+        agent.public,
+        scope=PARENT_SCOPE,
+        delegation_id=DELEGATION_ID,
+        not_before=not_before,
+        not_after=not_after,
+    )
+
+    def child_delegation(scope: dict[str, Any]) -> dict[str, Any]:
+        return create_delegation(
+            principal,
+            agent.public,
+            scope=scope,
+            delegation_id=CHILD_DELEGATION_ID,
+            not_before=not_before,
+            not_after=not_after,
+        )
+
+    def parent_run(kind: str = "tool_call") -> list[dict[str, Any]]:
+        writer = RunWriter(
+            agent, parent_delegation, run_id=PARENT_RUN_ID, clock=Clock(), id_factory=Ids(0x700)
+        )
+        writer.start()
+        target = {
+            "type": "tool",
+            "name": "planner/message",
+            "location": "cloud",
+            "provider": "a2a:planner",
+        }
+        extensions = {
+            "sealedrun.a2a": {
+                "agent": "planner",
+                "method": "SendMessage",
+                "state": "TASK_STATE_COMPLETED",
+                "protocol_version": "1.0",
+            }
+        }
+        if kind == "tool_call":
+            writer.append(kind, target=target, extensions=extensions)
+        else:
+            writer.append(kind, target={"type": "none", "name": "note"})
+        writer.end()
+        return writer.records
+
+    def child_run(
+        delegation: dict[str, Any],
+        parent: list[dict[str, Any]],
+        *,
+        record_id: str | None = None,
+        delegation_hash: str | None = None,
+        start_offset: int = 10,
+    ) -> list[dict[str, Any]]:
+        writer = RunWriter(
+            agent,
+            delegation,
+            run_id=CHILD_RUN_ID,
+            clock=Clock(START + timedelta(seconds=start_offset)),
+            id_factory=Ids(0x710),
+        )
+        writer.start(
+            parent={
+                "run_id": PARENT_RUN_ID,
+                "record_id": record_id or parent[1]["record_id"],
+                "delegation_hash": delegation_hash
+                or parent[0]["extensions"]["sealedrun.delegation"]["hash"],
+            }
+        )
+        writer.append(
+            "llm_call",
+            target={
+                "type": "model",
+                "name": "qwen2.5:14b",
+                "location": "local",
+                "provider": "ollama",
+            },
+        )
+        writer.end()
+        return writer.records
+
+    narrow = child_delegation({"allowed_locations": ["local"], "denied_labels": ["secret", "pii"]})
+    wide = child_delegation(
+        {"allowed_locations": ["local", "cloud", "unknown"], "denied_labels": ["secret"]}
+    )
+    parent = parent_run()
+    cases = {}
+    cases["parent-child"] = (parent, child_run(narrow, parent), parent_delegation, narrow)
+    cases["parent-wrong-record"] = (
+        parent,
+        child_run(narrow, parent, record_id=parent[0]["record_id"][:-1] + "f"),
+        parent_delegation,
+        narrow,
+    )
+    noted = parent_run("note")
+    cases["parent-wrong-kind"] = (noted, child_run(narrow, noted), parent_delegation, narrow)
+    cases["parent-wrong-time"] = (
+        parent,
+        child_run(narrow, parent, start_offset=-30),
+        parent_delegation,
+        narrow,
+    )
+    cases["parent-wrong-delegation"] = (
+        parent,
+        child_run(narrow, parent, delegation_hash="a" * 64),
+        parent_delegation,
+        narrow,
+    )
+    cases["parent-wider-scope"] = (parent, child_run(wide, parent), parent_delegation, wide)
+    return cases
+
+
+SCOPE_RUN_ID = UUID_PREFIX + "0000000000a5"
+SCOPE_DELEGATION_ID = UUID_PREFIX + "0000000000d5"
+
+
+def scoped_delegation(principal: PrivateKeySet, agent: PrivateKeySet) -> dict[str, Any]:
+    """Create a delegation whose scope uses every structured key of SPEC 6.5."""
+    return create_delegation(
+        principal,
+        agent.public,
+        not_before=START - timedelta(days=1),
+        not_after=START + timedelta(days=30),
+        agent_name="scoped-reader",
+        scope={
+            "allowed_targets": [
+                {"type": "tool", "name": "filesystem/read_*", "provider": "mcp:filesystem"},
+                {"type": "model", "provider": "ollama", "location": "local"},
+            ],
+            "allowed_locations": ["local"],
+            "denied_labels": ["pii", "secret"],
+            "max_records": 4,
+            "budget_usd": 10,
+        },
+        delegation_id=SCOPE_DELEGATION_ID,
+    )
+
+
+def scope_runs(
+    agent: PrivateKeySet, delegation: dict[str, Any]
+) -> dict[str, tuple[list[dict[str, Any]], dict[str, Any]]]:
+    """Build one run inside the scope and one run per finding kind of SPEC 6.5.
+
+    Maps a case name to its records and the findings (check and seq) a verifier reports, with
+    the check at which strict mode fails.
+    """
+    local_model = {
+        "type": "model",
+        "name": "qwen2.5:14b",
+        "location": "local",
+        "provider": "ollama",
+    }
+    read_file = {
+        "type": "tool",
+        "name": "filesystem/read_file",
+        "location": "local",
+        "provider": "mcp:filesystem",
+    }
+
+    def run(start: int, *steps: dict[str, Any]) -> list[dict[str, Any]]:
+        writer = RunWriter(
+            agent, delegation, run_id=SCOPE_RUN_ID, clock=Clock(), id_factory=Ids(start=start)
+        )
+        writer.start()
+        for step in steps:
+            writer.append(step.pop("kind"), **step)
+        writer.end()
+        return writer.records
+
+    cases: dict[str, tuple[list[dict[str, Any]], dict[str, Any]]] = {}
+    cases["in-scope"] = (
+        run(
+            0x500,
+            {"kind": "llm_call", "target": local_model},
+            {"kind": "tool_call", "target": read_file},
+        ),
+        {"findings": []},
+    )
+    cases["target-not-allowed"] = (
+        run(
+            0x510,
+            {
+                "kind": "tool_call",
+                "target": {
+                    "type": "tool",
+                    "name": "filesystem/write_file",
+                    "location": "local",
+                    "provider": "mcp:filesystem",
+                },
+            },
+        ),
+        {
+            "findings": [{"check": "scope.target", "seq": 1}],
+            "strict": {"check": "scope.target", "seq": 1},
+        },
+    )
+    cases["location-not-allowed"] = (
+        run(
+            0x520,
+            {
+                "kind": "llm_call",
+                "target": {
+                    "type": "model",
+                    "name": "gpt-4.1",
+                    "location": "cloud",
+                    "provider": "openai",
+                },
+                "outcome": "blocked",
+                "policy": {
+                    "rule_id": "scoped/local-only",
+                    "decision": "block",
+                    "reason": "target.location=cloud",
+                },
+                "payload": payload_ref(delegation["hash_alg"], PAYLOADS["chat_request"], None),
+            },
+        ),
+        {
+            "findings": [
+                {"check": "scope.target", "seq": 1},
+                {"check": "scope.location", "seq": 1},
+            ],
+            "strict": {"check": "scope.target", "seq": 1},
+        },
+    )
+    cases["denied-label"] = (
+        run(0x530, {"kind": "tool_call", "target": read_file, "data_labels": ["pii", "legal"]}),
+        {
+            "findings": [{"check": "scope.label", "seq": 1}],
+            "strict": {"check": "scope.label", "seq": 1},
+        },
+    )
+    cases["too-many-records"] = (
+        run(
+            0x540,
+            {"kind": "tool_call", "target": read_file},
+            {"kind": "tool_call", "target": read_file},
+            {"kind": "tool_call", "target": read_file},
+        ),
+        {
+            "findings": [{"check": "scope.max_records", "seq": 4}],
+            "strict": {"check": "scope.max_records", "seq": 4},
+        },
+    )
     return cases
 
 
@@ -609,6 +956,7 @@ def bundle_bytes(
     receipt_override: dict[str, Any] | None = None,
     more_runs: list[list[dict[str, Any]]] | None = None,
     payloads_omitted: bool = False,
+    more_delegations: list[dict[str, Any]] | None = None,
 ) -> bytes:
     """Export one run as a bundle with fixed id and creation time and return the zip bytes.
 
@@ -625,7 +973,7 @@ def bundle_bytes(
         out,
         exporter=agent,
         software="sealedrun-vectors/0.1.0",
-        delegations=[delegation],
+        delegations=[delegation, *(more_delegations or [])],
         runs=[records, *(more_runs or [])],
         payloads=payload_map(delegation["hash_alg"]) if with_payloads else {},
         principal=principal,
@@ -926,7 +1274,7 @@ def generate(spec_dir: Path) -> None:
     """
     vectors = spec_dir / "vectors"
     examples = spec_dir / "examples"
-    for sub in ("keys.json", "signatures", "delegations", "records", "chains", "bundle"):
+    for sub in ("keys.json", "signatures", "delegations", "records", "chains", "scope", "bundle"):
         # `anchors/rfc3161-*.json` are captured from real witnesses and are kept; only
         # `anchors/cases.json` is derived from them below.
         target = vectors / sub
@@ -1007,6 +1355,8 @@ def generate(spec_dir: Path) -> None:
     (vectors / "records" / "context-run.jsonl").write_text(jsonl(context_run))
     decisions = decision_run(agent, delegation)
     (vectors / "records" / "decision-run.jsonl").write_text(jsonl(decisions))
+    receipts = receipt_run(agent, delegation)
+    (vectors / "records" / "receipt-run.jsonl").write_text(jsonl(receipts))
     dump(
         vectors / "records" / "expected.json",
         {
@@ -1018,6 +1368,7 @@ def generate(spec_dir: Path) -> None:
                 ("valid-run.jsonl", run.records),
                 ("context-run.jsonl", context_run),
                 ("decision-run.jsonl", decisions),
+                ("receipt-run.jsonl", receipts),
             )
         },
     )
@@ -1033,6 +1384,16 @@ def generate(spec_dir: Path) -> None:
             entry["delegation"] = f"{name}.delegation.json"
         expected[f"{name}.jsonl"] = entry
     dump(chains / "expected.json", expected)
+
+    scope_dir = vectors / "scope"
+    scope_dir.mkdir(parents=True)
+    scoped = scoped_delegation(principal, agent)
+    dump(scope_dir / "scoped.delegation.json", scoped)
+    scope_expected: dict[str, Any] = {}
+    for name, (records, outcome) in scope_runs(agent, scoped).items():
+        (scope_dir / f"{name}.jsonl").write_text(jsonl(records))
+        scope_expected[f"{name}.jsonl"] = outcome
+    dump(scope_dir / "expected.json", scope_expected)
 
     bundle_dir = vectors / "bundle"
     bundle_dir.mkdir(parents=True)
@@ -1110,9 +1471,50 @@ def generate(spec_dir: Path) -> None:
             more_runs=[second_run(agent, delegation, reuse_ids=False)],
         )
     )
+    pairs = parent_child_runs(principal, agent)
+    parent_expected: dict[str, Any] = {}
+    for name, (parent_records, child_records, parent_delegation, child_delegation) in pairs.items():
+        (bundle_dir / f"{name}.zip").write_bytes(
+            bundle_bytes(
+                agent,
+                principal,
+                parent_delegation,
+                parent_records,
+                with_payloads=False,
+                more_runs=[child_records],
+                more_delegations=[child_delegation],
+            )
+        )
+        if name == "parent-child":
+            parent_expected[f"{name}.zip"] = {
+                "ok": True,
+                "runs": 2,
+                "records": len(parent_records),
+                "complete": True,
+                "parents_unresolved": [],
+            }
+        else:
+            parent_expected[f"{name}.zip"] = {
+                "ok": False,
+                "check": "parent."
+                + name.split("-", 2)[2].replace("wrong-", "").replace("wider-", ""),
+                "seq": 0,
+            }
+    _, child_records, _, child_delegation = pairs["parent-child"]
+    (bundle_dir / "parent-unresolved.zip").write_bytes(
+        bundle_bytes(agent, principal, child_delegation, child_records, with_payloads=False)
+    )
+    parent_expected["parent-unresolved.zip"] = {
+        "ok": True,
+        "runs": 1,
+        "records": len(child_records),
+        "complete": True,
+        "parents_unresolved": [CHILD_RUN_ID],
+    }
     dump(
         bundle_dir / "expected.json",
         {
+            **parent_expected,
             "valid.zip": {
                 "ok": True,
                 "runs": 1,

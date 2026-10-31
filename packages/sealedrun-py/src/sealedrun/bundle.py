@@ -22,7 +22,7 @@ from sealedrun.schema import validate
 from sealedrun.signing import DOMAIN_MANIFEST, check_hash, check_signatures, countersign, seal
 from sealedrun.timeutil import format_timestamp, now
 from sealedrun.trust import Witness
-from sealedrun.verify import RunReport, verify_run
+from sealedrun.verify import RunReport, check_parent_links, verify_run
 
 SPEC_VERSION = "0.1"
 MANIFEST = "manifest.json"
@@ -59,6 +59,8 @@ class BundleReport:
             trust anchor (SPEC 13.2).
         payloads_omitted: True when the exporter left every payload body out on purpose
             (`payloads: "omitted"` in the manifest); the bodies were not checked.
+        parents_unresolved: Runs whose `run_start` names a parent run that is not in this
+            bundle (SPEC 6.4); verify that bundle together with this one to close the link.
     """
 
     bundle_id: str
@@ -67,6 +69,7 @@ class BundleReport:
     exporter_agent_id: str
     principal_trusted: bool
     payloads_omitted: bool = False
+    parents_unresolved: list[str] = field(default_factory=list)
 
 
 def _jsonl(records: list[dict[str, Any]]) -> bytes:
@@ -309,13 +312,14 @@ def verify_bundle(
     *,
     witnesses: list[Witness] | None = None,
     strict_witness: bool = False,
+    strict_scope: bool = False,
 ) -> BundleReport:
     """Verify a bundle per SPEC 13.2.
 
     The keys inside a bundle are not a root of trust. Pass the principal ids obtained out of band
     as ``trusted_principals``; without them the report has ``principal_trusted=False`` and only
-    says the bundle is internally consistent. ``witnesses`` and ``strict_witness`` go to
-    `verify_run` for the anchor receipts.
+    says the bundle is internally consistent. ``witnesses``, ``strict_witness`` and
+    ``strict_scope`` go to `verify_run` for the anchor receipts and the scope findings.
     """
     manifest = bundle.manifest
     if not check_hash(manifest):
@@ -358,6 +362,7 @@ def verify_bundle(
             expected_prev_hash=expected_prev,
             witnesses=witnesses,
             strict_witness=strict_witness,
+            strict_scope=strict_scope,
         )
         if report.record_count != entry["record_count"] or report.last_hash != entry["last_hash"]:
             raise VerificationError("manifest", "run entry does not match records", entry["run_id"])
@@ -372,6 +377,7 @@ def verify_bundle(
         reports.append(report)
     _check_record_ids(bundle)
     _check_anchor_files(bundle)
+    unresolved = check_parent_links(bundle.runs, bundle.delegations)
     return BundleReport(
         manifest["bundle_id"],
         reports,
@@ -379,6 +385,7 @@ def verify_bundle(
         manifest["exporter"]["agent_id"],
         trusted_principals is not None,
         payloads_omitted=omitted,
+        parents_unresolved=unresolved,
     )
 
 

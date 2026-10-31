@@ -49,11 +49,19 @@ class LiveRuns:
         """Keys and delegation the runs are signed under."""
         return self._identity
 
-    def start(self, *, extensions: dict[str, Any] | None = None) -> dict[str, Any]:
-        """Open a new run: write its `run_start` record and return that record."""
+    def start(
+        self,
+        *,
+        extensions: dict[str, Any] | None = None,
+        parent: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        """Open a new run: write its `run_start` record and return that record.
+
+        `parent` names the step of another run that asked for this one (SPEC 6.4).
+        """
         writer = RunWriter(self._identity.agent, self._identity.delegation)
         with self._lock(writer.run_id):
-            record = writer.start(extensions=extensions or {})
+            record = writer.start(extensions=extensions or {}, parent=parent)
             with self._sessions() as session:
                 session.add(
                     RunRow(
@@ -104,10 +112,14 @@ class LiveRuns:
         request_media_type: str | None = None,
         response_media_type: str | None = None,
         check: bool = False,
+        receipt: dict[str, Any] | None = None,
+        record_id: str | None = None,
         **fields: Any,
     ) -> dict[str, Any]:
         """Seal one record onto the run and store it with its payload bodies.
 
+        `receipt` is the start of a `proxy` receipt (SPEC 10.9: `issuer`, `status`); it is
+        completed with the digest of `response` and written only when a response was received.
         `fields` go to `RunWriter.preview`. With `check` the unsigned document is validated
         against the record schema first, so a caller-supplied record that would not verify
         never enters the chain. Raises LiveRunError when the run is unknown, closed, imported
@@ -125,8 +137,20 @@ class LiveRuns:
                     response_media_type=response_media_type,
                 )
             _check_target(target)
+            if receipt is not None and payload is not None and response is not None:
+                extensions = dict(fields.get("extensions") or {})
+                extensions["sealedrun.receipt"] = {
+                    **receipt,
+                    "kind": "http_response",
+                    "observed_by": "proxy",
+                    "digest": payload["response_hash"],
+                    "digest_alg": writer.hash_alg,
+                }
+                fields["extensions"] = extensions
             try:
-                doc = writer.preview(kind, target=target, payload=payload, **fields)
+                doc = writer.preview(
+                    kind, target=target, payload=payload, record_id=record_id, **fields
+                )
                 if check:
                     problems = _schema_problems(doc)
                     if problems:

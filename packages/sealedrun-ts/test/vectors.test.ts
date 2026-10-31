@@ -20,6 +20,11 @@ import {
   verifyOne,
   verifyRun,
   b64urlEncode,
+  globMatch,
+  parseScope,
+  scopeWithin,
+  parentOf,
+  checkParentLinks,
 } from "../src/index.js";
 
 const VECTORS = join(import.meta.dirname, "..", "..", "..", "spec", "vectors");
@@ -153,6 +158,33 @@ describe("context run", () => {
   });
 });
 
+describe("receipt run", () => {
+  test("verifies and counts receipts by observer", () => {
+    const records = readRecords("records", "receipt-run.jsonl");
+    const report = verifyRun(records, delegationMap(validDelegation()));
+    expect(report.complete).toBe(true);
+    expect(report.receiptsProxy).toBe(1);
+    expect(report.receiptsSelfReported).toBe(1);
+    const receipt = records[1]!.extensions!["sealedrun.receipt"]!;
+    expect(receipt["digest"]).toBe(records[1]!.payload!.response_hash);
+  });
+});
+
+describe("parent links", () => {
+  test("the parent-child bundle resolves and names the asking record", () => {
+    const data = new Uint8Array(readFileSync(join(VECTORS, "bundle", "parent-child.zip")));
+    const bundle = readBundle(data);
+    const [parentId, childId] = [...bundle.runs.keys()];
+    const child = bundle.runs.get(childId!)!;
+    const link = parentOf(child)!;
+    expect(link.runId).toBe(parentId);
+    expect(parentOf(bundle.runs.get(parentId!)!)).toBeUndefined();
+    expect(checkParentLinks(bundle.runs, bundle.delegations)).toEqual([]);
+    const alone = new Map([[childId!, child]]);
+    expect(checkParentLinks(alone, bundle.delegations)).toEqual([childId]);
+  });
+});
+
 describe("negative chains", () => {
   type Case = { check: string; seq: number; delegation?: string };
   const expected = readJson<Record<string, Case>>("chains", "expected.json");
@@ -169,6 +201,101 @@ describe("negative chains", () => {
   });
 });
 
+describe("scope", () => {
+  type Case = {
+    findings: { check: string; seq: number }[];
+    strict?: { check: string; seq: number };
+  };
+  const expected = readJson<Record<string, Case>>("scope", "expected.json");
+  const scoped = () => readJson<Delegation>("scope", "scoped.delegation.json");
+  test.each(Object.keys(expected))("%s", (name) => {
+    const c = expected[name]!;
+    const records = readRecords("scope", name);
+    const report = verifyRun(records, delegationMap(scoped()));
+    expect(report.complete).toBe(true);
+    expect(report.findings.map((f) => ({ check: f.check, seq: f.seq }))).toEqual(c.findings);
+    if (!c.strict) {
+      expect(verifyRun(records, delegationMap(scoped()), { strictScope: true }).findings).toEqual(
+        [],
+      );
+      return;
+    }
+    expectFailure(
+      () => verifyRun(records, delegationMap(scoped()), { strictScope: true }),
+      c.strict.check,
+      c.strict.seq,
+    );
+  });
+  test("the reference run is inside its delegation's scope", () => {
+    const report = verifyRun(
+      readRecords("records", "valid-run.jsonl"),
+      delegationMap(validDelegation()),
+    );
+    expect(report.findings).toEqual([]);
+  });
+  test("a malformed structured key fails with schema", () => {
+    expect(() => parseScope({ max_records: 0 })).toThrow("max_records");
+    expect(() => parseScope({ allowed_targets: [{}] })).toThrow("non-empty");
+    expect(() => parseScope({ denied_labels: [1] })).toThrow("denied_labels");
+    expect(parseScope(undefined).deniedLabels.size).toBe(0);
+    expect(parseScope({ budget_usd: 10 }).allowedTargets).toBeUndefined();
+  });
+  test("a child scope must stay within its parent's", () => {
+    const parent = parseScope({
+      allowed_targets: [
+        { type: "tool", name: "filesystem/*" },
+        { type: "model", provider: "ollama" },
+      ],
+      allowed_locations: ["local", "cloud"],
+      denied_labels: ["secret"],
+      max_records: 100,
+    });
+    const ok = {
+      allowed_targets: [{ type: "tool", name: "filesystem/read_*", provider: "mcp:fs" }],
+      allowed_locations: ["local"],
+      denied_labels: ["secret", "pii"],
+      max_records: 50,
+    };
+    expect(scopeWithin(parseScope(ok), parent)).toBeUndefined();
+    expect(scopeWithin(parent, parent)).toBeUndefined();
+    expect(scopeWithin(parseScope({ ...ok, allowed_targets: undefined }), parent)).toContain(
+      "allowed_targets",
+    );
+    expect(
+      scopeWithin(
+        parseScope({ ...ok, allowed_targets: [{ type: "tool", name: "other/*" }] }),
+        parent,
+      ),
+    ).toContain("target");
+    expect(
+      scopeWithin(parseScope({ ...ok, allowed_targets: [{ type: "model" }] }), parent),
+    ).toContain("target");
+    expect(
+      scopeWithin(parseScope({ ...ok, allowed_locations: ["local", "unknown"] }), parent),
+    ).toContain("unknown");
+    expect(scopeWithin(parseScope({ ...ok, denied_labels: ["pii"] }), parent)).toContain("secret");
+    expect(scopeWithin(parseScope({ ...ok, max_records: 101 }), parent)).toContain("max_records");
+    expect(scopeWithin(parseScope({ ...ok, max_records: undefined }), parent)).toContain(
+      "max_records",
+    );
+    expect(scopeWithin(parseScope(undefined), parseScope(undefined))).toBeUndefined();
+  });
+
+  test("glob matching knows only *", () => {
+    expect(globMatch("filesystem/*", "filesystem/read_file")).toBe(true);
+    expect(globMatch("*", "")).toBe(true);
+    expect(globMatch("a*b*c", "a-b-c")).toBe(true);
+    expect(globMatch("a*b*c", "abc")).toBe(true);
+    expect(globMatch("a*c", "ac")).toBe(true);
+    expect(globMatch("a*", "a")).toBe(true);
+    expect(globMatch("*a", "a")).toBe(true);
+    expect(globMatch("ab*ab", "ab")).toBe(false);
+    expect(globMatch("filesystem/read_?", "filesystem/read_x")).toBe(false);
+    expect(globMatch("filesystem/*", "other/read_file")).toBe(false);
+    expect(globMatch("a.b", "axb")).toBe(false);
+  });
+});
+
 describe("bundles", () => {
   type Case = {
     ok: boolean;
@@ -179,6 +306,7 @@ describe("bundles", () => {
     complete?: boolean;
     trusted_principals?: string[];
     payloads_omitted?: boolean;
+    parents_unresolved?: string[];
   };
   const expected = readJson<Record<string, Case>>("bundle", "expected.json");
   test.each(Object.keys(expected))("%s", (name) => {
@@ -192,6 +320,7 @@ describe("bundles", () => {
       expect(report.runs[0]!.recordCount).toBe(c.records);
       expect(report.runs[0]!.complete).toBe(c.complete);
       expect(report.payloadsOmitted).toBe(c.payloads_omitted ?? false);
+      expect(report.parentsUnresolved).toEqual(c.parents_unresolved ?? []);
       return;
     }
     expectFailure(() => verifyBundle(readBundle(data), options), c.check!, c.seq);

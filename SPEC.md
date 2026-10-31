@@ -279,21 +279,21 @@ run with check `context` otherwise.
 
 ### 6.1 Fields
 
-| Field            | Type      | Req | Description                                         |
-| ---------------- | --------- | --- | --------------------------------------------------- |
-| `spec_version`   | string    | M   | `"0.1"`                                             |
-| `delegation_id`  | uuid      | M   |                                                     |
-| `principal_id`   | string    | M   | `kid` or DID of the Principal                       |
-| `principal_keys` | keyset    | M   | Public keys of the Principal (section 4.3)          |
-| `agent_id`       | string    | M   | `kid` of `agent_keys`                               |
-| `agent_keys`     | keyset    | M   | Public keys of the Agent                            |
-| `agent_name`     | string    | O   | Human-readable name                                 |
-| `scope`          | object    | O   | Free-form limits (allowed targets, labels, budgets) |
-| `not_before`     | timestamp | M   |                                                     |
-| `not_after`      | timestamp | M   |                                                     |
-| `hash_alg`       | enum      | M   |                                                     |
-| `hash`           | hex       | M   | Digest of the protected delegation                  |
-| `signatures`     | object    | M   | Principal signatures over `hash`                    |
+| Field            | Type      | Req | Description                                                                         |
+| ---------------- | --------- | --- | ----------------------------------------------------------------------------------- |
+| `spec_version`   | string    | M   | `"0.1"`                                                                             |
+| `delegation_id`  | uuid      | M   |                                                                                     |
+| `principal_id`   | string    | M   | `kid` or DID of the Principal                                                       |
+| `principal_keys` | keyset    | M   | Public keys of the Principal (section 4.3)                                          |
+| `agent_id`       | string    | M   | `kid` of `agent_keys`                                                               |
+| `agent_keys`     | keyset    | M   | Public keys of the Agent                                                            |
+| `agent_name`     | string    | O   | Human-readable name                                                                 |
+| `scope`          | object    | O   | Limits on the Agent; the keys of 6.5 are checked by verifiers, others are free-form |
+| `not_before`     | timestamp | M   |                                                                                     |
+| `not_after`      | timestamp | M   |                                                                                     |
+| `hash_alg`       | enum      | M   |                                                                                     |
+| `hash`           | hex       | M   | Digest of the protected delegation                                                  |
+| `signatures`     | object    | M   | Principal signatures over `hash`                                                    |
 
 ### 6.2 Hash
 
@@ -311,6 +311,74 @@ keys. Self-delegation (`principal_keys == agent_keys`) is valid and marks a sing
 The `run_start` record carries `extensions["sealedrun.delegation"] = { "delegation_id": "…", "hash": "…" }`.
 The delegation object itself is shipped in the bundle. A verifier MUST fail a Run whose
 `run_start` references a delegation that is absent or whose hash differs.
+
+When the run was started on behalf of another run (agent A asked agent B over A2A, and B's
+recorder opened a run for the work), the same extension names the step that asked:
+
+```json
+"sealedrun.delegation": {
+  "delegation_id": "…", "hash": "…",
+  "parent_run_id": "…", "parent_record_id": "…", "parent_delegation_hash": "…"
+}
+```
+
+The three `parent_*` fields come together or not at all. `parent_record_id` is the record in
+`parent_run_id` that made the request (the `tool_call` A's recorder wrote for the A2A call,
+10.4), and `parent_delegation_hash` is the hash of the delegation that run was bound to, so the
+child names the authority it derives from and not only a run id. A recorder that relays an A2A
+call sends these three values to the callee in the request header `X-SealedRun-Parent` as
+`<parent_run_id>/<parent_record_id>/<parent_delegation_hash>`; the callee's recorder accepts
+the same header on the call or step that opens a run (SDKs send it) and writes it into
+`run_start`.
+
+A verifier that holds both runs (one bundle, or several bundles verified together) MUST check,
+and fail the child run with the named check otherwise: `parent.record`, the parent record exists
+in the parent run; `parent.kind`, it is a `tool_call`; `parent.time`, the child's `run_start` is not before the
+parent run's `run_start` (the asking record itself is sealed when the call returns, so it
+normally postdates the child's start); `parent.delegation`, `parent_delegation_hash` equals the hash
+bound in the parent's `run_start`; `parent.scope`, the child's delegation scope is within the
+parent's (6.5: every child `allowed_targets` element is covered by a parent element, i.e. each
+field the parent element names is present in the child element and equal, `name` being equal or
+matched by the parent's pattern read against the child's text; `allowed_locations` a subset;
+`denied_labels` a superset; `max_records` not larger; a key the parent has, the child has). A
+parent run the verifier does not hold is not a failure: the report lists the run as having an
+unresolved parent, and the relying party asks for that bundle. The chain A → B → C → D is then
+one provable sequence of runs, each bound to the record that asked for it, rather than four
+logs with similar timestamps.
+
+### 6.5 Scope check
+
+`scope` carries what the Principal allowed the Agent to touch. Four keys have a defined meaning
+and are checked by every verifier; any other key is free-form and ignored by verifiers.
+
+```json
+"scope": {
+  "allowed_targets": [
+    { "type": "tool", "name": "filesystem/*", "provider": "mcp:filesystem", "location": "local" },
+    { "type": "model", "provider": "openai" }
+  ],
+  "allowed_locations": ["local", "cloud"],
+  "denied_labels": ["pii", "secret"],
+  "max_records": 1000
+}
+```
+
+A record is in scope when, for each key present: some element of `allowed_targets` matches its
+`target` (every field named in the element equals the record's field; `name` is matched with
+`*` standing for any run of characters, and no other wildcard); `target.location` (default
+`unknown`) is in `allowed_locations` when `target.type` is `model`, `tool` or `memory`, the
+types data physically goes to; no label of `data_labels` is in `denied_labels`. An absent key
+is no limit. `max_records` bounds the number of records of the run.
+
+The verifier reports a record outside scope as a **finding** with check `scope.target`,
+`scope.location`, `scope.label` or `scope.max_records`, the `seq` and the `record_id`; a run
+with findings still verifies (`ok` with findings), because a finding says what the Agent did,
+not that the record is forged. The check applies to every record regardless of `outcome`, since
+a blocked attempt is still an attempt; `run_start`, `run_end`, `anchor` and `tombstone` are
+exempt from the target, location and label checks. `scope.max_records` is reported once, at the
+first record past the limit. A structured key with the wrong shape fails the run with check
+`schema`. A verifier MUST offer a strict mode in which the first finding fails the run with the
+finding's check name.
 
 ## 7. Payload storage and deletion
 
@@ -481,21 +549,22 @@ that needs the strongest statement re-queries the witness as well.
 specification. Unknown extensions MUST be preserved in canonical form and MUST NOT cause
 verification failure. Registered:
 
-| Name                   | Section | Purpose                          |
-| ---------------------- | ------- | -------------------------------- |
-| `sealedrun.delegation` | 6.4     | Bind a Run to a Delegation       |
-| `sealedrun.tombstone`  | 7       | Record a payload deletion        |
-| `sealedrun.anchor`     | 8       | External witness receipt         |
-| `sealedrun.labels`     | 5.6     | Provenance of data labels        |
-| `sealedrun.llm`        | 10.1    | Model call details               |
-| `sealedrun.mcp`        | 10.2    | MCP tool call details            |
-| `sealedrun.proxy`      | 10.3    | Recorder proxy call details      |
-| `sealedrun.a2a`        | 10.4    | A2A task delegation details      |
-| `sealedrun.otel`       | 11      | OpenTelemetry trace and span ids |
-| `sealedrun.step`       | 10.5    | Self-reported step provenance    |
-| `sealedrun.context`    | 10.6    | What produced the run            |
-| `sealedrun.decision`   | 10.7    | Decision-model answers           |
-| `sealedrun.gate`       | 10.8    | Outcome of a gate on a decision  |
+| Name                   | Section | Purpose                                |
+| ---------------------- | ------- | -------------------------------------- |
+| `sealedrun.delegation` | 6.4     | Bind a Run to a Delegation             |
+| `sealedrun.tombstone`  | 7       | Record a payload deletion              |
+| `sealedrun.anchor`     | 8       | External witness receipt               |
+| `sealedrun.labels`     | 5.6     | Provenance of data labels              |
+| `sealedrun.llm`        | 10.1    | Model call details                     |
+| `sealedrun.mcp`        | 10.2    | MCP tool call details                  |
+| `sealedrun.proxy`      | 10.3    | Recorder proxy call details            |
+| `sealedrun.a2a`        | 10.4    | A2A task delegation details            |
+| `sealedrun.otel`       | 11      | OpenTelemetry trace and span ids       |
+| `sealedrun.step`       | 10.5    | Self-reported step provenance          |
+| `sealedrun.context`    | 10.6    | What produced the run                  |
+| `sealedrun.decision`   | 10.7    | Decision-model answers                 |
+| `sealedrun.gate`       | 10.8    | Outcome of a gate on a decision        |
+| `sealedrun.receipt`    | 10.9    | Proof from the system that was changed |
 
 ### 9.1 Compatibility with MCP SEP-3004 and IETF AAT
 
@@ -681,6 +750,36 @@ another check; the record's own `outcome` is then `pending`). The record's `outc
 for `approve` and `blocked` for `block`. The chain then reads: question, model probabilities,
 application threshold, outcome, and the `tool_call` that ran or did not.
 
+### 10.9 `sealedrun.receipt`
+
+```json
+{ "kind": "http_response" | "git_commit" | "file_hash" | "db_tx" | "opaque",
+  "observed_by": "proxy" | "self_reported",
+  "digest": "b64url(H(bytes))", "digest_alg": "sha-256",
+  "ref": "9fceb02…" , "issuer": "api.github.com", "status": 201 }
+```
+
+Evidence should also come from the system that was changed, not only from the agent that
+changed it. A receipt carries that system's own proof of the step: the digest of the HTTP
+response the target returned (`http_response`, `status` is its status code), the commit the
+target created (`git_commit`, `ref` is the sha), the digest of a file after the write
+(`file_hash`, `ref` is the path), a transaction id (`db_tx`, `ref`), or an opaque token
+(`opaque`). `issuer` names the system (host or service name). `digest_alg` is the run's
+`hash_alg` for a receipt the recorder wrote and `sha-256` otherwise.
+
+`observed_by` says who saw the proof. `proxy`: the recorder itself, which relayed the call and
+read the reply; such a receipt is only valid on a record that carries `sealedrun.proxy`, its
+`kind` is `http_response`, and its `digest` MUST equal `payload.response_hash`. `self_reported`:
+the caller, which is also the agent; a record that carries `sealedrun.proxy` MUST NOT carry a
+self-reported receipt, and a recorder refuses a posted step (10.5) whose receipt says `proxy`.
+A verifier fails the run with check `receipt` when any of these rules is broken, and its report
+counts the receipts it accepted by `observed_by` (`receipts_proxy`, `receipts_self_reported`).
+
+A receipt does not make the record true: the verifier shows that the receipt is consistent with
+the record, and an auditor compares `ref`, `digest` and `issuer` with the target system's own
+log. What a receipt adds is that the comparison becomes possible. A receipt signed by the
+target itself is reserved for a later version (`issuer_signature`).
+
 ## 11. Mapping to OpenTelemetry GenAI semantic conventions
 
 The OTel GenAI conventions are in Development status (semantic-conventions-genai, schema
@@ -796,13 +895,15 @@ the bundle.
    signatures, delegation validity at `occurred_at`, `run_start` binding, absence of records after
    `run_end`. A `record_id` MUST NOT repeat within a run, nor across the runs of the bundle
    (`anchors/<record_id>.json` names a record by that id alone); otherwise fail with check
-   `record_id` at the later record, runs taken in manifest order.
+   `record_id` at the later record, runs taken in manifest order. For each run whose
+   `run_start` names a parent (6.4): resolve it among the runs held and apply the `parent.*`
+   checks; list unresolved parents in the report.
 4. For each record with a payload present: recompute body digests.
 5. For each anchor record: check `anchored_hash` against the run; verify the witness proof as in
    8.4 when the witness is in the trust list; optionally re-query the witness.
 6. Report: `ok`, or the first failing run, seq and check. The report MUST carry the manifest
-   `principal_id`, the exporter `agent_id` and whether the Principal was matched against a trust
-   anchor. A user interface MUST NOT present a bundle as verified without qualification when the
+   `principal_id`, the exporter `agent_id`, whether the Principal was matched against a trust
+   anchor, and the scope findings of every run (6.5). A user interface MUST NOT present a bundle as verified without qualification when the
    Principal was not authenticated.
 
 ## 14. Test vectors
@@ -822,12 +923,25 @@ implementations can prove conformance:
 - `records/valid-run.jsonl` with `expected.json`: a complete nine-record run covering every
   record kind, with the expected `prev_hash` and `hash` per seq. `records/context-run.jsonl`
   carries `sealedrun.context` (10.6); `records/decision-run.jsonl` a decision call with
-  `sealedrun.decision`, its `sealedrun.gate` step and the tool call it allowed (10.7, 10.8).
+  `sealedrun.decision`, its `sealedrun.gate` step and the tool call it allowed (10.7, 10.8);
+  `records/receipt-run.jsonl` a proxied call with a `proxy` receipt and a self-reported step
+  with a `git_commit` receipt (10.9).
 - `chains/*.jsonl` with `expected.json`: negative runs (`tampered-field`,
   `resigned-by-other-key`, `resigned-with-agent-key`, `gap-in-seq`, `reordered`,
   `broken-prev-hash`, `record-after-run-end`, `expired-delegation`, `bad-anchor`,
-  `receipt-digest-mismatch`, `malformed-anchor-extension`, `duplicate-record-id`) and the check
-  name and seq at which a verifier MUST fail.
+  `receipt-digest-mismatch`, `malformed-anchor-extension`, `duplicate-record-id`,
+  `receipt-not-response`, `receipt-proxy-without-proxy`, `receipt-self-reported-on-proxy`) and
+  the check name and seq at which a verifier MUST fail.
+- `scope/scoped.delegation.json` with `*.jsonl` and `expected.json`: a delegation whose scope
+  uses every key of 6.5, one run inside it (no findings) and one run per finding kind; for each
+  run the findings (check and seq) a verifier MUST report and the check at which strict mode
+  MUST fail.
+- `bundle/parent-child.zip`: two runs where the second was started by an A2A `tool_call` of the
+  first and names it (6.4); a verifier MUST accept it with no unresolved parent.
+  `bundle/parent-unresolved.zip` holds the child alone and MUST verify with its parent listed as
+  unresolved. `bundle/parent-wrong-record.zip`, `parent-wrong-kind.zip`, `parent-wrong-time.zip`,
+  `parent-wrong-delegation.zip` and `parent-wider-scope.zip` MUST fail with the `parent.*` check
+  named in `expected.json`.
 - `bundle/unknown-principal.zip`: consistent and correctly signed end to end, but by the
   `attacker` Principal. `expected.json` lists `trusted_principals`; a verifier given that set MUST
   fail with check `trust`, and without it MUST report the Principal as not authenticated.

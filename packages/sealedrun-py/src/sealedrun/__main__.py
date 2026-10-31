@@ -1,7 +1,9 @@
-"""Command line: `python -m sealedrun [--max-total-bytes N] <bundle.zip> [principal_id ...]`.
+"""Command line: `python -m sealedrun [--strict-scope] [--max-total-bytes N] <bundle.zip> [id ...]`.
 
 Prints one line per run with the counts a relying party asks about, including how many anchors
-verified against a witness in the shipped trust list, and exits 1 on a failed check.
+verified against a witness in the shipped trust list, then one line per record outside the
+delegation's scope (SPEC 6.5). Exits 1 on a failed check, and with `--strict-scope` on the first
+scope finding as well.
 """
 
 from __future__ import annotations
@@ -37,6 +39,11 @@ def main(argv: list[str] | None = None) -> int:
         default=MAX_TOTAL_BYTES,
         help=f"most the archive may hold once inflated (default {MAX_TOTAL_BYTES})",
     )
+    parser.add_argument(
+        "--strict-scope",
+        action="store_true",
+        help="fail on the first record outside the delegation's scope instead of listing it",
+    )
     try:
         args = parser.parse_args(sys.argv[1:] if argv is None else argv)
     except SystemExit as error:
@@ -48,7 +55,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         with open(path, "rb") as handle:
             bundle = read_bundle(handle, max_total_bytes=args.max_total_bytes)
-        report = verify_bundle(bundle, principals or None)
+        report = verify_bundle(bundle, principals or None, strict_scope=args.strict_scope)
     except VerificationError as error:
         print(f"FAIL {plain(str(error))}")
         return 1
@@ -63,8 +70,14 @@ def main(argv: list[str] | None = None) -> int:
         state = "complete" if run.complete else "open"
         print(
             f"  run {run.run_id}: {run.record_count} records, {state}, "
-            f"anchors {run.anchors}, witness verified {run.anchors_witness_verified}"
+            f"anchors {run.anchors}, witness verified {run.anchors_witness_verified}, "
+            f"scope findings {len(run.findings)}, receipts {run.receipts_proxy} proxy / "
+            f"{run.receipts_self_reported} self-reported"
         )
+        for finding in run.findings:
+            print(f"    seq {finding.seq} {finding.check}: {plain(finding.reason)}")
+        if run.run_id in report.parents_unresolved:
+            print("    parent run not in this bundle; verify both bundles together")
     return 0
 
 

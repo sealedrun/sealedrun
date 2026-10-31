@@ -14,7 +14,21 @@
         },
         "hash": {
           "$ref": "../common.json#/$defs/digestHex"
+        },
+        "parent_run_id": {
+          "$ref": "../common.json#/$defs/uuid"
+        },
+        "parent_record_id": {
+          "$ref": "../common.json#/$defs/uuid"
+        },
+        "parent_delegation_hash": {
+          "$ref": "../common.json#/$defs/digestHex"
         }
+      },
+      "dependentRequired": {
+        "parent_run_id": ["parent_record_id", "parent_delegation_hash"],
+        "parent_record_id": ["parent_run_id", "parent_delegation_hash"],
+        "parent_delegation_hash": ["parent_run_id", "parent_record_id"]
       }
     },
     "sealedrun.tombstone": {
@@ -596,6 +610,44 @@
         "reason": {
           "type": "string",
           "maxLength": 1024
+        }
+      }
+    },
+    "sealedrun.receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "observed_by"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["http_response", "git_commit", "file_hash", "db_tx", "opaque"]
+        },
+        "observed_by": {
+          "type": "string",
+          "enum": ["proxy", "self_reported"]
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43,86}$"
+        },
+        "digest_alg": {
+          "type": "string",
+          "enum": ["sha-256", "sha-384"]
+        },
+        "ref": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "issuer": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253
+        },
+        "status": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 599
         }
       }
     }

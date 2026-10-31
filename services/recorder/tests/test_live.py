@@ -129,3 +129,26 @@ def test_identity_endpoint_and_live_runs_listed(tmp_path: Path) -> None:
         assert run["source"] == "live"
         assert run["bundle_id"] is None
         assert run["complete"] is False
+
+
+def test_scope_is_written_into_the_delegation_and_reissues_it(tmp_path: Path) -> None:
+    plain = load_identity(tmp_path)
+    assert "scope" not in plain.delegation
+    scope = {"allowed_locations": ["local"], "denied_labels": ["pii"]}
+    scoped = load_identity(tmp_path, scope=scope)
+    assert scoped.delegation["scope"] == scope
+    assert scoped.delegation["delegation_id"] != plain.delegation["delegation_id"]
+    assert scoped.agent_id == plain.agent_id
+    again = load_identity(tmp_path, scope=scope)
+    assert again.delegation["delegation_id"] == scoped.delegation["delegation_id"]
+    with pytest.raises(ValueError, match="max_records"):
+        load_identity(tmp_path, scope={"max_records": 0})
+
+
+def test_scope_setting_reaches_the_verifier(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path, ui_dir=tmp_path / "no-ui", scope={"allowed_locations": ["cloud"]}
+    )
+    with TestClient(create_app(settings), base_url="http://localhost") as client:
+        identity = client.get("/api/identity").json()
+        assert identity["delegation"]["scope"] == {"allowed_locations": ["cloud"]}

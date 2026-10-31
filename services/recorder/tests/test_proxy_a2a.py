@@ -525,4 +525,49 @@ def test_agent_error_status_is_not_recorded(
     upstream.routes["/rpc"] = lambda r: httpx.Response(401, json={"e": "auth"})
     with make_proxy(CONFIG) as client:
         assert client.post("/a2a/planner", content=_rpc(), headers=auth).status_code == 401
-        assert proxy_records(client) == []
+        # The run opens before the call, so that its id can travel to the callee (SPEC 6.4);
+        # the failed call itself leaves no record.
+        assert [r["kind"] for r in proxy_records(client)] == ["run_start"]
+
+
+def test_relayed_call_announces_its_record_to_the_callee(
+    make_proxy: Callable[..., TestClient],
+    upstream: Any,
+    auth: dict[str, str],
+    api: dict[str, str],
+    proxy_records: Any,
+) -> None:
+    upstream.routes["/rpc"] = {"jsonrpc": "2.0", "id": 1, "result": {"kind": "task", "id": "t-1"}}
+    with make_proxy(CONFIG) as client:
+        reply = client.post("/a2a/planner", content=_rpc(), headers=auth)
+        assert reply.status_code == 200
+        records = proxy_records(client)
+        identity = client.get("/api/identity", headers=api).json()
+    [sent] = upstream.calls
+    run_id, record_id, delegation_hash = sent.headers["x-sealedrun-parent"].split("/")
+    [call] = [r for r in records if r["kind"] == "tool_call"]
+    assert (run_id, record_id) == (call["run_id"], call["record_id"])
+    assert delegation_hash == identity["delegation"]["hash"]
+
+
+def test_inbound_parent_header_lands_in_run_start(
+    make_proxy: Callable[..., TestClient], upstream: Any, auth: dict[str, str], proxy_records: Any
+) -> None:
+    upstream.routes["/rpc"] = {"jsonrpc": "2.0", "id": 1, "result": {"kind": "task", "id": "t-1"}}
+    link = "0192b3c4-5d6e-7f80-9a1b-0000000000a7/0192b3c4-5d6e-7f80-9a1b-000000000701/" + "c" * 64
+    with make_proxy(CONFIG) as client:
+        reply = client.post(
+            "/a2a/planner", content=_rpc(), headers={**auth, "X-SealedRun-Parent": link}
+        )
+        assert reply.status_code == 200
+        records = proxy_records(client)
+        bad = client.post(
+            "/a2a/planner", content=_rpc(), headers={**auth, "X-SealedRun-Parent": "nope"}
+        )
+    binding = records[0]["extensions"]["sealedrun.delegation"]
+    assert binding["parent_run_id"] == "0192b3c4-5d6e-7f80-9a1b-0000000000a7"
+    assert binding["parent_record_id"] == "0192b3c4-5d6e-7f80-9a1b-000000000701"
+    assert binding["parent_delegation_hash"] == "c" * 64
+    [sent] = upstream.calls
+    assert "nope" not in sent.headers.get("x-sealedrun-parent", "")
+    assert bad.status_code == 400

@@ -128,7 +128,9 @@ async def lifespan(app: FastAPI) -> Any:
     engine = make_engine(settings.resolved_database_url)
     app.state.engine = engine
     app.state.sessions = session_factory(engine)
-    app.state.live = LiveRuns(app.state.sessions, load_identity(settings.data_dir))
+    app.state.live = LiveRuns(
+        app.state.sessions, load_identity(settings.data_dir, scope=settings.scope)
+    )
     app.state.runs = RunGrouper(app.state.live, settings.proxy_run_idle_seconds)
     app.state.upstreams = load_upstreams(settings.upstreams_file)
     app.state.policy = Rule(tuple(settings.policy_block_to_cloud))

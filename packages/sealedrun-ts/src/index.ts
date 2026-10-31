@@ -31,13 +31,27 @@ export {
   type GateOptions,
   type GateOutcome,
   type RecorderOptions,
+  type ReceiptKind,
+  type ReceiptOptions,
+  receiptFor,
   type RecordOptions,
   type Step,
   type StepOptions,
 } from "./client.js";
+export {
+  type Finding,
+  globMatch,
+  parseScope,
+  type Scope,
+  scopeFindings,
+  scopeWithin,
+} from "./scope.js";
 export { assertDelegation, assertExtensions, assertManifest, assertRecord } from "./structure.js";
 export type { SealedRunRecord, Delegation, Manifest, Payload, Target } from "./types.js";
 export {
+  checkParentLinks,
+  type ParentLink,
+  parentOf,
   type RunReport,
   verifyRun,
   verifyReceipt,

@@ -11,6 +11,7 @@ from sealedrun.errors import VerificationError
 from sealedrun.hashing import digest_size, payload_digest, zero_hash
 from sealedrun.keys import KeySet
 from sealedrun.schema import validate, validate_extensions
+from sealedrun.scope import Finding, Scope, scope_within
 from sealedrun.signing import DOMAIN_RECORD, check_hash, check_signatures
 from sealedrun.timeutil import parse_timestamp
 from sealedrun.trust import Witness, load_witnesses
@@ -28,6 +29,10 @@ class RunReport:
         anchors_witness_verified: Anchors whose receipt was verified offline against a witness
             in the trust list (SPEC 8.4); `rfc3161` receipts in this version.
         labels_sent_to_cloud: Per data label, the count of non-blocked records with a cloud target.
+        findings: Records outside the delegation's scope (SPEC 6.5), in seq order. They do not
+            break integrity; under `strict_scope` the first one fails the run instead.
+        receipts_proxy: Receipts the recorder wrote from the reply it relayed (SPEC 10.9).
+        receipts_self_reported: Receipts the caller supplied.
     """
 
     run_id: str
@@ -38,6 +43,9 @@ class RunReport:
     anchors: int = 0
     anchors_witness_verified: int = 0
     labels_sent_to_cloud: dict[str, int] = field(default_factory=dict)
+    findings: list[Finding] = field(default_factory=list)
+    receipts_proxy: int = 0
+    receipts_self_reported: int = 0
 
 
 def verify_run(
@@ -48,6 +56,7 @@ def verify_run(
     expected_prev_hash: str | None = None,
     witnesses: list[Witness] | None = None,
     strict_witness: bool = False,
+    strict_scope: bool = False,
 ) -> RunReport:
     """Verify schema, chain, hashes, delegation and signatures of one run, in record order.
 
@@ -56,7 +65,10 @@ def verify_run(
     that starts above seq 0 chains from `expected_prev_hash` and takes the first delegation issued
     to its agent, since it has no `run_start` to name one. Anchor receipts are verified against
     `witnesses` (the shipped trust list by default); an anchor that does not verify only lowers
-    `anchors_witness_verified`, unless `strict_witness` turns it into a `witness` failure.
+    `anchors_witness_verified`, unless `strict_witness` turns it into a `witness` failure. A
+    record outside the delegation's structured scope (SPEC 6.5) is listed in `findings`, unless
+    `strict_scope` turns the first one into a failure named after its check (`scope.target` and
+    the like).
 
     Raises VerificationError at the first failed check.
     """
@@ -80,6 +92,10 @@ def verify_run(
         raise VerificationError("chain", "run starts at seq 0 but prev hash is not zero", run_id, 0)
 
     delegation = _delegation_for_run(records[0], delegations, run_id)
+    try:
+        scope = Scope.parse(delegation.get("scope"))
+    except ValueError as error:
+        raise VerificationError("schema", str(error), run_id, first_seq) from None
     agent_keys = KeySet.from_json(delegation["agent_keys"])
     report = RunReport(run_id, len(records), first_seq, records[-1]["hash"], False)
     seen_ids: set[str] = set()
@@ -135,6 +151,15 @@ def verify_run(
         if record["kind"] == "run_end":
             ended = True
         policy_set_hash = _check_context(record, policy_set_hash, run_id, seq)
+        observed_by = _check_receipt(record, run_id, seq)
+        if observed_by == "proxy":
+            report.receipts_proxy += 1
+        elif observed_by == "self_reported":
+            report.receipts_self_reported += 1
+        for finding in scope.findings(record, index + 1):
+            if strict_scope:
+                raise VerificationError(finding.check, finding.reason, run_id, seq)
+            report.findings.append(finding)
         if record["target"].get("location") == "cloud" and record.get("outcome") != "blocked":
             for label in record["data_labels"]:
                 report.labels_sent_to_cloud[label] = report.labels_sent_to_cloud.get(label, 0) + 1
@@ -142,6 +167,71 @@ def verify_run(
 
     report.complete = ended
     return report
+
+
+def parent_of(records: list[dict[str, Any]]) -> dict[str, str] | None:
+    """Return the parent link named in a run's `run_start` (SPEC 6.4), or None."""
+    if not records or records[0].get("kind") != "run_start":
+        return None
+    binding = records[0].get("extensions", {}).get("sealedrun.delegation", {})
+    run_id = binding.get("parent_run_id")
+    if run_id is None:
+        return None
+    return {
+        "run_id": run_id,
+        "record_id": binding["parent_record_id"],
+        "delegation_hash": binding["parent_delegation_hash"],
+    }
+
+
+def check_parent_links(
+    runs: dict[str, list[dict[str, Any]]], delegations: dict[str, dict[str, Any]]
+) -> list[str]:
+    """Apply the `parent.*` checks of SPEC 6.4 to every run that names a parent among `runs`.
+
+    Each run is expected to have passed `verify_run` already. Returns the ids of runs whose
+    parent run is not among `runs` (the relying party asks for that bundle). Raises
+    VerificationError with check `parent.record`, `parent.kind`, `parent.time`,
+    `parent.delegation` or `parent.scope` on the child run.
+    """
+    unresolved: list[str] = []
+    for run_id, records in runs.items():
+        parent = parent_of(records)
+        if parent is None:
+            continue
+        parent_records = runs.get(parent["run_id"])
+        if parent_records is None:
+            unresolved.append(run_id)
+            continue
+        asked = next((r for r in parent_records if r["record_id"] == parent["record_id"]), None)
+        if asked is None:
+            raise VerificationError("parent.record", "parent record not in parent run", run_id, 0)
+        if asked["kind"] != "tool_call":
+            raise VerificationError("parent.kind", "parent record is not a tool_call", run_id, 0)
+        if parse_timestamp(records[0]["occurred_at"]) < parse_timestamp(
+            parent_records[0]["occurred_at"]
+        ):
+            raise VerificationError(
+                "parent.time", "run_start is before the parent run's run_start", run_id, 0
+            )
+        parent_binding = parent_records[0].get("extensions", {}).get("sealedrun.delegation", {})
+        if parent_binding.get("hash") != parent["delegation_hash"]:
+            raise VerificationError(
+                "parent.delegation", "parent_delegation_hash differs from parent run", run_id, 0
+            )
+        child_scope = Scope.parse(_bound_delegation(records, delegations).get("scope"))
+        parent_scope = Scope.parse(_bound_delegation(parent_records, delegations).get("scope"))
+        problem = scope_within(child_scope, parent_scope)
+        if problem is not None:
+            raise VerificationError("parent.scope", problem, run_id, 0)
+    return unresolved
+
+
+def _bound_delegation(
+    records: list[dict[str, Any]], delegations: dict[str, dict[str, Any]]
+) -> dict[str, Any]:
+    binding = records[0].get("extensions", {}).get("sealedrun.delegation", {})
+    return delegations.get(binding.get("delegation_id"), {})
 
 
 def _delegation_for_run(
@@ -190,6 +280,37 @@ def _check_context(
                 "context", "policy_set_hash differs from the run's context", run_id, seq
             )
     return policy_set_hash
+
+
+def _check_receipt(record: dict[str, Any], run_id: str, seq: int) -> str | None:
+    """Apply SPEC 10.9 to one record and return the receipt's `observed_by`, if any.
+
+    A `proxy` receipt sits on a proxied record, is an `http_response` and carries the digest of
+    the response body the record already names; a proxied record carries no other receipt.
+    """
+    extensions = record.get("extensions", {})
+    receipt = extensions.get("sealedrun.receipt")
+    proxied = "sealedrun.proxy" in extensions
+    if receipt is None:
+        return None
+    observed_by = receipt["observed_by"]
+    if observed_by == "proxy":
+        if not proxied:
+            raise VerificationError(
+                "receipt", "proxy receipt on a record without sealedrun.proxy", run_id, seq
+            )
+        if receipt["kind"] != "http_response":
+            raise VerificationError("receipt", "proxy receipt is not an http_response", run_id, seq)
+        payload = record.get("payload") or {}
+        if receipt.get("digest") is None or receipt["digest"] != payload.get("response_hash"):
+            raise VerificationError(
+                "receipt", "receipt digest differs from payload.response_hash", run_id, seq
+            )
+        if receipt.get("digest_alg", record["hash_alg"]) != record["hash_alg"]:
+            raise VerificationError("receipt", "receipt digest_alg differs from run", run_id, seq)
+    elif proxied:
+        raise VerificationError("receipt", "self-reported receipt on a proxied record", run_id, seq)
+    return str(observed_by)
 
 
 def _check_payload(

@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from typing import Any, ParamSpec, TypeVar
 
 from sealedrun.errors import SealedRunError
+from sealedrun.hashing import payload_digest
 
 DEFAULT_TIMEOUT = 5.0
 JSON = "application/json"
@@ -45,6 +46,9 @@ TARGET_TYPES = {
 }
 
 GATE_OUTCOMES = {"approve": "success", "block": "blocked", "review": "pending"}
+_UUID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+PARENT = re.compile(rf"^{_UUID}/{_UUID}/([0-9a-f]{{64}}|[0-9a-f]{{96}})$")
+RECEIPT_KINDS = frozenset({"http_response", "git_commit", "file_hash", "db_tx", "opaque"})
 
 P = ParamSpec("P")
 R = TypeVar("R")
@@ -78,6 +82,7 @@ def post_step(
     run: str | None = None,
     agent: str | None = None,
     timeout: float = DEFAULT_TIMEOUT,
+    parent: str | None = None,
 ) -> dict[str, Any]:
     """POST one step to `url` and return the recorder's answer; raises RecorderError."""
     headers = {"Content-Type": JSON}
@@ -87,6 +92,8 @@ def post_step(
         headers["X-SealedRun-Run"] = run
     if agent:
         headers["X-SealedRun-Agent"] = agent
+    if parent:
+        headers["X-SealedRun-Parent"] = parent
     request = urllib.request.Request(  # noqa: S310
         f"{url.rstrip('/')}/api/steps",
         data=json.dumps(step).encode(),
@@ -166,6 +173,35 @@ class Step:
         return body
 
 
+def receipt_for(
+    kind: str,
+    *,
+    ref: str | None = None,
+    data: bytes | None = None,
+    issuer: str | None = None,
+    status: int | None = None,
+) -> dict[str, Any]:
+    """Build a `sealedrun.receipt` (SPEC 10.9) from what the changed system returned.
+
+    `kind` is `http_response`, `git_commit`, `file_hash`, `db_tx` or `opaque`; `ref` the commit
+    sha, path or transaction id; `data` the bytes whose SHA-256 digest the receipt carries (the
+    response body, the file after the write). `Recorder.record` marks it `self_reported`.
+    """
+    if kind not in RECEIPT_KINDS:
+        raise ValueError(f"kind must be one of {', '.join(sorted(RECEIPT_KINDS))}")
+    receipt: dict[str, Any] = {"kind": kind}
+    if ref is not None:
+        receipt["ref"] = ref
+    if data is not None:
+        receipt["digest"] = payload_digest("sha-256", data)
+        receipt["digest_alg"] = "sha-256"
+    if issuer is not None:
+        receipt["issuer"] = issuer
+    if status is not None:
+        receipt["status"] = status
+    return receipt
+
+
 class Recorder:
     """Post steps to one recorder under one run label."""
 
@@ -177,16 +213,25 @@ class Recorder:
         run: str | None = None,
         agent: str | None = None,
         timeout: float = DEFAULT_TIMEOUT,
+        parent: str | None = None,
     ) -> None:
+        """Keep the connection settings.
+
+        `parent` is the `X-SealedRun-Parent` value this agent received with the request it is
+        working on (SPEC 6.4); the recorder writes it into the run it opens for these steps.
+        """
         if not url.startswith(("http://", "https://")):
             raise ValueError("url must start with http:// or https://")
         if agent is not None and not AGENT.match(agent):
             raise ValueError("agent must be <name>/<version>")
+        if parent is not None and not PARENT.match(parent):
+            raise ValueError("parent must be <run_id>/<record_id>/<delegation_hash>")
         self.url = url.rstrip("/")
         self.token = token
         self.run = run
         self.agent = agent
         self.timeout = timeout
+        self.parent = parent
 
     def record(
         self,
@@ -204,12 +249,17 @@ class Recorder:
         extensions: dict[str, Any] | None = None,
         actor: dict[str, str] | None = None,
         parent_record_id: str | None = None,
+        receipt: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Post one finished step and return the signed record.
 
         `parent_record_id` names the record this step follows from (SPEC 5.1), for example the
-        proxied call whose id came back in the `X-SealedRun-Record` reply header.
+        proxied call whose id came back in the `X-SealedRun-Record` reply header. `receipt` is
+        the changed system's own proof of the step (SPEC 10.9), built with `receipt_for`.
         """
+        merged = dict(extensions or {})
+        if receipt is not None:
+            merged["sealedrun.receipt"] = {**receipt, "observed_by": "self_reported"}
         step = Step(
             kind,
             self._target(kind, name, provider, location, endpoint, target_type),
@@ -217,7 +267,7 @@ class Recorder:
             response=response,
             outcome=outcome,
             data_labels=list(data_labels or []),
-            extensions=dict(extensions or {}),
+            extensions=merged,
             actor=actor,
             parent_record_id=parent_record_id,
         )
@@ -342,6 +392,7 @@ class Recorder:
             run=self.run,
             agent=self.agent,
             timeout=self.timeout,
+            parent=self.parent,
         )
         return step.record
 

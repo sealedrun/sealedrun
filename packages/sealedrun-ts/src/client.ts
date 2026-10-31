@@ -12,6 +12,7 @@
  * the record, so silence would be a lie.
  */
 
+import { payloadDigest } from "./hashing.js";
 import type { Target } from "./types.js";
 
 const JSON_TYPE = "application/json";
@@ -93,6 +94,42 @@ export interface RecordOptions extends StepOptions {
   response?: unknown;
   /** Outcome of the step; defaults to `success`. */
   outcome?: string;
+  /** The changed system's own proof of the step (SPEC 10.9), from {@link receiptFor}. */
+  receipt?: Record<string, unknown>;
+}
+
+/** Kinds of a `sealedrun.receipt` (SPEC 10.9). */
+export type ReceiptKind = "http_response" | "git_commit" | "file_hash" | "db_tx" | "opaque";
+
+/** What the changed system returned, for {@link receiptFor}. */
+export interface ReceiptOptions {
+  /** Commit sha, file path, transaction id. */
+  ref?: string;
+  /** Bytes whose SHA-256 digest the receipt carries: the response body, the file after the write. */
+  data?: Uint8Array;
+  /** Host or service name of the system. */
+  issuer?: string;
+  /** HTTP status of the reply. */
+  status?: number;
+}
+
+/**
+ * Builds a `sealedrun.receipt` (SPEC 10.9) from what the changed system returned;
+ * {@link Recorder.record} marks it `self_reported`.
+ */
+export function receiptFor(
+  kind: ReceiptKind,
+  options: ReceiptOptions = {},
+): Record<string, unknown> {
+  const receipt: Record<string, unknown> = { kind };
+  if (options.ref !== undefined) receipt["ref"] = options.ref;
+  if (options.data !== undefined) {
+    receipt["digest"] = payloadDigest("sha-256", options.data);
+    receipt["digest_alg"] = "sha-256";
+  }
+  if (options.issuer !== undefined) receipt["issuer"] = options.issuer;
+  if (options.status !== undefined) receipt["status"] = options.status;
+  return receipt;
 }
 
 /** The step handed to the body of {@link Recorder.step}; set its payloads before returning. */
@@ -115,6 +152,12 @@ export interface RecorderOptions {
   run?: string;
   /** Agent `<name>/<version>`, sent as `X-SealedRun-Agent`; lands in the run's `sealedrun.context`. */
   agent?: string;
+  /**
+   * The `X-SealedRun-Parent` value this agent received with the request it is working on
+   * (SPEC 6.4), `<run_id>/<record_id>/<delegation_hash>`; the recorder writes it into the run it
+   * opens for these steps.
+   */
+  parent?: string;
   /** Seconds to wait for the recorder; defaults to 5. */
   timeout?: number;
   /** `fetch` to use; defaults to the global one. */
@@ -152,7 +195,16 @@ export class Recorder {
     name: string,
     options: RecordOptions = {},
   ): Promise<Record<string, unknown>> {
-    const body = stepBody(kind, target(kind, name, options), options, {
+    const withReceipt = options.receipt
+      ? {
+          ...options,
+          extensions: {
+            ...(options.extensions ?? {}),
+            "sealedrun.receipt": { ...options.receipt, observed_by: "self_reported" },
+          },
+        }
+      : options;
+    const body = stepBody(kind, target(kind, name, options), withReceipt, {
       request: options.request,
       response: options.response,
       outcome: options.outcome ?? "success",
@@ -254,6 +306,7 @@ export class Recorder {
     if (this.options.token) headers["Authorization"] = `Bearer ${this.options.token}`;
     if (this.options.run) headers["X-SealedRun-Run"] = this.options.run;
     if (this.options.agent) headers["X-SealedRun-Agent"] = this.options.agent;
+    if (this.options.parent) headers["X-SealedRun-Parent"] = this.options.parent;
     const doFetch = this.options.fetch ?? fetch;
     let reply: Response;
     try {

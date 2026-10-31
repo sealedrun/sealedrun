@@ -25,6 +25,7 @@ from collections import OrderedDict
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlsplit
 
 import anyio
 import httpx
@@ -35,7 +36,12 @@ from starlette.responses import StreamingResponse
 from sealedrun_recorder.limits import BodyTooLargeError, parse_json, read_body, read_reply
 from sealedrun_recorder.live import LiveRunError, LiveRuns
 from sealedrun_recorder.policy import Decision, Rule
-from sealedrun_recorder.proxy.context import AgentError, header_agent, run_context
+from sealedrun_recorder.proxy.context import (
+    AgentError,
+    header_agent,
+    header_parent,
+    run_context,
+)
 from sealedrun_recorder.proxy.labels import LabelsError, header_labels, label_fields
 from sealedrun_recorder.upstreams import Upstream, Upstreams
 
@@ -153,12 +159,18 @@ class RunGrouper:
         self._lock = threading.Lock()
 
     def run_for(
-        self, label: str | None, *, fresh: bool = False, context: dict[str, Any] | None = None
+        self,
+        label: str | None,
+        *,
+        fresh: bool = False,
+        context: dict[str, Any] | None = None,
+        parent: dict[str, str] | None = None,
     ) -> str:
         """Return the run for `label`, opening one when none is current, idle, or `fresh` is set.
 
-        `context` is the `sealedrun.context` object (SPEC 10.6) written when this call opens
-        the run; it is ignored when the run already exists. An idle run is ended when it is
+        `context` is the `sealedrun.context` object (SPEC 10.6) and `parent` the parent link
+        (SPEC 6.4) written when this call opens the run; both are ignored when the run already
+        exists. An idle run is ended when it is
         replaced. The grouper remembers at most `MAX_OPEN_RUNS`
         labels; past that the least recently used run is ended and forgotten, so a caller that
         invents labels cannot grow the recorder without bound.
@@ -179,7 +191,7 @@ class RunGrouper:
                 extensions["sealedrun.proxy"] = {"run_label": label}
             if context:
                 extensions["sealedrun.context"] = context
-            run_id = str(self._live.start(extensions=extensions or None)["run_id"])
+            run_id = str(self._live.start(extensions=extensions or None, parent=parent)["run_id"])
             self._runs[label] = (run_id, now)
             self._runs.move_to_end(label)
             while len(self._runs) > MAX_OPEN_RUNS:
@@ -199,17 +211,19 @@ class RunGrouper:
         kind: str,
         *,
         context: dict[str, Any] | None = None,
+        parent: dict[str, str] | None = None,
         **fields: Any,
     ) -> dict[str, Any]:
-        """Append a record to the run for `label`; `context` is written if this opens the run.
+        """Append a record to the run for `label`.
 
-        A run closed behind the grouper's back, for example through the API, is replaced by a
-        new one.
+        `context` and `parent` are written if this opens the run. A run closed behind the
+        grouper's back, for example through the API, is replaced by a new one.
         """
         try:
-            return self._live.append(self.run_for(label, context=context), kind, **fields)
+            run_id = self.run_for(label, context=context, parent=parent)
+            return self._live.append(run_id, kind, **fields)
         except LiveRunError:
-            run_id = self.run_for(label, fresh=True, context=context)
+            run_id = self.run_for(label, fresh=True, context=context, parent=parent)
             return self._live.append(run_id, kind, **fields)
 
 
@@ -282,6 +296,7 @@ async def forward(
     try:
         labels = header_labels(request)
         header_agent(request)
+        header_parent(request)
     except (LabelsError, AgentError) as problem:
         return error(dialect, 400, str(problem))
     try:
@@ -517,6 +532,7 @@ class Exchange:
             self.label,
             "llm_call",
             context=run_context(rule, agent, "header" if agent else None),
+            parent=header_parent(self.request),
             target={
                 "type": "model",
                 "name": self.model,
@@ -529,9 +545,19 @@ class Exchange:
             request_media_type=JSON,
             response_media_type=None if blocked else media_type.partition(";")[0].strip() or None,
             outcome=outcome,
+            receipt=None if blocked else proxy_receipt(self.endpoint, status),
             **fields,
         )
         return record
+
+
+def proxy_receipt(endpoint: str | None, status: int) -> dict[str, Any]:
+    """Start a SPEC 10.9 `proxy` receipt: the upstream host as issuer and the reply status."""
+    receipt: dict[str, Any] = {"status": status}
+    host = urlsplit(endpoint).hostname if endpoint else None
+    if host:
+        receipt["issuer"] = host
+    return receipt
 
 
 def upstream_headers(request: Request, upstream: Upstream, dialect: Dialect) -> dict[str, str]:

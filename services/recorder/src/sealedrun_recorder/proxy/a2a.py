@@ -34,6 +34,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
+from uuid import uuid4
 
 import httpx
 from fastapi import APIRouter, Depends, Request, Response
@@ -42,7 +43,14 @@ from starlette.responses import StreamingResponse
 
 from sealedrun_recorder.limits import BodyTooLargeError, parse_json, read_body, read_reply
 from sealedrun_recorder.policy import Decision, Rule
-from sealedrun_recorder.proxy.context import AgentError, header_agent, run_context
+from sealedrun_recorder.proxy.context import (
+    PARENT_HEADER,
+    AgentError,
+    header_agent,
+    header_parent,
+    parent_header,
+    run_context,
+)
 from sealedrun_recorder.proxy.core import (
     JSON,
     RUN_HEADER,
@@ -50,6 +58,7 @@ from sealedrun_recorder.proxy.core import (
     SSE,
     client_credentials,
     mapping,
+    proxy_receipt,
     require_proxy_token,
     sse_data,
 )
@@ -120,6 +129,7 @@ async def a2a(agent: str, request: Request, path: str = "") -> Response:
     try:
         labels = header_labels(request)
         header_agent(request)
+        header_parent(request)
     except (LabelsError, AgentError) as problem:
         return error(400, str(problem))
     upstreams: Upstreams = request.app.state.upstreams
@@ -153,9 +163,27 @@ async def a2a(agent: str, request: Request, path: str = "") -> Response:
     if call is not None and policy is not None and policy.blocked:
         await _record(request, target, call, label, body, 403, None, "", started, labels, policy)
         return policy_refusal(call, policy)
+    record_id = None
+    outgoing = _build(request, target, path, body)
+    if call is not None:
+        # The callee's run names the record of this call before the call has finished, so the
+        # id is chosen now and announced in the request (SPEC 6.4).
+        record_id = str(uuid4())
+        runs = request.app.state.runs
+        rule = request.app.state.policy
+        caller = header_agent(request)
+        run_id = await run_in_threadpool(
+            runs.run_for,
+            label,
+            context=run_context(rule, caller, "header" if caller else None),
+            parent=header_parent(request),
+        )
+        outgoing.headers[PARENT_HEADER] = parent_header(
+            run_id, record_id, request.app.state.live.identity.delegation["hash"]
+        )
     http: httpx.AsyncClient = request.app.state.http
     try:
-        reply = await http.send(_build(request, target, path, body), stream=True)
+        reply = await http.send(outgoing, stream=True)
     except httpx.HTTPError as failure:
         log.error("A2A agent %s unreachable: %s", target.name, type(failure).__name__)
         return error(502, "A2A agent unreachable")
@@ -180,6 +208,7 @@ async def a2a(agent: str, request: Request, path: str = "") -> Response:
             started,
             labels,
             policy,
+            record_id=record_id,
         )
 
     if streamed:
@@ -366,8 +395,12 @@ async def _record(
     started: float,
     labels: list[str],
     policy: Decision | None = None,
+    record_id: str | None = None,
 ) -> None:
-    """Seal the delegation; `answer` is None for one the policy rule kept from the agent."""
+    """Seal the delegation; `answer` is None for one the policy rule kept from the agent.
+
+    `record_id` is the id announced to the callee in `X-SealedRun-Parent` (SPEC 6.4).
+    """
     latency_ms = round((time.perf_counter() - started) * 1000, 1)
     blocked = answer is None
     results = None if answer is None else call.results_in(answer, media_type)
@@ -411,6 +444,8 @@ async def _record(
         label,
         "tool_call",
         context=run_context(rule, caller, "header" if caller else None),
+        parent=header_parent(request),
+        record_id=record_id,
         target={
             "type": "tool",
             "name": f"{target.name}/{_target_suffix(call.method)}",
@@ -420,6 +455,7 @@ async def _record(
         },
         request=body,
         response=answer,
+        receipt=None if blocked else proxy_receipt(target.url, status),
         request_media_type=JSON,
         response_media_type=media_type.partition(";")[0].strip() or None,
         outcome=outcome,

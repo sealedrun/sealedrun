@@ -226,3 +226,30 @@ describe("display cap", () => {
     expect(capText("abcdefgh", 5)).toContain("… 3 more characters");
   });
 });
+
+describe("verifyLocally reports mandate and corroboration", () => {
+  const vectors = join(__dirname, "..", "..", "..", "..", "spec", "vectors", "bundle");
+
+  test("a lone child run names its parent as unresolved", async () => {
+    const data = new Uint8Array(readFileSync(join(vectors, "parent-unresolved.zip")));
+    const result = await verifyLocally("child.zip", data);
+    expect(result.failure).toBeNull();
+    expect(result.report?.parentsUnresolved).toHaveLength(1);
+    expect(result.report?.runs[0]?.findings).toEqual([]);
+  });
+
+  test("a broken parent link is a failure on the child", async () => {
+    const data = new Uint8Array(readFileSync(join(vectors, "parent-wider-scope.zip")));
+    const result = await verifyLocally("pair.zip", data);
+    expect(result.failure?.check).toBe("parent.scope");
+  });
+
+  test("receipts are counted by observer", async () => {
+    const data = new Uint8Array(readFileSync(join(vectors, "valid.zip")));
+    const result = await verifyLocally("valid.zip", data);
+    const run = result.report?.runs[0];
+    expect(run?.receiptsProxy).toBe(0);
+    expect(run?.receiptsSelfReported).toBe(0);
+    expect(result.report?.parentsUnresolved).toEqual([]);
+  });
+});

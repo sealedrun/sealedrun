@@ -248,3 +248,43 @@ def test_no_dialect_forwards_the_labels_header() -> None:
     assert "x-sealedrun-labels" not in mcp.REQUEST_HEADERS
     assert not any("x-sealedrun-labels".startswith(p) for p in mcp.REQUEST_PREFIXES)
     assert "x-sealedrun-labels" not in a2a.REQUEST_HEADERS
+
+
+def test_proxied_calls_carry_a_proxy_receipt(
+    make_proxy: Callable[..., TestClient],
+    upstream: Any,
+    auth: dict[str, str],
+    api: dict[str, str],
+    proxy_records: Any,
+) -> None:
+    upstream.routes["/chat/completions"] = CHAT_REPLY
+    with make_proxy(CONFIG) as client:
+        assert client.post("/v1/chat/completions", json=CHAT, headers=auth).status_code == 200
+        records = proxy_records(client)
+        [call] = [r for r in records if r["kind"] == "llm_call"]
+        receipt = call["extensions"]["sealedrun.receipt"]
+        assert receipt["kind"] == "http_response"
+        assert receipt["observed_by"] == "proxy"
+        assert receipt["status"] == 200
+        assert receipt["digest"] == call["payload"]["response_hash"]
+        assert receipt["digest_alg"] == call["hash_alg"]
+        assert receipt["issuer"]
+        delegation = client.get("/api/identity", headers=api).json()["delegation"]
+        report = verify_run(records, {delegation["delegation_id"]: delegation})
+        assert report.receipts_proxy == 1
+
+
+def test_scoped_recorder_bundles_report_findings(
+    make_proxy: Callable[..., TestClient],
+    upstream: Any,
+    auth: dict[str, str],
+    api: dict[str, str],
+    proxy_records: Any,
+) -> None:
+    upstream.routes["/chat/completions"] = CHAT_REPLY
+    with make_proxy(CONFIG, scope={"allowed_locations": ["local"]}) as client:
+        assert client.post("/v1/chat/completions", json=CHAT, headers=auth).status_code == 200
+        records = proxy_records(client)
+        delegation = client.get("/api/identity", headers=api).json()["delegation"]
+        report = verify_run(records, {delegation["delegation_id"]: delegation})
+        assert [(f.check, f.seq) for f in report.findings] == [("scope.location", 1)]

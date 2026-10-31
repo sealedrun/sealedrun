@@ -36,6 +36,18 @@
     "check": "anchor",
     "seq": 3
   },
+  "receipt-not-response.jsonl": {
+    "check": "receipt",
+    "seq": 1
+  },
+  "receipt-proxy-without-proxy.jsonl": {
+    "check": "receipt",
+    "seq": 2
+  },
+  "receipt-self-reported-on-proxy.jsonl": {
+    "check": "receipt",
+    "seq": 1
+  },
   "record-after-run-end.jsonl": {
     "check": "run_end",
     "seq": 9
