@@ -11,7 +11,7 @@ def test_cli_reports_witness_verified_anchors(capsys: pytest.CaptureFixture[str]
     assert main([str(BUNDLES / "valid.zip")]) == 0
     out = capsys.readouterr().out
     assert "OK bundle" in out and "principal not confirmed" in out
-    assert "anchors 1, witness verified 1, scope findings 0" in out
+    assert "anchors 1, witness verified 1, findings 0" in out
 
 
 def test_cli_trusted_principal_and_failures(
@@ -96,8 +96,53 @@ def test_cli_lists_scope_findings_and_strict_flag(
     path.write_bytes(out.getvalue())
     assert main([str(path)]) == 0
     text = capsys.readouterr().out
-    assert "scope findings 2" in text
+    assert "findings 2" in text
     assert "seq 1 scope.location: location cloud is not in allowed_locations" in text
     assert "seq 1 scope.label: labels pii are denied" in text
     assert main(["--strict-scope", str(path)]) == 1
     assert capsys.readouterr().out.startswith("FAIL scope.location")
+
+
+def test_cli_lists_approval_findings_and_strict_flag(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    import io
+
+    from sealedrun import (
+        PrivateKeySet,
+        RunWriter,
+        create_delegation,
+        payload_digest,
+        payload_ref,
+        write_bundle,
+    )
+
+    principal, agent = PrivateKeySet.generate(), PrivateKeySet.generate()
+    delegation = create_delegation(principal, agent.public)
+    alg = delegation["hash_alg"]
+    writer = RunWriter(agent, delegation)
+    writer.start()
+    writer.append(
+        "tool_call",
+        target={"type": "tool", "name": "mail/send", "location": "cloud", "provider": "mcp:mail"},
+        policy={"rule_id": "r/approve", "decision": "require_approval", "reason": "external"},
+        payload=payload_ref(alg, b"req"),
+    )
+    writer.end()
+    out = io.BytesIO()
+    write_bundle(
+        out,
+        exporter=agent,
+        software="test/0",
+        delegations=[delegation],
+        runs=[writer.records],
+        payloads={payload_digest(alg, b"req"): b"req"},
+    )
+    path = tmp_path / "unapproved.zip"
+    path.write_bytes(out.getvalue())
+    assert main([str(path)]) == 0
+    text = capsys.readouterr().out
+    assert "findings 1" in text
+    assert "seq 1 approval.missing: step required approval" in text
+    assert main(["--strict-approval", str(path)]) == 1
+    assert capsys.readouterr().out.startswith("FAIL approval.missing")

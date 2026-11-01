@@ -46,6 +46,7 @@ TARGET_TYPES = {
 }
 
 GATE_OUTCOMES = {"approve": "success", "block": "blocked", "review": "pending"}
+APPROVAL_DECISIONS = frozenset({"granted", "denied"})
 _UUID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 PARENT = re.compile(rf"^{_UUID}/{_UUID}/([0-9a-f]{{64}}|[0-9a-f]{{96}})$")
 RECEIPT_KINDS = frozenset({"http_response", "git_commit", "file_hash", "db_tx", "opaque"})
@@ -148,6 +149,8 @@ class Step:
     extensions: dict[str, Any] = field(default_factory=dict)
     actor: dict[str, str] | None = None
     parent_record_id: str | None = None
+    policy: dict[str, Any] | None = None
+    system_prompt: str | None = None
     record: dict[str, Any] | None = None
 
     def body(self) -> dict[str, Any]:
@@ -163,6 +166,10 @@ class Step:
             body["actor"] = self.actor
         if self.parent_record_id is not None:
             body["parent_record_id"] = self.parent_record_id
+        if self.policy is not None:
+            body["policy"] = self.policy
+        if self.system_prompt is not None:
+            body["system_prompt"] = self.system_prompt
         for side, value in (("request", self.request), ("response", self.response)):
             text = _text(value)
             if text is not None:
@@ -250,12 +257,19 @@ class Recorder:
         actor: dict[str, str] | None = None,
         parent_record_id: str | None = None,
         receipt: dict[str, Any] | None = None,
+        policy: dict[str, Any] | None = None,
+        system_prompt: str | None = None,
     ) -> dict[str, Any]:
         """Post one finished step and return the signed record.
 
         `parent_record_id` names the record this step follows from (SPEC 5.1), for example the
         proxied call whose id came back in the `X-SealedRun-Record` reply header. `receipt` is
         the changed system's own proof of the step (SPEC 10.9), built with `receipt_for`.
+        `policy` is the decision that allowed or altered the step (SPEC 5.7): `rule_id`,
+        `decision`, `reason`; a step that ran under `require_approval` is bound to the human's
+        answer recorded with `approve` (SPEC 6.6). `system_prompt` is the system instructions of
+        an `llm_call`; the recorder keeps only their digest (`sealedrun.llm.system_prompt_hash`,
+        SPEC 10.1).
         """
         merged = dict(extensions or {})
         if receipt is not None:
@@ -270,6 +284,8 @@ class Recorder:
             extensions=merged,
             actor=actor,
             parent_record_id=parent_record_id,
+            policy=policy,
+            system_prompt=system_prompt,
         )
         return self.post(step)
 
@@ -304,6 +320,41 @@ class Recorder:
             data_labels=data_labels,
             extensions={"sealedrun.gate": gate},
             parent_record_id=decision_record_id,
+        )
+
+    def approve(
+        self,
+        name: str,
+        request: Any,
+        decision: str,
+        *,
+        actor_id: str,
+        note: str | None = None,
+        provider: str | None = None,
+        location: str = "local",
+        data_labels: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Record a human's answer to a step that required approval (SPEC 6.6, 10.10).
+
+        `request` is the very request the human was shown; pass the same value to `record` for
+        the step that then runs, so both hash alike and the verifier binds them. `decision` is
+        `granted` or `denied`; `actor_id` names the person. `name` is the system the decision
+        concerns (`target.name`).
+        """
+        if decision not in APPROVAL_DECISIONS:
+            raise ValueError(f"decision must be one of {', '.join(sorted(APPROVAL_DECISIONS))}")
+        answer: dict[str, Any] = {"decision": decision}
+        if note:
+            answer["note"] = note
+        return self.record(
+            "human_approval",
+            name,
+            request=request,
+            provider=provider,
+            location=location,
+            data_labels=data_labels,
+            actor={"type": "human", "id": actor_id},
+            extensions={"sealedrun.approval": answer},
         )
 
     def step(

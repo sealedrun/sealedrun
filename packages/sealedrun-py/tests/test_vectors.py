@@ -122,6 +122,36 @@ def test_scope_vectors(name: str) -> None:
     assert (info.value.check, info.value.seq) == (case["strict"]["check"], case["strict"]["seq"])
 
 
+def test_system_prompt_vector() -> None:
+    expected = load(VECTORS / "llm" / "expected.json")
+    delegation = load(VECTORS / "delegations" / "valid.json")
+    assert isinstance(expected, dict) and isinstance(delegation, dict)
+    name = "system-prompt-change.jsonl"
+    records = records_of(VECTORS / "llm" / name)
+    report = verify_run(records, {delegation["delegation_id"]: delegation})
+    assert report.complete and report.findings == []
+    assert report.system_prompt_changes == expected[name]["system_prompt_changes"]
+
+
+@pytest.mark.parametrize("name", sorted(p.name for p in (VECTORS / "approval").glob("*.jsonl")))
+def test_approval_vectors(name: str) -> None:
+    expected = load(VECTORS / "approval" / "expected.json")
+    delegation = load(VECTORS / "approval" / "approval.delegation.json")
+    assert isinstance(expected, dict) and isinstance(delegation, dict)
+    case = expected[name]
+    records = records_of(VECTORS / "approval" / name)
+    delegations = {delegation["delegation_id"]: delegation}
+    report = verify_run(records, delegations)
+    assert report.complete
+    assert [{"check": f.check, "seq": f.seq} for f in report.findings] == case["findings"]
+    if "strict" not in case:
+        assert verify_run(records, delegations, strict_approval=True).findings == []
+        return
+    with pytest.raises(VerificationError) as info:
+        verify_run(records, delegations, strict_approval=True)
+    assert (info.value.check, info.value.seq) == (case["strict"]["check"], case["strict"]["seq"])
+
+
 @pytest.mark.parametrize("name", sorted(p.name for p in (VECTORS / "bundle").glob("*.zip")))
 def test_bundle_vectors(name: str) -> None:
     expected = load(VECTORS / "bundle" / "expected.json")

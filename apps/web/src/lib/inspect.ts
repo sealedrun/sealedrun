@@ -87,6 +87,27 @@ export function decodePayload(bytes: Uint8Array | undefined, cap = DISPLAY_CAP):
   }
 }
 
+/** Seq of every `llm_call` whose system prompt digest differs from the previous one's (SPEC 10.1). */
+export function systemPromptChanges(records: SealedRunRecord[]): Set<number> {
+  const out = new Set<number>();
+  let seen = false;
+  let previous: string | undefined;
+  for (const record of records) {
+    if (record.kind !== "llm_call") continue;
+    const current = systemPromptHash(record);
+    if (seen && current !== previous) out.add(record.seq);
+    seen = true;
+    previous = current;
+  }
+  return out;
+}
+
+/** The `sealedrun.llm.system_prompt_hash` of a record, when it has one. */
+export function systemPromptHash(record: SealedRunRecord): string | undefined {
+  const llm = record.extensions?.["sealedrun.llm"] as { system_prompt_hash?: string } | undefined;
+  return llm?.system_prompt_hash;
+}
+
 /** The target's name, followed by its endpoint when the record has one. */
 export function describeTarget(record: SealedRunRecord): string {
   const { target } = record;

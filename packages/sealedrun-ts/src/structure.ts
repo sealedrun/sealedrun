@@ -80,6 +80,7 @@ const EXTENSIONS: Record<string, Shape> = {
   "sealedrun.decision": { answers: "objects" },
   "sealedrun.gate": { outcome: "string" },
   "sealedrun.receipt": { kind: "string", observed_by: "string" },
+  "sealedrun.approval": { decision: "string" },
 };
 
 /** Required shape of each entry of `sealedrun.decision.answers` (SPEC 10.7). */
@@ -125,6 +126,7 @@ const EXTENSION_ENUMS: Record<string, Record<string, readonly string[]>> = {
     kind: ["http_response", "git_commit", "file_hash", "db_tx", "opaque"],
     observed_by: ["proxy", "self_reported"],
   },
+  "sealedrun.approval": { decision: ["granted", "denied"] },
 };
 
 /** Optional string fields of an extension whose pattern the JSON Schema fixes. */

@@ -1,6 +1,7 @@
 import { covers, verifyDelegation } from "./delegation.js";
 import { VerificationError } from "./errors.js";
 import { digestSize, type HashAlg, isHashAlg, payloadDigest, zeroHash } from "./hashing.js";
+import { Approvals } from "./approval.js";
 import { assertRecord } from "./structure.js";
 import { type Finding, parseScope, scopeFindings, scopeWithin } from "./scope.js";
 import { checkHash, checkSignatures, DOMAIN_RECORD } from "./signing.js";
@@ -30,14 +31,20 @@ export interface RunReport {
   /** Per data label, the number of non-blocked records whose target location is `cloud`. */
   labelsSentToCloud: Record<string, number>;
   /**
-   * Records outside the delegation's scope (SPEC 6.5), in seq order. They do not break
-   * integrity; under `strictScope` the first one fails the run instead.
+   * Records outside the delegation's scope (SPEC 6.5) and steps that ran without the human
+   * approval their policy required (SPEC 6.6), in seq order. They do not break integrity; under
+   * `strictScope` / `strictApproval` the first one fails the run instead.
    */
   findings: Finding[];
   /** Receipts the recorder wrote from the reply it relayed (SPEC 10.9). */
   receiptsProxy: number;
   /** Receipts the caller supplied. */
   receiptsSelfReported: number;
+  /**
+   * Seq of every `llm_call` whose `system_prompt_hash` differs from the previous `llm_call`'s
+   * (SPEC 10.1), including a hash appearing or disappearing.
+   */
+  systemPromptChanges: number[];
 }
 
 /** Optional inputs of {@link verifyRun}. */
@@ -51,6 +58,8 @@ export interface VerifyRunOptions {
   expectedPrevHash?: string;
   /** Fail with the finding's check (`scope.target` and the like) on the first scope finding. */
   strictScope?: boolean;
+  /** Fail with the finding's check (`approval.missing` and the like) on the first approval finding. */
+  strictApproval?: boolean;
 }
 
 /** Optional inputs of {@link verifyRunAsync}, on top of {@link VerifyRunOptions}. */
@@ -115,10 +124,14 @@ export function verifyRun(
     findings: [],
     receiptsProxy: 0,
     receiptsSelfReported: 0,
+    systemPromptChanges: [],
   };
   let ended = false;
   let policySetHash: string | undefined;
   const seenIds = new Set<string>();
+  const approvals = new Approvals();
+  let promptSeen = false;
+  let promptHash: string | undefined;
 
   records.forEach((record, index) => {
     const seq = firstSeq + index;
@@ -173,6 +186,19 @@ export function verifyRun(
     else if (observedBy === "self_reported") report.receiptsSelfReported += 1;
     for (const finding of scopeFindings(scope, record, index + 1)) {
       if (options.strictScope)
+        throw new VerificationError(finding.check, finding.reason, runId, seq);
+      report.findings.push(finding);
+    }
+    if (record.kind === "llm_call") {
+      const llm = record.extensions?.["sealedrun.llm"] as
+        { system_prompt_hash?: string } | undefined;
+      const current = llm?.system_prompt_hash;
+      if (promptSeen && current !== promptHash) report.systemPromptChanges.push(seq);
+      promptSeen = true;
+      promptHash = current;
+    }
+    for (const finding of approvals.findings(record)) {
+      if (options.strictApproval)
         throw new VerificationError(finding.check, finding.reason, runId, seq);
       report.findings.push(finding);
     }

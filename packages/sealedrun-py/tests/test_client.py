@@ -220,6 +220,28 @@ def test_redirects_are_never_followed(fake: FakeRecorder, recorder: Recorder) ->
     assert fake.posts == []
 
 
+def test_approve_records_the_human_answer(fake: FakeRecorder, recorder: Recorder) -> None:
+    request = {"to": "jane@example.com", "body": "summary"}
+    recorder.approve("mail/send", request, "granted", actor_id="jane.doe@example.com", note="ok")
+    [(_, body)] = fake.posts
+    assert body == {
+        "kind": "human_approval",
+        "target": {"type": "human", "name": "mail/send", "location": "local"},
+        "outcome": "success",
+        "data_labels": [],
+        "extensions": {"sealedrun.approval": {"decision": "granted", "note": "ok"}},
+        "actor": {"type": "human", "id": "jane.doe@example.com"},
+        "request": '{"body": "summary", "to": "jane@example.com"}',
+        "request_media_type": "application/json",
+    }
+    policy = {"rule_id": "r/approve", "decision": "require_approval", "reason": "external"}
+    recorder.record("tool_call", "mail/send", request=request, policy=policy)
+    assert fake.posts[1][1]["request"] == body["request"]
+    assert fake.posts[1][1]["policy"] == policy
+    with pytest.raises(ValueError, match="denied, granted"):
+        recorder.approve("mail/send", request, "maybe", actor_id="x")
+
+
 def test_record_gate_links_the_decision(fake: FakeRecorder, recorder: Recorder) -> None:
     record = recorder.record_gate(
         "0192b3c4-5d6e-7f80-9a1b-000000000201",
@@ -279,3 +301,15 @@ def test_parent_header_is_sent_and_validated(fake: FakeRecorder) -> None:
     assert headers["x-sealedrun-parent"] == link
     with pytest.raises(ValueError, match="parent must be"):
         Recorder(fake.url, parent="not-a-link")
+
+
+def test_record_passes_the_system_prompt_for_hashing(
+    fake: FakeRecorder, recorder: Recorder
+) -> None:
+    recorder.record(
+        "llm_call", "gpt-4.1", request={"messages": []}, system_prompt="You summarise contracts."
+    )
+    [(_, body)] = fake.posts
+    assert body["system_prompt"] == "You summarise contracts."
+    recorder.record("llm_call", "gpt-4.1", request={"messages": []})
+    assert "system_prompt" not in fake.posts[1][1]

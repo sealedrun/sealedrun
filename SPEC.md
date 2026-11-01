@@ -270,6 +270,9 @@ A `block` decision MUST be accompanied by `outcome = "blocked"` and a payload th
 request that was not sent. A `redirect` MUST record the final target in `target` and the original
 in `policy.original_target`.
 
+A `require_approval` decision on a record whose `outcome` is not `blocked` says the step ran
+after a human was asked; the verifier looks for the `human_approval` record that granted it (6.6).
+
 `policy_set_hash` (optional, hex) is the digest of the policy set the rule came from, as defined
 in 10.6. When a run's `run_start` carries `sealedrun.context.policy_set_hash`, every `policy`
 block of that run that has a `policy_set_hash` MUST carry the same value; a verifier fails the
@@ -379,6 +382,35 @@ exempt from the target, location and label checks. `scope.max_records` is report
 first record past the limit. A structured key with the wrong shape fails the run with check
 `schema`. A verifier MUST offer a strict mode in which the first finding fails the run with the
 finding's check name.
+
+### 6.6 Approval check
+
+A policy that answers `require_approval` hands the step to a human. The chain records both halves:
+the `human_approval` record in which the human answered, and the step that then ran with
+`policy.decision = "require_approval"`. The verifier binds the two by the request the human saw.
+
+A `human_approval` record carries `actor.type = "human"` (5.2, enforced by the record schema),
+the extension `sealedrun.approval` (10.10) with the human's `decision`, and as its `payload` the
+request the human was shown: its `payload.request_hash` is the same digest the executed step
+later carries, because both hash the same bytes under the run's `hash_alg`. The record's
+`target` is the system the decision concerns and its `outcome` is `success`.
+
+For every record with `policy.decision = "require_approval"` and `outcome` other than `blocked`
+(the step was executed), the verifier looks back over the run for the latest `human_approval`
+record with a lower `seq` that carries `sealedrun.approval`, whose `payload.request_hash` equals
+the record's `payload.request_hash`, and that has not already been matched to an earlier
+executed step. One approval covers one execution. The verifier reports a **finding** at the
+executed record:
+
+| Check                          | When                                                                                  |
+| ------------------------------ | ------------------------------------------------------------------------------------- |
+| `approval.missing`             | No such `human_approval` precedes the step, or the step has no `payload.request_hash` |
+| `approval.denied_but_executed` | The matched approval says `denied`                                                    |
+
+A `human_approval` without `sealedrun.approval` (a record from before this check existed) never
+matches an executed step. An approval recorded after the step it concerns does not count: the
+step ran without it. As with 6.5, findings do not break verification; a verifier MUST offer a
+strict mode in which the first `approval.*` finding fails the run with the finding's check name.
 
 ## 7. Payload storage and deletion
 
@@ -565,6 +597,7 @@ verification failure. Registered:
 | `sealedrun.decision`   | 10.7    | Decision-model answers                 |
 | `sealedrun.gate`       | 10.8    | Outcome of a gate on a decision        |
 | `sealedrun.receipt`    | 10.9    | Proof from the system that was changed |
+| `sealedrun.approval`   | 10.10   | A human's answer to `require_approval` |
 
 ### 9.1 Compatibility with MCP SEP-3004 and IETF AAT
 
@@ -589,9 +622,21 @@ formats. Reverse projection is lossy and produces records marked `extensions["se
   "output_tokens": 233,
   "finish_reason": "tool_calls",
   "tool_calls_requested": ["filesystem/read_file"],
-  "temperature": 0
+  "temperature": 0,
+  "system_prompt_hash": "b64url(H(system_instructions))"
 }
 ```
+
+`system_prompt_hash` is the digest, under the run's `hash_alg`, of the system instructions of
+the request: every `system` or `developer` message of an OpenAI chat request in order
+(`instructions` then such `input` items for Responses), the top-level `system` of an Anthropic
+request (a string, or the `text` of its blocks), the `system` messages or field of an Ollama
+request, `systemInstruction.parts[].text` of a Gemini request; texts joined by `\n`, UTF-8. A
+request without system instructions carries no field. `payload.request_hash` already commits to
+the whole request; this field lets an auditor ask "which instructions were in force at step N"
+and see where they changed within a run without reading bodies. A verifier's report lists the
+`seq` of every `llm_call` whose hash differs from the previous `llm_call`'s
+(`system_prompt_changes`); a change is information, not a finding.
 
 ### 10.2 `sealedrun.mcp`
 
@@ -780,6 +825,17 @@ the record, and an auditor compares `ref`, `digest` and `issuer` with the target
 log. What a receipt adds is that the comparison becomes possible. A receipt signed by the
 target itself is reserved for a later version (`issuer_signature`).
 
+### 10.10 `sealedrun.approval`
+
+```json
+{ "decision": "granted" | "denied", "note": "…" }
+```
+
+Carried by a `human_approval` record (5.2) whose `payload` is the request the human was shown,
+so that its `payload.request_hash` equals the executed step's and a verifier binds the answer to
+the step without reading either body (6.6). `note` is the human's free-form remark. The record's `actor.id` names the person; what that id means (an SSO subject, an email)
+is for the operator to document.
+
 ## 11. Mapping to OpenTelemetry GenAI semantic conventions
 
 The OTel GenAI conventions are in Development status (semantic-conventions-genai, schema
@@ -793,6 +849,7 @@ gen-ai/1.42.0). The mapping is informative and tracks that repository:
 | `memory_read` / `memory_write`       | `retrieval` / memory operation span                       |
 | `sealedrun.otel.trace_id`, `span_id` | trace and span ids of the originating span                |
 | `payload.*_hash`                     | span attributes `sealedrun.payload.request_hash` etc.     |
+| `sealedrun.llm.system_prompt_hash`   | digest of `gen_ai.system_instructions` (never its text)   |
 
 A recorder that receives OTLP spans (`POST /otlp/v1/traces`) turns GenAI spans into records by
 `gen_ai.operation.name`: `execute_tool` -> `tool_call` (`gen_ai.tool.name`, payloads from
@@ -819,14 +876,14 @@ Article 12 requires high-risk AI systems to allow automatic recording of events 
 lifetime; Articles 19 and 26 require providers and deployers to keep those logs for at least six
 months. SealedRun supports this as follows:
 
-| Requirement (Art. 12(2)–(3))                               | SealedRun element                              |
-| ---------------------------------------------------------- | ---------------------------------------------- |
-| Period of each use (start and end)                         | `run_start.occurred_at`, `run_end.occurred_at` |
-| Reference database against which input data was checked    | `memory_read` records, `target.name`           |
-| Input data for which the search led to a match             | `payload.request_hash`, retained body          |
-| Identification of natural persons involved in verification | `human_approval` records, `actor.id`           |
-| Traceability, post-market monitoring                       | Signed chain, anchors, bundle export           |
-| Retention (Art. 19, 26)                                    | Bundle export and tombstone-based retention    |
+| Requirement (Art. 12(2)–(3))                               | SealedRun element                                                       |
+| ---------------------------------------------------------- | ----------------------------------------------------------------------- |
+| Period of each use (start and end)                         | `run_start.occurred_at`, `run_end.occurred_at`                          |
+| Reference database against which input data was checked    | `memory_read` records, `target.name`                                    |
+| Input data for which the search led to a match             | `payload.request_hash`, retained body                                   |
+| Identification of natural persons involved in verification | `human_approval` records, `actor.id`, bound to the executed step by 6.6 |
+| Traceability, post-market monitoring                       | Signed chain, anchors, bundle export                                    |
+| Retention (Art. 19, 26)                                    | Bundle export and tombstone-based retention                             |
 
 ## 13. Bundle
 
@@ -903,7 +960,7 @@ the bundle.
    8.4 when the witness is in the trust list; optionally re-query the witness.
 6. Report: `ok`, or the first failing run, seq and check. The report MUST carry the manifest
    `principal_id`, the exporter `agent_id`, whether the Principal was matched against a trust
-   anchor, and the scope findings of every run (6.5). A user interface MUST NOT present a bundle as verified without qualification when the
+   anchor, and the scope and approval findings of every run (6.5, 6.6). A user interface MUST NOT present a bundle as verified without qualification when the
    Principal was not authenticated.
 
 ## 14. Test vectors
@@ -936,6 +993,13 @@ implementations can prove conformance:
   uses every key of 6.5, one run inside it (no findings) and one run per finding kind; for each
   run the findings (check and seq) a verifier MUST report and the check at which strict mode
   MUST fail.
+- `llm/system-prompt-change.jsonl` with `expected.json`, under `delegations/valid.json`: three
+  `llm_call` records where the second carries another `system_prompt_hash`; a verifier MUST
+  report `system_prompt_changes` as listed.
+- `approval/approval.delegation.json` (no scope) with `*.jsonl` and `expected.json`: one run
+  whose step requiring approval was granted (no findings) and one run per finding of 6.6
+  (`missing`, `denied-then-run`, `approval-after-execution`, `hash-mismatch`); for each the findings (check and seq) a verifier MUST report and the
+  check at which strict mode MUST fail.
 - `bundle/parent-child.zip`: two runs where the second was started by an A2A `tool_call` of the
   first and names it (6.4); a verifier MUST accept it with no unresolved parent.
   `bundle/parent-unresolved.zip` holds the child alone and MUST verify with its parent listed as

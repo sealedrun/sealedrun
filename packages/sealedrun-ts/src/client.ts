@@ -63,6 +63,11 @@ export interface StepOptions {
    * in the `X-SealedRun-Record` reply header.
    */
   parentRecordId?: string;
+  /**
+   * The decision that allowed or altered the step (SPEC 5.7). A step that ran under
+   * `require_approval` is bound to the human's answer recorded with {@link Recorder.approve}.
+   */
+  policy?: { rule_id: string; decision: string; reason: string; [key: string]: unknown };
 }
 
 /** Options of {@link Recorder.recordGate}. */
@@ -76,6 +81,23 @@ export interface GateOptions {
   /** Data labels the step carries. */
   dataLabels?: string[];
 }
+
+/** Options of {@link Recorder.approve}. */
+export interface ApprovalOptions {
+  /** Who decided; becomes `actor.id` of the `human_approval` record. */
+  actorId: string;
+  /** The human's remark. */
+  note?: string;
+  /** Provider of the system the decision concerns. */
+  provider?: string;
+  /** Location of that system; defaults to `local`. */
+  location?: Target["location"];
+  /** Data labels the step carries. */
+  dataLabels?: string[];
+}
+
+/** A human's answer to a step that required approval (SPEC 10.10). */
+export type ApprovalDecision = "granted" | "denied";
 
 /** What an application did with a decision-model verdict (SPEC 10.8). */
 export type GateOutcome = "approve" | "block" | "review";
@@ -96,6 +118,11 @@ export interface RecordOptions extends StepOptions {
   outcome?: string;
   /** The changed system's own proof of the step (SPEC 10.9), from {@link receiptFor}. */
   receipt?: Record<string, unknown>;
+  /**
+   * System instructions of an `llm_call`; the recorder keeps only their digest
+   * (`sealedrun.llm.system_prompt_hash`, SPEC 10.1).
+   */
+  systemPrompt?: string;
 }
 
 /** Kinds of a `sealedrun.receipt` (SPEC 10.9). */
@@ -209,7 +236,39 @@ export class Recorder {
       response: options.response,
       outcome: options.outcome ?? "success",
     });
+    if (options.systemPrompt !== undefined) body["system_prompt"] = options.systemPrompt;
     return this.post(body);
+  }
+
+  /**
+   * Record a human's answer to a step that required approval (SPEC 6.6, 10.10).
+   *
+   * @param name - The system the decision concerns (`target.name`).
+   * @param request - The very request the human was shown; pass the same value to
+   *   {@link Recorder.record} for the step that then runs, so both hash alike and the verifier
+   *   binds them.
+   * @param decision - `granted` or `denied`.
+   * @param options - Who decided, their note, target details and labels.
+   */
+  async approve(
+    name: string,
+    request: unknown,
+    decision: ApprovalDecision,
+    options: ApprovalOptions,
+  ): Promise<Record<string, unknown>> {
+    if (decision !== "granted" && decision !== "denied") {
+      throw new RecorderError("decision must be granted or denied");
+    }
+    const answer: Record<string, unknown> = { decision };
+    if (options.note) answer["note"] = options.note;
+    return this.record("human_approval", name, {
+      request,
+      ...(options.provider ? { provider: options.provider } : {}),
+      location: options.location ?? "local",
+      ...(options.dataLabels ? { dataLabels: options.dataLabels } : {}),
+      actor: { type: "human", id: options.actorId },
+      extensions: { "sealedrun.approval": answer },
+    });
   }
 
   /**
@@ -358,6 +417,7 @@ function stepBody(
   };
   if (options.actor) body["actor"] = options.actor;
   if (options.parentRecordId) body["parent_record_id"] = options.parentRecordId;
+  if (options.policy) body["policy"] = options.policy;
   for (const [side, value] of [
     ["request", step.request],
     ["response", step.response],

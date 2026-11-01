@@ -930,6 +930,114 @@ def scope_runs(
     return cases
 
 
+APPROVAL_RUN_ID = UUID_PREFIX + "0000000000a6"
+APPROVAL_DELEGATION_ID = UUID_PREFIX + "0000000000d6"
+
+
+def approval_delegation(principal: PrivateKeySet, agent: PrivateKeySet) -> dict[str, Any]:
+    """Create a delegation without a scope, so approval runs carry approval findings alone."""
+    return create_delegation(
+        principal,
+        agent.public,
+        not_before=START - timedelta(days=1),
+        not_after=START + timedelta(days=30),
+        agent_name="mail-sender",
+        delegation_id=APPROVAL_DELEGATION_ID,
+    )
+
+
+def approval_runs(
+    agent: PrivateKeySet, delegation: dict[str, Any]
+) -> dict[str, tuple[list[dict[str, Any]], dict[str, Any]]]:
+    """Build one run per outcome of the approval check of SPEC 6.6.
+
+    Maps a case name to its records and the findings (check and seq) a verifier reports, with
+    the check at which strict mode fails.
+    """
+    alg = delegation["hash_alg"]
+    send = {"type": "tool", "name": "mail/send", "location": "cloud", "provider": "mcp:mail"}
+    request = PAYLOADS["tool_request"]
+    other = PAYLOADS["chat_request"]
+    require = {
+        "rule_id": "eu-strict/require-approval",
+        "decision": "require_approval",
+        "reason": "external delivery of nda-labelled content",
+    }
+
+    def answer(decision: str, body: bytes) -> dict[str, Any]:
+        return {
+            "kind": "human_approval",
+            "actor": {"type": "human", "id": "jane.doe@example.com"},
+            "target": send,
+            "payload": payload_ref(alg, body),
+            "extensions": {"sealedrun.approval": {"decision": decision}},
+        }
+
+    def executed() -> dict[str, Any]:
+        return {
+            "kind": "tool_call",
+            "target": send,
+            "data_labels": ["nda"],
+            "policy": dict(require),
+            "payload": payload_ref(alg, request, PAYLOADS["tool_response"]),
+        }
+
+    def run(start: int, *steps: dict[str, Any]) -> list[dict[str, Any]]:
+        writer = RunWriter(
+            agent, delegation, run_id=APPROVAL_RUN_ID, clock=Clock(), id_factory=Ids(start=start)
+        )
+        writer.start()
+        for step in steps:
+            writer.append(step.pop("kind"), **step)
+        writer.end()
+        return writer.records
+
+    def failing(check: str, seq: int) -> dict[str, Any]:
+        return {"findings": [{"check": check, "seq": seq}], "strict": {"check": check, "seq": seq}}
+
+    cases: dict[str, tuple[list[dict[str, Any]], dict[str, Any]]] = {}
+    cases["granted"] = (run(0x600, answer("granted", request), executed()), {"findings": []})
+    cases["missing"] = (run(0x610, executed()), failing("approval.missing", 1))
+    cases["denied-then-run"] = (
+        run(0x620, answer("denied", request), executed()),
+        failing("approval.denied_but_executed", 2),
+    )
+    cases["approval-after-execution"] = (
+        run(0x630, executed(), answer("granted", request)),
+        failing("approval.missing", 1),
+    )
+    cases["hash-mismatch"] = (
+        run(0x640, answer("granted", other), executed()),
+        failing("approval.missing", 2),
+    )
+    return cases
+
+
+LLM_RUN_ID = UUID_PREFIX + "0000000000a7"
+
+
+def system_prompt_run(agent: PrivateKeySet, delegation: dict[str, Any]) -> list[dict[str, Any]]:
+    """Build a run of three model calls whose system instructions change at the second."""
+    alg = delegation["hash_alg"]
+    model = {"type": "model", "name": "gpt-4.1", "location": "cloud", "provider": "openai"}
+    writer = RunWriter(
+        agent, delegation, run_id=LLM_RUN_ID, clock=Clock(), id_factory=Ids(start=0x700)
+    )
+    writer.start()
+    for prompt in (b"You summarise contracts.", b"You summarise contracts. Never quote.", None):
+        llm: dict[str, Any] = {"model": "gpt-4.1", "provider": "openai"}
+        if prompt is not None:
+            llm["system_prompt_hash"] = payload_digest(alg, prompt)
+        writer.append(
+            "llm_call",
+            target=model,
+            payload=payload_ref(alg, PAYLOADS["chat_request"], PAYLOADS["chat_response"]),
+            extensions={"sealedrun.llm": llm},
+        )
+    writer.end()
+    return writer.records
+
+
 def jsonl(records: list[dict[str, Any]]) -> str:
     """Serialize records as JSON Lines with compact separators and sorted keys."""
     return "".join(json.dumps(r, separators=(",", ":"), sort_keys=True) + "\n" for r in records)
@@ -1274,7 +1382,17 @@ def generate(spec_dir: Path) -> None:
     """
     vectors = spec_dir / "vectors"
     examples = spec_dir / "examples"
-    for sub in ("keys.json", "signatures", "delegations", "records", "chains", "scope", "bundle"):
+    for sub in (
+        "keys.json",
+        "signatures",
+        "delegations",
+        "records",
+        "chains",
+        "scope",
+        "approval",
+        "llm",
+        "bundle",
+    ):
         # `anchors/rfc3161-*.json` are captured from real witnesses and are kept; only
         # `anchors/cases.json` is derived from them below.
         target = vectors / sub
@@ -1394,6 +1512,23 @@ def generate(spec_dir: Path) -> None:
         (scope_dir / f"{name}.jsonl").write_text(jsonl(records))
         scope_expected[f"{name}.jsonl"] = outcome
     dump(scope_dir / "expected.json", scope_expected)
+
+    llm_dir = vectors / "llm"
+    llm_dir.mkdir(parents=True)
+    (llm_dir / "system-prompt-change.jsonl").write_text(jsonl(system_prompt_run(agent, delegation)))
+    dump(
+        llm_dir / "expected.json", {"system-prompt-change.jsonl": {"system_prompt_changes": [2, 3]}}
+    )
+
+    approval_dir = vectors / "approval"
+    approval_dir.mkdir(parents=True)
+    approving = approval_delegation(principal, agent)
+    dump(approval_dir / "approval.delegation.json", approving)
+    approval_expected: dict[str, Any] = {}
+    for name, (records, outcome) in approval_runs(agent, approving).items():
+        (approval_dir / f"{name}.jsonl").write_text(jsonl(records))
+        approval_expected[f"{name}.jsonl"] = outcome
+    dump(approval_dir / "expected.json", approval_expected)
 
     bundle_dir = vectors / "bundle"
     bundle_dir.mkdir(parents=True)

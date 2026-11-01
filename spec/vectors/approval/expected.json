@@ -1,0 +1,53 @@
+{
+  "approval-after-execution.jsonl": {
+    "findings": [
+      {
+        "check": "approval.missing",
+        "seq": 1
+      }
+    ],
+    "strict": {
+      "check": "approval.missing",
+      "seq": 1
+    }
+  },
+  "denied-then-run.jsonl": {
+    "findings": [
+      {
+        "check": "approval.denied_but_executed",
+        "seq": 2
+      }
+    ],
+    "strict": {
+      "check": "approval.denied_but_executed",
+      "seq": 2
+    }
+  },
+  "granted.jsonl": {
+    "findings": []
+  },
+  "hash-mismatch.jsonl": {
+    "findings": [
+      {
+        "check": "approval.missing",
+        "seq": 2
+      }
+    ],
+    "strict": {
+      "check": "approval.missing",
+      "seq": 2
+    }
+  },
+  "missing.jsonl": {
+    "findings": [
+      {
+        "check": "approval.missing",
+        "seq": 1
+      }
+    ],
+    "strict": {
+      "check": "approval.missing",
+      "seq": 1
+    }
+  }
+}

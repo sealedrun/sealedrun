@@ -1,5 +1,5 @@
 /** Version of this package, not of the specification. */
-export const VERSION = "0.7.0";
+export const VERSION = "0.8.0";
 
 export { canonicalize, canonicalBytes, type Json } from "./canonical.js";
 export { b64urlDecode, b64urlEncode, hexDecode, hexEncode } from "./encoding.js";
@@ -38,6 +38,7 @@ export {
   type Step,
   type StepOptions,
 } from "./client.js";
+export { Approvals } from "./approval.js";
 export {
   type Finding,
   globMatch,

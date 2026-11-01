@@ -13,6 +13,7 @@ from typing import Any
 import httpx
 from fastapi import APIRouter, Depends, Request, Response
 
+from sealedrun_recorder.proxy import prompt
 from sealedrun_recorder.proxy.core import (
     Dialect,
     Operation,
@@ -233,9 +234,23 @@ OPENAI = Dialect(
     reply_passthrough=("retry-after", "x-request-id"),
     reply_prefixes=("x-ratelimit-",),
 )
-CHAT = Operation(OPENAI, "chat", "/chat/completions", chat_usage, stream=chat_stream)
+CHAT = Operation(
+    OPENAI,
+    "chat",
+    "/chat/completions",
+    chat_usage,
+    stream=chat_stream,
+    system_prompt=prompt.openai_chat,
+)
 EMBEDDINGS = Operation(OPENAI, "embeddings", "/embeddings", embeddings_usage)
-RESPONSES = Operation(OPENAI, "responses", "/responses", responses_usage, stream=responses_stream)
+RESPONSES = Operation(
+    OPENAI,
+    "responses",
+    "/responses",
+    responses_usage,
+    stream=responses_stream,
+    system_prompt=prompt.openai_responses,
+)
 DECISIONS = Operation(
     OPENAI, "decisions", "/decisions", decisions_usage, extract=decision_from_openai
 )

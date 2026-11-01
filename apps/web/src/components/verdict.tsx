@@ -75,14 +75,16 @@ export function Verdict({ verification }: { verification: LocalVerification }) {
 }
 
 /**
- * What the verifier found beyond integrity (SPEC 6.4, 6.5, 10.9): steps outside the
- * delegation's scope, receipts from the systems the agent touched, and runs whose parent run is
- * in another bundle.
+ * What the verifier found beyond integrity (SPEC 6.4, 6.5, 6.6, 10.9): steps outside the
+ * delegation's scope, steps that ran without the human approval their policy required, receipts
+ * from the systems the agent touched, and runs whose parent run is in another bundle.
  */
 function Mandate({ report }: { report: BundleReport }) {
   const findings = report.runs.flatMap((run) =>
     run.findings.map((finding) => ({ runId: run.runId, ...finding })),
   );
+  const scopeCount = findings.filter((f) => f.check.startsWith("scope.")).length;
+  const approvalCount = findings.filter((f) => f.check.startsWith("approval.")).length;
   const proxy = report.runs.reduce((n, run) => n + run.receiptsProxy, 0);
   const self = report.runs.reduce((n, run) => n + run.receiptsSelfReported, 0);
   const several = report.runs.length > 1;
@@ -90,8 +92,15 @@ function Mandate({ report }: { report: BundleReport }) {
     <div className="mt-3 space-y-2 text-sm" data-testid="mandate">
       <p className={findings.length > 0 ? "text-warn" : ""}>
         {findings.length === 0
-          ? "Every step stayed within the delegation's scope."
-          : `${findings.length} step${findings.length === 1 ? "" : "s"} outside the delegation's scope:`}
+          ? "Every step stayed within the delegation's scope, and every step that required a human's approval had it."
+          : [
+              scopeCount > 0 &&
+                `${scopeCount} step${scopeCount === 1 ? "" : "s"} outside the delegation's scope`,
+              approvalCount > 0 &&
+                `${approvalCount} step${approvalCount === 1 ? "" : "s"} ran without the human approval required`,
+            ]
+              .filter(Boolean)
+              .join("; ") + ":"}
       </p>
       {findings.length > 0 && (
         <ul className="list-disc space-y-0.5 pl-5">

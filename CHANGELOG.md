@@ -5,6 +5,38 @@ follows Semantic Versioning once 1.0.0 is reached.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-01
+
+Who allowed it, and under which instructions: the verifier binds every step that required a
+human's approval to the answer that preceded it, and every model call carries the digest of the
+system prompt in force.
+
+### Added
+
+- SPEC 6.6 approval check and 10.10 `sealedrun.approval`: a `human_approval` record now carries
+  the human's `decision` (`granted` / `denied`) and, as its payload, the request the human was
+  shown. Both verifiers bind it to the step that then ran under `policy.decision =
+"require_approval"` by `payload.request_hash` and report `approval.missing` (no approval for
+  that request before the step) and `approval.denied_but_executed` as findings; one approval
+  covers one execution. `strict_approval` / `strictApproval` and the CLI flag
+  `--strict-approval` turn the first finding into a failure. SDK `approve` / `approve` records
+  the answer. Vectors `spec/vectors/approval/`. Inspector shows the human decision on the record
+  and counts approval findings in the verdict. Records from earlier versions verify as before: a
+  `human_approval` without the extension matches nothing.
+- SPEC 10.1 `sealedrun.llm.system_prompt_hash`: the digest of a model call's system
+  instructions under the run's hash algorithm. The recorder proxy derives it from the request
+  for the OpenAI chat and Responses, Anthropic, Ollama chat and generate, and Gemini shapes;
+  a posted step passes `system_prompt` (SDK option `system_prompt` / `systemPrompt`) and the
+  recorder stores the digest only. Both verifiers report `system_prompt_changes` /
+  `systemPromptChanges`, the seq of every model call whose instructions differ from the
+  previous one's; the CLI prints `system prompt changed`, the Inspector tags the step and shows
+  the digest. Vector `spec/vectors/llm/system-prompt-change.jsonl`. Mapped to OTel
+  `gen_ai.system_instructions` in SPEC 11.
+- `scripts/demo_tamper.py` edits one field of one record inside a bundle so anyone can watch
+  the verifier refuse it; `scripts/render_demo.py` records that as `docs/demo-tamper.gif` and
+  `.mp4` from the real commands, so the clip is re-made at each release. The README opens with
+  it.
+
 ## [0.7.0] - 2026-10-31
 
 Evidence, not a log: the verifier reports every record outside the Principal's scope, checks the

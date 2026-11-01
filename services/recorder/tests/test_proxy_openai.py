@@ -573,3 +573,30 @@ def test_ratelimit_headers_reach_the_client(
     assert response.headers["retry-after"] == "3"
     assert "openai-organization" not in response.headers
     assert "set-cookie" not in response.headers
+
+
+def test_system_prompt_is_hashed_not_stored_in_the_extension(
+    proxy: TestClient, upstream: Any, auth: dict[str, str], proxy_records: Any
+) -> None:
+    from sealedrun import payload_digest
+
+    body = {
+        "model": "gpt-4.1",
+        "messages": [
+            {"role": "system", "content": "You summarise contracts."},
+            {"role": "user", "content": "hi"},
+        ],
+    }
+    assert proxy.post("/v1/chat/completions", json=body, headers=auth).status_code == 200
+    plain = _chat(proxy, auth)
+    assert plain.status_code == 200
+    records = proxy_records(proxy)
+    first, second = (
+        records[1]["extensions"]["sealedrun.llm"],
+        records[2]["extensions"]["sealedrun.llm"],
+    )
+    assert first["system_prompt_hash"] == payload_digest(
+        records[1]["hash_alg"], b"You summarise contracts."
+    )
+    assert "system_prompt_hash" not in second
+    assert "You summarise contracts." not in json.dumps(first)
