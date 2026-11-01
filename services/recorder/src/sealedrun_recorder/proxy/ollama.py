@@ -14,6 +14,7 @@ from typing import Any
 import httpx
 from fastapi import APIRouter, Depends, Request, Response
 
+from sealedrun_recorder.proxy import prompt
 from sealedrun_recorder.proxy.core import (
     JSON,
     NDJSON,
@@ -102,6 +103,7 @@ CHAT = Operation(
     sampling=_options_temperature,
     stream=generation_stream,
     stream_media_type=NDJSON,
+    system_prompt=prompt.ollama_chat,
 )
 GENERATE = Operation(
     OLLAMA,
@@ -112,6 +114,7 @@ GENERATE = Operation(
     sampling=_options_temperature,
     stream=generation_stream,
     stream_media_type=NDJSON,
+    system_prompt=prompt.ollama_generate,
 )
 EMBED = Operation(OLLAMA, "embeddings", "/api/embed", embed_usage)
 LEGACY_EMBEDDINGS = Operation(OLLAMA, "embeddings", "/api/embeddings", embed_usage)

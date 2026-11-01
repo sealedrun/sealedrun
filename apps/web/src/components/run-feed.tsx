@@ -17,6 +17,8 @@ import {
   type RunContext,
   runContext,
   summarize,
+  systemPromptChanges,
+  systemPromptHash,
   type WitnessVerdict,
 } from "@/lib/inspect";
 import {
@@ -89,6 +91,7 @@ export function RunFeed({
   const [filter, setFilter] = useState<StepFilter>({});
   const [localPage, setLocalPage] = useState(1);
   const shown = filterSteps(records, filter);
+  const promptChanges = systemPromptChanges(records);
   const current = clampPage(onPage ? page : localPage, shown.length, STEPS_PER_PAGE);
   const setPage = (next: number) => {
     const target = clampPage(next, shown.length, STEPS_PER_PAGE);
@@ -157,6 +160,7 @@ export function RunFeed({
             witness={witness?.get(recordKey(record))}
             gate={gateOf(record, records)}
             parentSeq={records.find((r) => r.record_id === record.parent_record_id)?.seq ?? null}
+            promptChanged={promptChanges.has(record.seq)}
             onJump={jumpTo}
           />
         ))}
@@ -409,6 +413,7 @@ function Step({
   witness,
   gate,
   parentSeq,
+  promptChanged,
   onJump,
 }: {
   record: SealedRunRecord;
@@ -423,6 +428,8 @@ function Step({
   gate?: GateView | null;
   /** Sequence number of the record's `parent_record_id`, when it is in the run. */
   parentSeq?: number | null;
+  /** The system prompt of this model call differs from the previous model call's. */
+  promptChanged?: boolean;
   onJump?: (seq: number) => void;
 }) {
   const location = record.target.location;
@@ -435,6 +442,7 @@ function Step({
     ...(verdict ? [verdict] : []),
     ...(record.outcome !== "success" ? [record.outcome] : []),
     ...(isSelfReported(record) ? ["self-reported"] : []),
+    ...(promptChanged ? ["prompt changed"] : []),
   ];
   return (
     <li className="relative pl-8">
@@ -543,6 +551,8 @@ function Detail({
   const verdict = gateOutcome(record);
   const stored = record.payload?.storage === "bundle" || record.payload?.storage === "inline";
   const anchor = anchorInfo(record, witness);
+  const approval = record.extensions?.["sealedrun.approval"] as
+    { decision: string; note?: string } | undefined;
   const proof =
     witness === undefined
       ? "not checked here"
@@ -558,9 +568,15 @@ function Detail({
     ["Witness proof", anchor ? `${anchor.type ?? "unknown"} receipt, ${proof}` : undefined, false],
     ["Log index", anchor?.logIndex !== undefined ? String(anchor.logIndex) : undefined, true],
     ["Actor", `${record.actor.type} ${record.actor.id}`, false],
+    [
+      "Human decision",
+      approval && `${approval.decision}${approval.note ? `: ${approval.note}` : ""}`,
+      false,
+    ],
     ["Hash", record.hash, true],
     ["Previous hash", record.prev_hash, true],
     ["Parent record", record.parent_record_id, true],
+    ["System prompt digest", systemPromptHash(record), true],
     ["Request digest", record.payload?.request_hash, true],
     ["Response digest", record.payload?.response_hash, true],
   ];

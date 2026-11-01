@@ -2,7 +2,8 @@
 
 A step arrives as JSON, is checked against the record schema pieces it fills (kind, target,
 outcome, policy, extensions) before anything is sealed, and is then appended to a live run like
-a proxied call. Payload bodies come as text or base64 and are stored like proxy payloads.
+a proxied call. Payload bodies come as text or base64 and are stored like proxy payloads. A
+`system_prompt` text is hashed into `sealedrun.llm.system_prompt_hash` and not stored.
 """
 
 from __future__ import annotations
@@ -70,6 +71,7 @@ class Step(BaseModel):
     response_base64: str | None = None
     request_media_type: str | None = None
     response_media_type: str | None = None
+    system_prompt: str | None = None
 
     def tools_list(self) -> dict[str, Any] | None:
         """Return server, transport, cursor and result of a `tools/list` step, else None.
@@ -116,6 +118,8 @@ class Step(BaseModel):
             fields["parent_record_id"] = self.parent_record_id
         if self.extensions:
             fields["extensions"] = self.extensions
+        if self.system_prompt is not None:
+            fields["system_prompt"] = self.system_prompt.encode()
         return fields
 
 

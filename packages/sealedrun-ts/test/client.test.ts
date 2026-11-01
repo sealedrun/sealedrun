@@ -215,6 +215,43 @@ describe("Recorder", () => {
     expect(extensions["sealedrun.mcp"]!["server"]).toBe("fs");
   });
 
+  test("approve records the human answer with the request it concerns", async () => {
+    const recorder = new Recorder(url, { token: "tok", run: "job-1" });
+    const request = { to: "jane@example.com", body: "summary" };
+    await recorder.approve("mail/send", request, "denied", {
+      actorId: "jane.doe@example.com",
+      note: "not today",
+    });
+    expect(posts[0]!.body).toEqual({
+      kind: "human_approval",
+      target: { type: "human", name: "mail/send", location: "local" },
+      outcome: "success",
+      data_labels: [],
+      extensions: { "sealedrun.approval": { decision: "denied", note: "not today" } },
+      actor: { type: "human", id: "jane.doe@example.com" },
+      request: JSON.stringify(request),
+      request_media_type: "application/json",
+    });
+    const policy = { rule_id: "r/approve", decision: "require_approval", reason: "external" };
+    await recorder.record("tool_call", "mail/send", { request, policy });
+    expect(posts[1]!.body.request).toBe(posts[0]!.body.request);
+    expect(posts[1]!.body.policy).toEqual(policy);
+    await expect(
+      recorder.approve("mail/send", request, "maybe" as unknown as "granted", { actorId: "x" }),
+    ).rejects.toThrow("granted or denied");
+  });
+
+  test("record passes the system prompt for the recorder to hash", async () => {
+    const recorder = new Recorder(url, { token: "tok", run: "job-1" });
+    await recorder.record("llm_call", "gpt-4.1", {
+      request: { messages: [] },
+      systemPrompt: "You summarise contracts.",
+    });
+    expect(posts[0]!.body.system_prompt).toBe("You summarise contracts.");
+    await recorder.record("llm_call", "gpt-4.1", { request: { messages: [] } });
+    expect(posts[1]!.body).not.toHaveProperty("system_prompt");
+  });
+
   test("recordGate links the decision and maps the outcome", async () => {
     const recorder = new Recorder(url, { token: "tok", run: "job-1" });
     const record = await recorder.recordGate("0192b3c4-5d6e-7f80-9a1b-000000000201", "block", {

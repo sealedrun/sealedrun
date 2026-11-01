@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from sealedrun.anchors import rekor, rfc3161
+from sealedrun.approval import Approvals
 from sealedrun.delegation import covers, verify_delegation
 from sealedrun.errors import VerificationError
 from sealedrun.hashing import digest_size, payload_digest, zero_hash
@@ -29,10 +30,13 @@ class RunReport:
         anchors_witness_verified: Anchors whose receipt was verified offline against a witness
             in the trust list (SPEC 8.4); `rfc3161` receipts in this version.
         labels_sent_to_cloud: Per data label, the count of non-blocked records with a cloud target.
-        findings: Records outside the delegation's scope (SPEC 6.5), in seq order. They do not
-            break integrity; under `strict_scope` the first one fails the run instead.
+        findings: Records outside the delegation's scope (SPEC 6.5) and steps that ran without
+            the human approval their policy required (SPEC 6.6), in seq order. They do not break
+            integrity; under `strict_scope` / `strict_approval` the first one fails the run.
         receipts_proxy: Receipts the recorder wrote from the reply it relayed (SPEC 10.9).
         receipts_self_reported: Receipts the caller supplied.
+        system_prompt_changes: Seq of every `llm_call` whose `system_prompt_hash` differs from
+            the previous `llm_call`'s (SPEC 10.1), including a hash appearing or disappearing.
     """
 
     run_id: str
@@ -46,6 +50,7 @@ class RunReport:
     findings: list[Finding] = field(default_factory=list)
     receipts_proxy: int = 0
     receipts_self_reported: int = 0
+    system_prompt_changes: list[int] = field(default_factory=list)
 
 
 def verify_run(
@@ -57,6 +62,7 @@ def verify_run(
     witnesses: list[Witness] | None = None,
     strict_witness: bool = False,
     strict_scope: bool = False,
+    strict_approval: bool = False,
 ) -> RunReport:
     """Verify schema, chain, hashes, delegation and signatures of one run, in record order.
 
@@ -68,7 +74,8 @@ def verify_run(
     `anchors_witness_verified`, unless `strict_witness` turns it into a `witness` failure. A
     record outside the delegation's structured scope (SPEC 6.5) is listed in `findings`, unless
     `strict_scope` turns the first one into a failure named after its check (`scope.target` and
-    the like).
+    the like). A step that ran under `require_approval` without a matching `human_approval`
+    before it (SPEC 6.6) is a finding too; `strict_approval` fails on the first `approval.*`.
 
     Raises VerificationError at the first failed check.
     """
@@ -99,6 +106,9 @@ def verify_run(
     agent_keys = KeySet.from_json(delegation["agent_keys"])
     report = RunReport(run_id, len(records), first_seq, records[-1]["hash"], False)
     seen_ids: set[str] = set()
+    approvals = Approvals()
+    prompt_seen = False
+    prompt_hash: str | None = None
     ended = False
     policy_set_hash: str | None = None
 
@@ -158,6 +168,17 @@ def verify_run(
             report.receipts_self_reported += 1
         for finding in scope.findings(record, index + 1):
             if strict_scope:
+                raise VerificationError(finding.check, finding.reason, run_id, seq)
+            report.findings.append(finding)
+        if record["kind"] == "llm_call":
+            current = (
+                record.get("extensions", {}).get("sealedrun.llm", {}).get("system_prompt_hash")
+            )
+            if prompt_seen and current != prompt_hash:
+                report.system_prompt_changes.append(seq)
+            prompt_seen, prompt_hash = True, current
+        for finding in approvals.findings(record):
+            if strict_approval:
                 raise VerificationError(finding.check, finding.reason, run_id, seq)
             report.findings.append(finding)
         if record["target"].get("location") == "cloud" and record.get("outcome") != "blocked":

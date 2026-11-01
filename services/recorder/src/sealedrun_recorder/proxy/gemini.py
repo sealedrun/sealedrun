@@ -15,6 +15,7 @@ from typing import Any
 import httpx
 from fastapi import APIRouter, Depends, Request, Response
 
+from sealedrun_recorder.proxy import prompt
 from sealedrun_recorder.proxy.core import (
     JSON,
     Dialect,
@@ -121,7 +122,12 @@ def generate_stream(raw: bytes) -> StreamSummary:
 GEMINI = Dialect("gemini", _error_body)
 OPERATIONS = {
     "generateContent": Operation(
-        GEMINI, "generate", "", generate_usage, sampling=_generation_temperature
+        GEMINI,
+        "generate",
+        "",
+        generate_usage,
+        sampling=_generation_temperature,
+        system_prompt=prompt.gemini_generate,
     ),
     "streamGenerateContent": Operation(
         GEMINI,
@@ -130,6 +136,7 @@ OPERATIONS = {
         generate_usage,
         sampling=_generation_temperature,
         stream=generate_stream,
+        system_prompt=prompt.gemini_generate,
     ),
     "countTokens": Operation(GEMINI, "count_tokens", "", count_tokens_usage),
     "embedContent": Operation(GEMINI, "embeddings", "", embed_usage),

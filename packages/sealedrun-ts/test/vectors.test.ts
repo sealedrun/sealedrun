@@ -201,6 +201,46 @@ describe("negative chains", () => {
   });
 });
 
+describe("llm", () => {
+  test("system prompt changes are listed by seq", () => {
+    const expected = readJson<Record<string, { system_prompt_changes: number[] }>>(
+      "llm",
+      "expected.json",
+    );
+    const name = "system-prompt-change.jsonl";
+    const report = verifyRun(readRecords("llm", name), delegationMap(validDelegation()));
+    expect(report.findings).toEqual([]);
+    expect(report.systemPromptChanges).toEqual(expected[name]!.system_prompt_changes);
+  });
+});
+
+describe("approval", () => {
+  type Case = {
+    findings: { check: string; seq: number }[];
+    strict?: { check: string; seq: number };
+  };
+  const expected = readJson<Record<string, Case>>("approval", "expected.json");
+  const approving = () => readJson<Delegation>("approval", "approval.delegation.json");
+  test.each(Object.keys(expected))("%s", (name) => {
+    const c = expected[name]!;
+    const records = readRecords("approval", name);
+    const report = verifyRun(records, delegationMap(approving()));
+    expect(report.complete).toBe(true);
+    expect(report.findings.map((f) => ({ check: f.check, seq: f.seq }))).toEqual(c.findings);
+    if (!c.strict) {
+      expect(
+        verifyRun(records, delegationMap(approving()), { strictApproval: true }).findings,
+      ).toEqual([]);
+      return;
+    }
+    expectFailure(
+      () => verifyRun(records, delegationMap(approving()), { strictApproval: true }),
+      c.strict.check,
+      c.strict.seq,
+    );
+  });
+});
+
 describe("scope", () => {
   type Case = {
     findings: { check: string; seq: number }[];

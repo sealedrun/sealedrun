@@ -180,6 +180,10 @@
         },
         "temperature": {
           "type": "number"
+        },
+        "system_prompt_hash": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43,86}$"
         }
       }
     },
@@ -611,6 +615,15 @@
           "type": "string",
           "maxLength": 1024
         }
+      }
+    },
+    "sealedrun.approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["decision"],
+      "properties": {
+        "decision": { "type": "string", "enum": ["granted", "denied"] },
+        "note": { "type": "string", "maxLength": 1024 }
       }
     },
     "sealedrun.receipt": {

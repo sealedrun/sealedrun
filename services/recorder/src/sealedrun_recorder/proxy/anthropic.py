@@ -14,6 +14,7 @@ from typing import Any
 import httpx
 from fastapi import APIRouter, Depends, Request, Response
 
+from sealedrun_recorder.proxy import prompt
 from sealedrun_recorder.proxy.core import (
     Dialect,
     Operation,
@@ -122,7 +123,14 @@ def messages_stream(raw: bytes) -> StreamSummary:
     return StreamSummary(llm, failed, complete)
 
 
-MESSAGES = Operation(ANTHROPIC, "messages", "/v1/messages", messages_usage, stream=messages_stream)
+MESSAGES = Operation(
+    ANTHROPIC,
+    "messages",
+    "/v1/messages",
+    messages_usage,
+    stream=messages_stream,
+    system_prompt=prompt.anthropic_messages,
+)
 COUNT_TOKENS = Operation(ANTHROPIC, "count_tokens", "/v1/messages/count_tokens", count_tokens_usage)
 
 router = APIRouter(prefix="/v1", dependencies=[Depends(require_proxy_token)])

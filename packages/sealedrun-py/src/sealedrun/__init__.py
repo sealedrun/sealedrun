@@ -3,6 +3,7 @@
 Reference implementation of SPEC.md: writing runs, delegations, bundles and their verification.
 """
 
+from sealedrun.approval import Approvals
 from sealedrun.bundle import Bundle, BundleReport, read_bundle, verify_bundle, write_bundle
 from sealedrun.canonical import canonicalize
 from sealedrun.client import Recorder, RecorderError, receipt_for
@@ -14,10 +15,11 @@ from sealedrun.records import RunWriter, payload_ref
 from sealedrun.scope import Finding, Scope, scope_within
 from sealedrun.verify import RunReport, check_parent_links, parent_of, verify_run
 
-__version__ = "0.7.0"
+__version__ = "0.8.0"
 
 __all__ = [
     "PROFILES",
+    "Approvals",
     "Bundle",
     "BundleReport",
     "Finding",

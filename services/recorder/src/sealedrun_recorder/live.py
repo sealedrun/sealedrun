@@ -114,9 +114,13 @@ class LiveRuns:
         check: bool = False,
         receipt: dict[str, Any] | None = None,
         record_id: str | None = None,
+        system_prompt: bytes | None = None,
         **fields: Any,
     ) -> dict[str, Any]:
         """Seal one record onto the run and store it with its payload bodies.
+
+        `system_prompt` is the system instructions of a model call; only their digest is kept,
+        as `sealedrun.llm.system_prompt_hash` (SPEC 10.1), under the run's hash algorithm.
 
         `receipt` is the start of a `proxy` receipt (SPEC 10.9: `issuer`, `status`); it is
         completed with the digest of `response` and written only when a response was received.
@@ -137,6 +141,12 @@ class LiveRuns:
                     response_media_type=response_media_type,
                 )
             _check_target(target)
+            if system_prompt is not None:
+                extensions = dict(fields.get("extensions") or {})
+                llm = dict(extensions.get("sealedrun.llm") or {"model": target["name"]})
+                llm["system_prompt_hash"] = payload_digest(writer.hash_alg, system_prompt)
+                extensions["sealedrun.llm"] = llm
+                fields["extensions"] = extensions
             if receipt is not None and payload is not None and response is not None:
                 extensions = dict(fields.get("extensions") or {})
                 extensions["sealedrun.receipt"] = {

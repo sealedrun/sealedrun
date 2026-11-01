@@ -50,6 +50,8 @@ export interface VerifyBundleOptions {
   trustedPrincipals?: Iterable<string>;
   /** Fail on the first record outside its delegation's scope instead of listing it (SPEC 6.5). */
   strictScope?: boolean;
+  /** Fail on the first step that ran without the human approval its policy required (SPEC 6.6). */
+  strictApproval?: boolean;
 }
 
 /**
@@ -300,6 +302,7 @@ export function verifyBundle(bundle: Bundle, options: VerifyBundleOptions = {}):
       ...(omitted ? {} : { payloads: bundle.payloads }),
       ...(entry.first_seq > 0 ? { expectedPrevHash: entry.first_hash } : {}),
       ...(options.strictScope ? { strictScope: true } : {}),
+      ...(options.strictApproval ? { strictApproval: true } : {}),
     });
     if (report.recordCount !== entry.record_count || report.lastHash !== entry.last_hash) {
       throw new VerificationError("manifest", "run entry does not match records", entry.run_id);

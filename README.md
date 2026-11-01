@@ -5,7 +5,14 @@ call, memory access, policy decision, human approval — becomes a signed record
 hash chain. Records are exported as an evidence bundle that anyone can verify offline, without
 trusting the operator.
 
-Status: early development. 0.7.0 records every channel of an agent: LLM proxy (OpenAI, Anthropic,
+![Change one field of a record and the verifier refuses the bundle](docs/demo-tamper.gif)
+
+Change one field of one record and `python -m sealedrun` refuses the bundle. Reproduce it with
+`python scripts/demo_tamper.py` on `spec/examples/bundle.zip`.
+
+Status: early development. 0.8.0 answers two more auditor questions: whether a required human
+approval was actually given before the step (verifier findings `approval.*`) and which system
+prompt was in force at each model call (`system_prompt_hash`). 0.7.0 records every channel of an agent: LLM proxy (OpenAI, Anthropic,
 Ollama and Gemini wire formats), decision models (OpenAI Decisions, OpenRouter Jev and Microsoft
 Decision-1 in the `systemone` format, with the verdict and the gate that acted on it in the record),
 MCP servers (HTTP proxy and stdio wrapper), A2A agents, self-reported steps from the SDKs and
@@ -36,7 +43,7 @@ Read [SPEC.md](SPEC.md) for the format and [TRUST.md](TRUST.md) for what a bundl
 
 ## What the verifier answers
 
-A signed, chained log shows that nobody edited it afterwards. An auditor asks three more
+A signed, chained log shows that nobody edited it afterwards. An auditor asks five more
 questions, and `python -m sealedrun bundle.zip` answers them without reading the records:
 
 - **Did the agent stay within its mandate?** The Principal writes what the agent may touch into
@@ -44,6 +51,18 @@ questions, and `python -m sealedrun bundle.zip` answers them without reading the
   verifier checks every record against it and lists each step outside it with its seq and
   check (`scope.target`, `scope.location`, `scope.label`, `scope.max_records`). Findings do
   not break verification; `--strict-scope` makes the first one fail it.
+- **Was the required human approval actually given?** When a policy answers `require_approval`,
+  the application records the human's answer with `approve(...)`, passing the very request the
+  human saw. The verifier binds that record to the step that then ran by the request digest and
+  lists every step that ran without one, after a denial, or on a different request
+  (`approval.missing`, `approval.denied_but_executed`). `--strict-approval` makes the first one
+  fail.
+- **Which instructions were in force?** Every proxied model call carries
+  `sealedrun.llm.system_prompt_hash`, the digest of the system instructions the recorder saw in
+  the request (OpenAI, Anthropic, Ollama, Gemini shapes); self-reported calls pass
+  `system_prompt` and the recorder keeps only the digest. The verifier lists the step at which
+  the instructions changed within a run (`system prompt changed`), so an auditor can tell a
+  run under prompt v2 from one under v1 without reading a body.
 - **Does the changed system confirm the step?** Each proxied call carries a `proxy` receipt the
   recorder wrote from the upstream's reply (digest, status, host). Steps reported from your own
   code attach what the target returned (commit sha, file digest, transaction id) as a
@@ -126,7 +145,7 @@ print(report.complete, report.labels_sent_to_cloud)
 ```bash
 pip install sealedrun              # Python library: write, read and verify records and bundles
 npm install @sealedrun/core        # TypeScript verifier, runs in Node.js and in the browser
-docker run --rm -p 127.0.0.1:8080:8080 ghcr.io/sealedrun/sealedrun:0.7.0   # recorder + Inspector
+docker run --rm -p 127.0.0.1:8080:8080 ghcr.io/sealedrun/sealedrun:0.8.0   # recorder + Inspector
 ```
 
 Releases are published from GitHub Actions through PyPI and npm trusted publishing; both registries

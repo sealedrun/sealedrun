@@ -125,6 +125,8 @@ class Operation:
     reads the fields from a finished stream, and is None for endpoints that never stream.
     `stream_media_type` is the stream's content type when the upstream does not name one.
     `extract` reads further extensions (SPEC 10.7) from the request and a successful reply.
+    `system_prompt` reads the system instructions of the request (SPEC 10.1); the recorder
+    writes their digest, never the text, as `sealedrun.llm.system_prompt_hash`.
     """
 
     dialect: Dialect
@@ -136,6 +138,7 @@ class Operation:
     stream: StreamFields | None = None
     stream_media_type: str = SSE
     extract: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]] | None = None
+    system_prompt: Callable[[dict[str, Any]], bytes | None] | None = None
 
 
 class RunGrouper:
@@ -542,6 +545,7 @@ class Exchange:
             },
             request=self.body,
             response=answer,
+            system_prompt=operation.system_prompt(self.call) if operation.system_prompt else None,
             request_media_type=JSON,
             response_media_type=None if blocked else media_type.partition(";")[0].strip() or None,
             outcome=outcome,

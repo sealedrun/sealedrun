@@ -387,6 +387,26 @@ def test_step_receipt_is_kept_and_proxy_claim_refused(
     assert "sealedrun.receipt/observed_by" in reply.json()["detail"]
 
 
+def test_human_approval_step_carries_its_answer_and_request(
+    client: TestClient, api: dict[str, str]
+) -> None:
+    step = _step(
+        kind="human_approval",
+        target={"type": "human", "name": "mail/send", "location": "local"},
+        actor={"type": "human", "id": "jane.doe@example.com"},
+        extensions={"sealedrun.approval": {"decision": "granted"}},
+        request='{"to":"jane@example.com"}',
+    )
+    reply = _post(client, api, step)
+    assert reply.status_code == 201, reply.text
+    record = reply.json()
+    assert record["extensions"]["sealedrun.approval"] == {"decision": "granted"}
+    assert record["payload"]["request_hash"]
+    bad = _post(client, api, {**step, "extensions": {"sealedrun.approval": {"decision": "maybe"}}})
+    assert bad.status_code == 400
+    assert "sealedrun.approval" in bad.json()["detail"]
+
+
 def test_parent_header_on_a_step_opens_a_linked_run(
     client: TestClient, api: dict[str, str]
 ) -> None:
@@ -397,3 +417,32 @@ def test_parent_header_on_a_step_opens_a_linked_run(
     start = _records(client, run.run_id)[0]
     assert start["extensions"]["sealedrun.delegation"]["parent_run_id"] == link.split("/")[0]
     assert _post(client, api, _step(), **{"X-SealedRun-Parent": "x/y/z"}).status_code == 400
+
+
+def test_posted_llm_call_keeps_only_the_system_prompt_digest(
+    client: TestClient, api: dict[str, str]
+) -> None:
+    from sealedrun import payload_digest
+
+    step = _step(
+        kind="llm_call",
+        target={"type": "model", "name": "gpt-4.1", "location": "cloud", "provider": "openai"},
+        extensions={"sealedrun.llm": {"model": "gpt-4.1"}},
+        system_prompt="You summarise contracts.",
+    )
+    reply = _post(client, api, step)
+    assert reply.status_code == 201, reply.text
+    record = reply.json()
+    llm = record["extensions"]["sealedrun.llm"]
+    assert llm["system_prompt_hash"] == payload_digest(
+        record["hash_alg"], b"You summarise contracts."
+    )
+    assert "You summarise contracts." not in reply.text.replace(llm["system_prompt_hash"], "")
+    plain = _step(
+        kind="llm_call",
+        target={"type": "model", "name": "gpt-4.1", "location": "cloud", "provider": "openai"},
+        system_prompt="x",
+    )
+    reply = _post(client, api, plain)
+    assert reply.status_code == 201, reply.text
+    assert reply.json()["extensions"]["sealedrun.llm"]["model"] == "gpt-4.1"

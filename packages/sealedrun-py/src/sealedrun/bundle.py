@@ -313,13 +313,15 @@ def verify_bundle(
     witnesses: list[Witness] | None = None,
     strict_witness: bool = False,
     strict_scope: bool = False,
+    strict_approval: bool = False,
 ) -> BundleReport:
     """Verify a bundle per SPEC 13.2.
 
     The keys inside a bundle are not a root of trust. Pass the principal ids obtained out of band
     as ``trusted_principals``; without them the report has ``principal_trusted=False`` and only
     says the bundle is internally consistent. ``witnesses``, ``strict_witness`` and
-    ``strict_scope`` go to `verify_run` for the anchor receipts and the scope findings.
+    ``strict_scope`` and ``strict_approval`` go to `verify_run` for the anchor receipts, the
+    scope findings and the approval findings.
     """
     manifest = bundle.manifest
     if not check_hash(manifest):
@@ -363,6 +365,7 @@ def verify_bundle(
             witnesses=witnesses,
             strict_witness=strict_witness,
             strict_scope=strict_scope,
+            strict_approval=strict_approval,
         )
         if report.record_count != entry["record_count"] or report.last_hash != entry["last_hash"]:
             raise VerificationError("manifest", "run entry does not match records", entry["run_id"])
