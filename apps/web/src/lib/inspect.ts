@@ -108,6 +108,20 @@ export function systemPromptHash(record: SealedRunRecord): string | undefined {
   return llm?.system_prompt_hash;
 }
 
+/**
+ * What the MCP server of a record said it was: `name version`, or the name alone when it sent an
+ * empty version. Self-reported by the server (SPEC 10.2).
+ */
+export function mcpServerInfo(record: SealedRunRecord): string | undefined {
+  const mcp = record.extensions?.["sealedrun.mcp"] as
+    { server_info?: { name?: unknown; version?: unknown } } | undefined;
+  const info = mcp?.server_info;
+  if (typeof info?.name !== "string" || info.name === "") return undefined;
+  return typeof info.version === "string" && info.version !== ""
+    ? `${info.name} ${info.version}`
+    : info.name;
+}
+
 /** The target's name, followed by its endpoint when the record has one. */
 export function describeTarget(record: SealedRunRecord): string {
   const { target } = record;

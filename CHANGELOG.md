@@ -5,6 +5,28 @@ follows Semantic Versioning once 1.0.0 is reached.
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-11-05
+
+Which MCP server answered: every MCP call carries the name and version the server reported about
+itself. Plus an AIUC-1 evidence map and a Langfuse example.
+
+### Added
+
+- Inspector: the step details show the MCP server's self-reported name and version.
+
+- `sealedrun.mcp.server_info`: the name and version an MCP server reports about itself, recorded
+  by the MCP proxy and `sealedrun-mcp-wrap` on every call (SPEC 10.2). Self-reported by the
+  server, absent when it sends none.
+- `examples/langfuse`: one model call traced in Langfuse and sealed in a run, with the Langfuse
+  trace id as the run label.
+- `docs/aiuc-1.md`: which part of a bundle is evidence for which AIUC-1 control, with recipes for
+  alerts, SIEM and Vanta.
+
+### Changed
+
+- README, SPEC and TRUST.md say who holds the signing keys: the recorder, not the model or the
+  agent code. "Agent" in the format names the signing identity.
+
 ## [0.8.0] - 2026-11-01
 
 Who allowed it, and under which instructions: the verifier binds every step that required a

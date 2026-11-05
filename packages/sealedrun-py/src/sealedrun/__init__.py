@@ -15,7 +15,7 @@ from sealedrun.records import RunWriter, payload_ref
 from sealedrun.scope import Finding, Scope, scope_within
 from sealedrun.verify import RunReport, check_parent_links, parent_of, verify_run
 
-__version__ = "0.8.0"
+__version__ = "0.8.1"
 
 __all__ = [
     "PROFILES",

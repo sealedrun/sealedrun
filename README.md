@@ -10,7 +10,14 @@ trusting the operator.
 Change one field of one record and `python -m sealedrun` refuses the bundle. Reproduce it with
 `python scripts/demo_tamper.py` on `spec/examples/bundle.zip`.
 
-Status: early development. 0.8.0 answers two more auditor questions: whether a required human
+The signing keys live in the recorder, a separate process, not in the agent: the model and the
+agent code never hold them, so an agent cannot write or rewrite its own record. The SDKs and the
+MCP wrapper only report steps to the recorder; they carry no key. [TRUST.md](TRUST.md) states the
+deployment this depends on.
+
+Status: early development. 0.8.1 records the name and version each MCP server reports about
+itself (`sealedrun.mcp.server_info`) and adds an AIUC-1 evidence map and a Langfuse example.
+0.8.0 answers two more auditor questions: whether a required human
 approval was actually given before the step (verifier findings `approval.*`) and which system
 prompt was in force at each model call (`system_prompt_hash`). 0.7.0 records every channel of an agent: LLM proxy (OpenAI, Anthropic,
 Ollama and Gemini wire formats), decision models (OpenAI Decisions, OpenRouter Jev and Microsoft
@@ -32,9 +39,11 @@ as a bundle that any third party verifies offline.
 ## How it works
 
 1. A **Principal** (the accountable organisation) signs a **Delegation** for an **Agent** key set.
+   "Agent" here names the signing identity of one deployed agent; the recorder holds its keys,
+   the model and the agent code do not.
 2. Every step of a **Run** becomes a **Record**: kind, target and its location (local or cloud),
    payload digests, data labels, policy decision and reason, `prev_hash`, `hash`, and a hybrid
-   Ed25519 + ML-DSA-65 signature by the Agent.
+   Ed25519 + ML-DSA-65 signature the recorder makes with the Agent keys.
 3. The chain head is periodically **anchored** in an external witness (Sigstore Rekor, RFC 3161).
 4. Records, delegations, optional payload bodies and a signed manifest are exported as a
    **Bundle**. The verifier recomputes everything and reports the first failing check and seq.
@@ -102,6 +111,9 @@ or the Inspector at http://127.0.0.1:8080; the walk-through is in
 `upstreams.yaml` (Ollama on the host at `host.docker.internal`, which needs
 `OLLAMA_HOST=0.0.0.0`, and OpenAI with `OPENAI_API_KEY`); edit it for your providers.
 
+Already tracing with Langfuse? [examples/langfuse](examples/langfuse/README.md) keeps the trace
+there for debugging and seals the same model call here, linked by the Langfuse trace id.
+
 ## Quick start (Python)
 
 ```python
@@ -145,7 +157,7 @@ print(report.complete, report.labels_sent_to_cloud)
 ```bash
 pip install sealedrun              # Python library: write, read and verify records and bundles
 npm install @sealedrun/core        # TypeScript verifier, runs in Node.js and in the browser
-docker run --rm -p 127.0.0.1:8080:8080 ghcr.io/sealedrun/sealedrun:0.8.0   # recorder + Inspector
+docker run --rm -p 127.0.0.1:8080:8080 ghcr.io/sealedrun/sealedrun:0.8.1   # recorder + Inspector
 ```
 
 Releases are published from GitHub Actions through PyPI and npm trusted publishing; both registries
@@ -695,6 +707,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 Built on, not instead of: RFC 8785 (JCS), FIPS 204 (ML-DSA), RFC 8032 (Ed25519), MCP SEP-3004
 and IETF draft-sharif-agent-audit-trail (record model and field names), OpenTelemetry GenAI
 semantic conventions (export mapping), EU AI Act Articles 12, 19 and 26 (logging and retention).
+
+Compliance: [docs/aiuc-1.md](docs/aiuc-1.md) lists which part of a bundle is evidence for which
+AIUC-1 control, and how to raise alerts, feed a SIEM and upload to Vanta with the tools you run.
 
 ## License
 

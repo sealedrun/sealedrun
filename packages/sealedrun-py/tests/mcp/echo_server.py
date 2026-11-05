@@ -2,8 +2,10 @@
 
 `tools/call` echoes the arguments; argument `sleep` delays the reply, `chatter` writes a
 non-JSON line to stdout first, `crash` exits without answering. `initialize` answers like a
-legacy server; `server/discover` like a modern one. Environment `IGNORE_EOF=1` keeps the
-process alive after stdin closes and `EXIT_CODE` sets the code it exits with on EOF.
+legacy server; `server/discover` like a modern one. Argument `server_info` is returned as the
+result's `_meta` server info, and `SERVER_INFO=1` adds one to the `initialize` result.
+Environment `IGNORE_EOF=1` keeps the process alive after stdin closes and `EXIT_CODE` sets the
+code it exits with on EOF.
 """
 
 import json
@@ -32,7 +34,10 @@ for raw in sys.stdin:
         continue
     method, params, rid = request["method"], request.get("params") or {}, request["id"]
     if method == "initialize":
-        reply({"jsonrpc": "2.0", "id": rid, "result": {"protocolVersion": "2025-11-25"}})
+        result = {"protocolVersion": "2025-11-25"}
+        if os.environ.get("SERVER_INFO"):
+            result["serverInfo"] = {"name": "echo", "version": "0.9.1", "title": "Echo"}
+        reply({"jsonrpc": "2.0", "id": rid, "result": result})
     elif method == "server/discover":
         reply({"jsonrpc": "2.0", "id": rid, "result": {"supportedVersions": ["2026-07-28"]}})
     elif method == "tools/call":
@@ -57,6 +62,8 @@ for raw in sys.stdin:
             sys.stdout.write(json.dumps([{"jsonrpc": "2.0", "id": rid, "result": result}]) + "\n")
             sys.stdout.flush()
             continue
+        if "server_info" in arguments:
+            result["_meta"] = {"io.modelcontextprotocol/serverInfo": arguments["server_info"]}
         if arguments.get("is_error"):
             result["isError"] = True
         if arguments.get("input_required"):

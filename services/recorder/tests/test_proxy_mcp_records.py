@@ -463,3 +463,40 @@ def test_passed_through_client_token_is_never_recorded(
         text = stored_text(client)
     assert upstream.calls[0].headers["authorization"] == "Bearer user-oauth-token"
     assert "user-oauth-token" not in text
+
+
+@pytest.mark.parametrize(
+    ("info", "recorded"),
+    [
+        (
+            {"name": "calc-server", "version": "2.3.0", "title": "Calculator"},
+            {"name": "calc-server", "version": "2.3.0"},
+        ),
+        ({"name": "calc-server", "version": ""}, {"name": "calc-server", "version": ""}),
+        (None, None),
+        ("calc 2.3.0", None),
+        ({"name": "", "version": "1"}, None),
+        ({"name": "calc-server"}, None),
+        ({"name": "calc-server", "version": 2}, None),
+        ({"name": "n" * 257, "version": "1"}, None),
+    ],
+)
+def test_server_info_of_a_result_is_recorded(
+    make_proxy: Callable[..., TestClient],
+    upstream: Any,
+    auth: dict[str, str],
+    proxy_records: Any,
+    info: Any,
+    recorded: dict[str, str] | None,
+) -> None:
+    result: dict[str, Any] = {"content": [{"type": "text", "text": "3"}]}
+    if info is not None:
+        result["_meta"] = {"io.modelcontextprotocol/serverInfo": info}
+    upstream.routes["/mcp"] = _result(result)
+    headers = {**auth, "MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "tools/call"}
+    with make_proxy(CONFIG) as client:
+        client.post("/mcp/tools", content=_call(), headers=headers)
+        [record] = _tool_calls(proxy_records(client))
+    assert record["outcome"] == "success"
+    assert record["extensions"]["sealedrun.mcp"].get("server_info") == recorded
+    assert validate_extensions(record["extensions"]) == []

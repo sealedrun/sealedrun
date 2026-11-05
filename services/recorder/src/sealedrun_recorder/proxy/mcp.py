@@ -77,6 +77,7 @@ POLICY_ERROR = 40003
 NAME_PARAM = {"tools/call": "name", "resources/read": "uri", "prompts/get": "name"}
 MAX_LISTS = 4096
 MAX_NAME = 256
+META_SERVER_INFO = "io.modelcontextprotocol/serverInfo"
 
 log = logging.getLogger("sealedrun.proxy")
 
@@ -190,6 +191,23 @@ async def mcp(server: str, request: Request) -> Response:
         return error(502, "MCP server reply exceeds size limit")
     await finish(answer)
     return Response(answer, status_code=reply.status_code, headers=headers)
+
+
+def server_info(value: Any) -> dict[str, str] | None:
+    """Return the name and version an MCP server reported about itself, or None.
+
+    The value is the `Implementation` object of a result's `_meta`. It is recorded as the server
+    stated it; anything but a non-empty name and a version, both strings within `MAX_NAME`, is
+    dropped. An empty version is kept: servers send one, and it is what the server said.
+    """
+    if not isinstance(value, dict):
+        return None
+    name, version = value.get("name"), value.get("version")
+    if not isinstance(name, str) or not isinstance(version, str):
+        return None
+    if not 0 < len(name) <= MAX_NAME or len(version) > MAX_NAME:
+        return None
+    return {"name": name, "version": version}
 
 
 class McpRequestError(ValueError):
@@ -377,6 +395,9 @@ async def _record(
         mcp["result_type"] = result["resultType"]
     if call.protocol_version:
         mcp["protocol_version"] = call.protocol_version
+    info = server_info(mapping(result.get("_meta")).get(META_SERVER_INFO))
+    if info is not None:
+        mcp["server_info"] = info
     if call.session:
         mcp["session"] = call.session
     proxy: dict[str, Any] = {
