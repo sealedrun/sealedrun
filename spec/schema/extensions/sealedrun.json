@@ -221,6 +221,22 @@
           "type": "string",
           "minLength": 1
         },
+        "server_info": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "version"],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "version": {
+              "type": "string",
+              "maxLength": 256
+            }
+          }
+        },
         "session": {
           "type": "string",
           "pattern": "^[0-9a-f]{64}$"

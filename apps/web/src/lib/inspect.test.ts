@@ -7,6 +7,7 @@ import { describe, expect, test } from "vitest";
 import {
   contextDifferences,
   isSelfReported,
+  mcpServerInfo,
   recordKey,
   runContext,
   summarize,
@@ -74,6 +75,34 @@ describe("runContext", () => {
     expect(runContext([record()])).toBeNull();
     const start = { ...record({ "sealedrun.context": { agent_software: 1 } }), kind: "run_start" };
     expect(runContext([start as SealedRunRecord])).toBeNull();
+  });
+});
+
+describe("mcpServerInfo", () => {
+  const mcp = (info?: Record<string, string>) =>
+    record({
+      "sealedrun.mcp": {
+        server: "fs",
+        transport: "http",
+        method: "tools/call",
+        ...(info ? { server_info: info } : {}),
+      },
+    });
+
+  test("name and version as the server stated them", () => {
+    expect(mcpServerInfo(mcp({ name: "filesystem-server", version: "1.4.2" }))).toBe(
+      "filesystem-server 1.4.2",
+    );
+  });
+
+  test("an empty version leaves the name alone", () => {
+    expect(mcpServerInfo(mcp({ name: "smoke", version: "" }))).toBe("smoke");
+  });
+
+  test("nothing when the record has none or it is malformed", () => {
+    expect(mcpServerInfo(mcp(undefined))).toBeUndefined();
+    expect(mcpServerInfo(mcp({ version: "1" }))).toBeUndefined();
+    expect(mcpServerInfo(record())).toBeUndefined();
   });
 });
 

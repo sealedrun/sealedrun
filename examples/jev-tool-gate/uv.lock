@@ -421,7 +421,7 @@ wheels = [
 
 [[package]]
 name = "sealedrun"
-version = "0.6.0"
+version = "0.8.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "asn1crypto" },
@@ -431,9 +431,9 @@ dependencies = [
     { name = "rfc3161-client" },
     { name = "rfc8785" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a0/ac/40d9cd632c0b599b5e234a64e71656612151dba972ce57aed4ff48a0719e/sealedrun-0.6.0.tar.gz", hash = "sha256:c50507147096dd2ecd006c7d5d2dd140965d062cac2194c0e5fdd264c50fdde8", size = 59779, upload-time = "2026-10-18T18:32:18.188Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/07/3e/5a55986a37a5df62f5ccfbc921eab149c29f398cadd50fe682bae8cb105c/sealedrun-0.8.0.tar.gz", hash = "sha256:fa03838bef9d46f7db10954390091e0514228d4235f65728488cc964ff0a7e9b", size = 69689, upload-time = "2026-11-01T18:50:56.728Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/11/75/c867b8d8f82f6d8e697edcf161ea0b92d39a1b8ae82bcfa235fadf5350f7/sealedrun-0.6.0-py3-none-any.whl", hash = "sha256:9ab5297f131c2a832db07ba1fbac2281f90a9920ddb9ccee4d32a2b39be5727d", size = 70513, upload-time = "2026-10-18T18:32:16.973Z" },
+    { url = "https://files.pythonhosted.org/packages/fb/90/d8266432c79cc54f9106af459bf0797c974b1a9968a27a3c53075d8ac1b9/sealedrun-0.8.0-py3-none-any.whl", hash = "sha256:6efdf6af717c3156d8878a72a2ec1e1838b5475afad1371ac80445ad95a55ec6", size = 81613, upload-time = "2026-11-01T18:50:55.363Z" },
 ]
 
 [[package]]

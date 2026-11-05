@@ -387,3 +387,50 @@ def test_integral_float_ids_match_and_strict_withholds_unmatchable_replies(
         if s["extensions"]["sealedrun.step"].get("truncated")
     }
     assert truncated == {3, 4}
+
+
+def _server_info_of(recorder: FakeRecorder, proc: subprocess.Popen[bytes], info: Any) -> Any:
+    _send(proc, _request("tools/call", 5, MODERN_META, name="add", arguments={"server_info": info}))
+    _readline(proc)
+    _finish(proc)
+    [step] = recorder.steps()
+    return step["extensions"]["sealedrun.mcp"].get("server_info")
+
+
+def test_server_info_of_a_result_is_recorded(recorder: FakeRecorder) -> None:
+    info = {"name": "calc-server", "version": "2.3.0", "title": "Calculator"}
+    recorded = _server_info_of(recorder, _spawn(recorder.url), info)
+    assert recorded == {"name": "calc-server", "version": "2.3.0"}
+
+
+def test_empty_server_version_is_kept(recorder: FakeRecorder) -> None:
+    info = {"name": "calc-server", "version": ""}
+    assert _server_info_of(recorder, _spawn(recorder.url), info) == info
+
+
+@pytest.mark.parametrize(
+    "info",
+    [
+        "calc 2.3.0",
+        {"name": "calc-server"},
+        {"name": "calc-server", "version": 2},
+        {"name": "", "version": "1"},
+        {"name": "calc-server", "version": "v" * 257},
+    ],
+)
+def test_malformed_server_info_is_left_out(recorder: FakeRecorder, info: Any) -> None:
+    assert _server_info_of(recorder, _spawn(recorder.url), info) is None
+
+
+def test_legacy_initialize_server_info_is_remembered(recorder: FakeRecorder) -> None:
+    proc = _spawn(recorder.url, env={"SERVER_INFO": "1"})
+    _send(proc, _request("initialize", 0, protocolVersion="2025-11-25", capabilities={}))
+    _readline(proc)
+    _send(proc, _request("tools/call", 1, name="add", arguments={}))
+    _readline(proc)
+    _finish(proc)
+    [step] = recorder.steps()
+    assert step["extensions"]["sealedrun.mcp"]["server_info"] == {
+        "name": "echo",
+        "version": "0.9.1",
+    }

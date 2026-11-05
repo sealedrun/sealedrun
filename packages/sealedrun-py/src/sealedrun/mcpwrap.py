@@ -51,6 +51,8 @@ KILL_GRACE = 2.0
 RECORDED = frozenset({"tools/call", "resources/read", "prompts/get", "tools/list"})
 NAME_PARAM = {"tools/call": "name", "resources/read": "uri", "prompts/get": "name"}
 META_VERSION = "io.modelcontextprotocol/protocolVersion"
+META_SERVER_INFO = "io.modelcontextprotocol/serverInfo"
+MAX_SERVER_INFO = 256
 NOT_RECORDED_CODE = 1001
 MAX_PENDING = 1024
 MAX_LINE_BYTES = 16 * 1024 * 1024
@@ -108,7 +110,8 @@ class Recording(Observer):
     """Post the recorded request/response pairs of one server to the recorder.
 
     `protocol_version` is taken from each request's `_meta` (modern era) or remembered from the
-    `initialize` handshake (legacy era). Posting happens on the server relay thread, so a call's
+    `initialize` handshake (legacy era); `server_info` from each result's `_meta` or from the
+    `initialize` result. Posting happens on the server relay thread, so a call's
     response reaches the client only after its record was accepted or the recorder gave up.
     """
 
@@ -124,6 +127,7 @@ class Recording(Observer):
     _pending: dict[str | int, Pending] = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock)
     _legacy_version: str | None = None
+    _legacy_server_info: dict[str, str] | None = None
 
     def client_line(self, line: bytes) -> None:
         """Remember recorded requests; note `initialize` and cancellations.
@@ -202,6 +206,7 @@ class Recording(Observer):
         result = message.get("result")
         if isinstance(result, dict) and isinstance(result.get("protocolVersion"), str):
             self._legacy_version = result["protocolVersion"]
+            self._legacy_server_info = _server_info(result.get("serverInfo"))
         pending = self._take(message.get("id"))
         if pending is None:
             return line
@@ -294,6 +299,11 @@ class Recording(Observer):
             mcp["result_type"] = result["resultType"]
         if pending.protocol_version:
             mcp["protocol_version"] = pending.protocol_version
+        meta = result.get("_meta")
+        reported = meta.get(META_SERVER_INFO) if isinstance(meta, dict) else None
+        info = _server_info(reported) or self._legacy_server_info
+        if info is not None:
+            mcp["server_info"] = info
         # A wrapper is a self-reporter, not a proxy the recorder runs: the record carries
         # `sealedrun.step`, never `sealedrun.proxy` (the recorder refuses that on a step).
         marker: dict[str, Any] = {
@@ -337,6 +347,21 @@ def _write_all(stream: IO[bytes], data: bytes) -> None:
 
 def _valid_id(value: Any) -> bool:
     return isinstance(value, str | int) and not _is_bool(value)
+
+
+def _server_info(value: Any) -> dict[str, str] | None:
+    """Return the name and version a server reported about itself, or None if malformed.
+
+    An empty version is kept: servers send one, and it is what the server said.
+    """
+    if not isinstance(value, dict):
+        return None
+    name, version = value.get("name"), value.get("version")
+    if not isinstance(name, str) or not isinstance(version, str):
+        return None
+    if not 0 < len(name) <= MAX_SERVER_INFO or len(version) > MAX_SERVER_INFO:
+        return None
+    return {"name": name, "version": version}
 
 
 def _normal_id(value: Any) -> str | int | None:

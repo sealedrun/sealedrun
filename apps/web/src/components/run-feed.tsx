@@ -17,6 +17,7 @@ import {
   type RunContext,
   runContext,
   summarize,
+  mcpServerInfo,
   systemPromptChanges,
   systemPromptHash,
   type WitnessVerdict,
@@ -577,6 +578,7 @@ function Detail({
     ["Previous hash", record.prev_hash, true],
     ["Parent record", record.parent_record_id, true],
     ["System prompt digest", systemPromptHash(record), true],
+    ["MCP server (self-reported)", mcpServerInfo(record), false],
     ["Request digest", record.payload?.request_hash, true],
     ["Response digest", record.payload?.response_hash, true],
   ];

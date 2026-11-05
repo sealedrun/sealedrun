@@ -42,6 +42,9 @@ Non-goals:
 | Anchor     | An external, operator-independent witness of a chain head (Sigstore Rekor entry, RFC 3161 token, SCITT).   |
 | Bundle     | A portable archive: Records, Delegations, optional Payloads, Anchors, a signed Manifest.                   |
 
+"Agent" names a signing identity, not the model or the agent code. A recorder holds the Agent's
+private keys and signs the Records; the software being recorded reports steps and holds no key.
+
 ## 3. Encoding and canonicalization
 
 - Records, Delegations and Manifests are JSON objects (RFC 8259) restricted to I-JSON (RFC 7493).
@@ -643,7 +646,8 @@ and see where they changed within a run without reading bodies. A verifier's rep
 ```json
 { "server": "filesystem", "transport": "stdio" | "http", "method": "tools/call", "tool": "read_file",
   "request_id": "…", "is_error": false, "protocol_version": "2026-07-28",
-  "result_type": "complete", "session": "<sha256 hex>" }
+  "result_type": "complete", "session": "<sha256 hex>",
+  "server_info": { "name": "filesystem-server", "version": "1.4.2" } }
 ```
 
 `server`, `transport` and `method` are required. `tool` is set for `tools/call`. `is_error` is true
@@ -653,6 +657,15 @@ with outcome `pending`). `session` is the SHA-256 of the `Mcp-Session-Id` of the
 transport, never the id itself. For `transport: stdio` the record is written by a wrapper around
 the server process; `protocol_version` then comes from the request's `_meta` or from the
 `initialize` handshake of that process, and `session` is absent.
+
+`server_info` is the `name` and `version` the server reported about itself: the
+`io.modelcontextprotocol/serverInfo` entry of the result's `_meta` (MCP 2026-07-28) or, for a
+stdio server of the handshake era, `serverInfo` of its `initialize` result. MCP has no version
+per tool; the server's version is the closest the protocol states. The value is self-reported and
+not verified by the protocol or by the recorder, so it says which build the server claimed to be,
+not which code ran. It is absent when the server sent none, sent a malformed one (not a
+non-empty `name` and a `version`, both strings of at most 256 characters; an empty `version` is
+kept as sent), or speaks the handshake era over HTTP.
 
 ### 10.3 `sealedrun.proxy`
 

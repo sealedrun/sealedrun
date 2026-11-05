@@ -6,6 +6,9 @@ License: CC-BY-4.0. Companion to `SPEC.md`.
 
 - **Operator**: runs the recorder and holds the Agent keys. Usually the same organisation as the
   Principal.
+- **Agent**: in `SPEC.md` this is the signing identity of one deployed agent, a key set named by
+  `agent_id`. It is not the model or the agent code: those send steps to the recorder and never
+  hold the keys (deployment requirement 3).
 - **Principal**: the accountable party whose keys sign delegations.
 - **Verifier**: auditor, insurer, counterparty, regulator. Has the bundle and, from a source other
   than the bundle, the `principal_id` of each Principal it trusts. Does not trust the operator.
