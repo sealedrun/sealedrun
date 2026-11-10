@@ -13,12 +13,19 @@ from sealedrun.hashing import b64url_decode, b64url_encode, object_hash, payload
 from sealedrun.keys import PROFILES, KeySet, PrivateKeySet
 from sealedrun.records import RunWriter, payload_ref
 from sealedrun.scope import Finding, Scope, scope_within
-from sealedrun.verify import RunReport, check_parent_links, parent_of, verify_run
+from sealedrun.verify import (
+    ApprovalAnchor,
+    RunReport,
+    check_parent_links,
+    parent_of,
+    verify_run,
+)
 
-__version__ = "0.8.1"
+__version__ = "0.9.0"
 
 __all__ = [
     "PROFILES",
+    "ApprovalAnchor",
     "Approvals",
     "Bundle",
     "BundleReport",

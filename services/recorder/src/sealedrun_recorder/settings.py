@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import SecretStr, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -44,6 +44,9 @@ class Settings(BaseSettings):
             when `rekor` is among `anchors`. The log gives transparency, the authority gives
             time: use both.
         anchor_interval_seconds: How often every open run whose head moved is anchored.
+        anchor_event_gap_seconds: Shortest time between two anchors a run gets outside the
+            interval, right after a `human_approval` record (SPEC 8.2). Approvals that arrive
+            closer together share one anchor.
         anchor_timeout_seconds: Time allowed for one authority call.
 
     """
@@ -70,6 +73,7 @@ class Settings(BaseSettings):
     anchor_tsa_fallback_url: str = "http://timestamp.digicert.com"
     anchor_rekor_url: str = "https://rekor.sigstore.dev"
     anchor_interval_seconds: float = 600.0
+    anchor_event_gap_seconds: float = Field(default=5.0, ge=0)
     anchor_timeout_seconds: float = 20.0
 
     @field_validator("anchors")

@@ -13,7 +13,10 @@ const DATA_TARGET_TYPES = new Set(["model", "tool", "memory"]);
  * where the Principal did not allow it to.
  */
 export interface Finding {
-  /** `scope.target`, `scope.location`, `scope.label` or `scope.max_records`. */
+  /**
+   * `scope.target`, `scope.location`, `scope.label` or `scope.max_records`; the approval check
+   * (SPEC 6.6) and the anchor check (SPEC 8.2) report `approval.*` and `anchor.*` in this form.
+   */
   check: string;
   seq: number;
   recordId: string;

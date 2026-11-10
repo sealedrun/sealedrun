@@ -15,6 +15,7 @@ import {
   verifyReceipt,
   verifyRekor,
   verifyRfc3161,
+  verifyRun,
   verifyRunAsync,
   readBundle,
   type Witness,
@@ -137,6 +138,67 @@ describe("hostile receipt vectors", () => {
   );
 });
 
+describe("anchor coverage vectors", () => {
+  type CoverageCase = {
+    name: string;
+    trusted: boolean;
+    max_approval_anchor_lag: number | null;
+    records: SealedRunRecord[];
+    expected: {
+      unanchored_records: number;
+      approval_anchors: { seq: number; lag_ms: number | null }[];
+      findings: { check: string; seq: number }[];
+    };
+  };
+  const doc = readJson<{ trust: WitnessJson[]; delegation: Delegation; cases: CoverageCase[] }>(
+    "anchors",
+    "coverage.json",
+  );
+  const trust = doc.trust.map(witnessFromJson);
+  const delegations = new Map([[doc.delegation.delegation_id, doc.delegation]]);
+  const options = (c: CoverageCase) => ({
+    witnesses: c.trusted ? trust : [],
+    ...(c.max_approval_anchor_lag === null
+      ? {}
+      : { maxApprovalAnchorLag: c.max_approval_anchor_lag }),
+  });
+
+  test.each(doc.cases.map((c) => [c.name, c] as const))(
+    "%s",
+    async (_name, c) => {
+      const report = await verifyRunAsync(c.records, delegations, options(c));
+      expect(report.unanchoredRecords).toBe(c.expected.unanchored_records);
+      expect(report.approvalAnchors.map((a) => ({ seq: a.seq, lag_ms: a.lagMs }))).toEqual(
+        c.expected.approval_anchors,
+      );
+      expect(report.findings.map((f) => ({ check: f.check, seq: f.seq }))).toEqual(
+        c.expected.findings,
+      );
+      const ids = new Map(c.records.map((r) => [r.seq, r.record_id]));
+      for (const entry of [...report.approvalAnchors, ...report.findings]) {
+        expect(entry.recordId).toBe(ids.get(entry.seq));
+      }
+    },
+    10_000,
+  );
+
+  test("a late finding names the lag and the limit", async () => {
+    const late = doc.cases.find((c) => c.name === "anchored-late")!;
+    const report = await verifyRunAsync(late.records, delegations, options(late));
+    expect(report.findings[0]?.reason).toBe(
+      "a witness saw this approval 600.000 s after it was recorded, limit 5 s",
+    );
+  });
+
+  test("the synchronous check verifies no witness and reports no anchor finding", () => {
+    const late = doc.cases.find((c) => c.name === "anchored-late")!;
+    const report = verifyRun(late.records, delegations);
+    expect(report.unanchoredRecords).toBe(3);
+    expect(report.approvalAnchors.map((a) => a.lagMs)).toEqual([null]);
+    expect(report.findings).toEqual([]);
+  });
+});
+
 describe("reference run", () => {
   const records = readFileSync(join(VECTORS, "records", "valid-run.jsonl"), "utf8")
     .split("\n")
@@ -159,5 +221,7 @@ describe("reference run", () => {
     const bundle = readBundle(new Uint8Array(readFileSync(join(VECTORS, "bundle", "valid.zip"))));
     const report = await verifyBundleAsync(bundle);
     expect(report.runs.map((r) => r.anchorsWitnessVerified)).toEqual([1]);
+    expect(report.runs.map((r) => r.unanchoredRecords)).toEqual([2]);
+    expect(report.runs[0]?.approvalAnchors.map((a) => [a.seq, a.lagMs])).toEqual([[5, 1018027000]]);
   });
 });

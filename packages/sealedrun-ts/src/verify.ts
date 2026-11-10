@@ -6,10 +6,24 @@ import { assertRecord } from "./structure.js";
 import { type Finding, parseScope, scopeFindings, scopeWithin } from "./scope.js";
 import { checkHash, checkSignatures, DOMAIN_RECORD } from "./signing.js";
 import { parseTimestamp } from "./time.js";
-import { type RekorReceipt, verifyRekor } from "./anchors/rekor.js";
-import { verifyRfc3161, type Rfc3161Receipt } from "./anchors/rfc3161.js";
+import { type RekorReceipt, verifiedTimeRekor } from "./anchors/rekor.js";
+import { verifiedTimeRfc3161, type Rfc3161Receipt } from "./anchors/rfc3161.js";
 import { shippedWitnesses, type Witness } from "./trust.js";
 import type { SealedRunRecord, Delegation } from "./types.js";
+
+/** How soon a witness saw a chain head that covers one `human_approval` record. */
+export interface ApprovalAnchor {
+  seq: number;
+  recordId: string;
+  /**
+   * Time of the first witness-verified anchor over this record or a later one, minus the record's
+   * `occurred_at`, in milliseconds; null when no such anchor exists. A record rewritten later can
+   * only be covered by a later anchor, so a long lag on an approval is the trace such a rewrite
+   * leaves. A small negative value is normal: `occurred_at` is the recorder's clock and
+   * authorities sign whole seconds.
+   */
+  lagMs: number | null;
+}
 
 /** Result of a successful {@link verifyRun}. */
 export interface RunReport {
@@ -45,6 +59,17 @@ export interface RunReport {
    * (SPEC 10.1), including a hash appearing or disappearing.
    */
   systemPromptChanges: number[];
+  /**
+   * Records after the last one a witness-verified anchor covers, anchor records not counted: the
+   * part of the run no witness has seen (SPEC 8.2). The synchronous {@link verifyRun} verifies no
+   * witness and so counts every record.
+   */
+  unanchoredRecords: number;
+  /**
+   * One entry per `human_approval` record, in seq order. `lagMs` is filled by
+   * {@link verifyRunAsync}; the synchronous {@link verifyRun} leaves it null.
+   */
+  approvalAnchors: ApprovalAnchor[];
 }
 
 /** Optional inputs of {@link verifyRun}. */
@@ -68,6 +93,12 @@ export interface WitnessOptions {
   witnesses?: Witness[];
   /** Fail with check `witness` on an anchor that does not verify instead of not counting it. */
   strictWitness?: boolean;
+  /**
+   * Seconds. When given, a `human_approval` that no witness-verified anchor covers is the finding
+   * `anchor.approval_unanchored`, and one covered later than this is `anchor.approval_late`
+   * (SPEC 8.2).
+   */
+  maxApprovalAnchorLag?: number;
 }
 
 /**
@@ -125,6 +156,8 @@ export function verifyRun(
     receiptsProxy: 0,
     receiptsSelfReported: 0,
     systemPromptChanges: [],
+    unanchoredRecords: 0,
+    approvalAnchors: [],
   };
   let ended = false;
   let policySetHash: string | undefined;
@@ -211,7 +244,48 @@ export function verifyRun(
   });
 
   report.complete = ended;
+  reportCoverage(report, records, [], undefined);
   return report;
+}
+
+/**
+ * Fills `unanchoredRecords` and `approvalAnchors` of a report and, under `limit` (seconds), adds
+ * the `anchor.*` findings in seq order.
+ *
+ * @param witnessed - `[anchored_seq, witness time in ms]` of the witness-verified anchors, in
+ * chain order.
+ */
+function reportCoverage(
+  report: RunReport,
+  records: SealedRunRecord[],
+  witnessed: [number, number][],
+  limit: number | undefined,
+): void {
+  const coverage = anchorCoverage(records, witnessed);
+  const findings: Finding[] = [];
+  report.unanchoredRecords = coverage.unanchoredRecords;
+  report.approvalAnchors = coverage.approvalAnchors;
+  if (limit === undefined) return;
+  for (const { seq, recordId, lagMs } of coverage.approvalAnchors) {
+    if (lagMs === null) {
+      findings.push({
+        check: "anchor.approval_unanchored",
+        seq,
+        recordId,
+        reason: "no witness-verified anchor covers this approval",
+      });
+    } else if (lagMs > limit * 1000) {
+      findings.push({
+        check: "anchor.approval_late",
+        seq,
+        recordId,
+        reason: `a witness saw this approval ${(lagMs / 1000).toFixed(3)} s after it was recorded, limit ${limit} s`,
+      });
+    }
+  }
+  if (findings.length > 0) {
+    report.findings = [...report.findings, ...findings].sort((a, b) => a.seq - b.seq);
+  }
 }
 
 function delegationForRun(
@@ -338,9 +412,34 @@ function checkPayload(
 }
 
 /**
+ * What the witnesses have seen of a run (SPEC 8.2): the records after the last anchored one,
+ * anchor records not counted, and the anchor lag of every `human_approval` record.
+ *
+ * @param records - Records of one run in ascending seq order.
+ * @param witnessed - `[anchored_seq, witness time in ms]` of the witness-verified anchors, in
+ * chain order.
+ */
+export function anchorCoverage(
+  records: SealedRunRecord[],
+  witnessed: [number, number][],
+): { unanchoredRecords: number; approvalAnchors: ApprovalAnchor[] } {
+  const covered = witnessed.reduce((most, [seq]) => Math.max(most, seq), -1);
+  let unanchoredRecords = 0;
+  const approvalAnchors: ApprovalAnchor[] = [];
+  for (const record of records) {
+    if (record.kind !== "anchor" && record.seq > covered) unanchoredRecords += 1;
+    if (record.kind !== "human_approval") continue;
+    const seen = witnessed.find(([anchored]) => anchored >= record.seq);
+    const lagMs = seen ? seen[1] - parseTimestamp(record.occurred_at) : null;
+    approvalAnchors.push({ seq: record.seq, recordId: record.record_id, lagMs });
+  }
+  return { unanchoredRecords, approvalAnchors };
+}
+
+/**
  * {@link verifyRun}, then the anchor receipts against the witness trust list (SPEC 8.4), filling
- * `anchorsWitnessVerified`. `rfc3161` and `rekor` receipts are verified; other types count as
- * bound, not verified.
+ * `anchorsWitnessVerified`, `unanchoredRecords` and `approvalAnchors`. `rfc3161` and `rekor`
+ * receipts are verified; other types count as bound, not verified.
  *
  * @throws VerificationError as {@link verifyRun}, plus check `witness` under `strictWitness`.
  */
@@ -350,8 +449,25 @@ export async function verifyRunAsync(
   options: VerifyRunOptions & WitnessOptions = {},
 ): Promise<RunReport> {
   const report = verifyRun(records, delegations, options);
-  report.anchorsWitnessVerified = await verifyWitnesses(records, options);
+  await applyWitnesses(report, records, options);
   return report;
+}
+
+/**
+ * Verifies the anchor receipts of an already verified run against the trust list and fills
+ * `anchorsWitnessVerified`, `unanchoredRecords` and `approvalAnchors` of its report, adding the
+ * `anchor.*` findings under `maxApprovalAnchorLag`.
+ *
+ * @throws VerificationError with check `witness` under `strictWitness`.
+ */
+export async function applyWitnesses(
+  report: RunReport,
+  records: SealedRunRecord[],
+  options: WitnessOptions = {},
+): Promise<void> {
+  const witnessed = await witnessTimes(records, options);
+  report.anchorsWitnessVerified = witnessed.length;
+  reportCoverage(report, records, witnessed, options.maxApprovalAnchorLag);
 }
 
 /**
@@ -363,13 +479,20 @@ export async function verifyWitnesses(
   records: SealedRunRecord[],
   options: WitnessOptions = {},
 ): Promise<number> {
+  return (await witnessTimes(records, options)).length;
+}
+
+async function witnessTimes(
+  records: SealedRunRecord[],
+  options: WitnessOptions,
+): Promise<[number, number][]> {
   const witnesses = options.witnesses ?? shippedWitnesses();
-  let verified = 0;
+  const witnessed: [number, number][] = [];
   for (const record of records) {
     if (record.kind !== "anchor") continue;
     const anchor = record.extensions?.["sealedrun.anchor"] as Record<string, unknown>;
-    const ok = await verifyReceipt(anchor, witnesses);
-    if (ok) verified += 1;
+    const seenAt = await receiptTime(anchor, witnesses);
+    if (seenAt !== null) witnessed.push([anchor["anchored_seq"] as number, seenAt]);
     else if (options.strictWitness) {
       throw new VerificationError(
         "witness",
@@ -379,7 +502,7 @@ export async function verifyWitnesses(
       );
     }
   }
-  return verified;
+  return witnessed;
 }
 
 /** Verifies one anchor's receipt by its type against the trust list (SPEC 8.4). */
@@ -387,14 +510,27 @@ export async function verifyReceipt(
   anchor: Record<string, unknown>,
   witnesses: Witness[],
 ): Promise<boolean> {
+  return (await receiptTime(anchor, witnesses)) !== null;
+}
+
+/**
+ * The time a witness attests for one anchor, when its receipt verifies against the trust list
+ * (SPEC 8.4).
+ *
+ * @returns Milliseconds since the Unix epoch, or null when the receipt does not verify.
+ */
+export async function receiptTime(
+  anchor: Record<string, unknown>,
+  witnesses: Witness[],
+): Promise<number | null> {
   const witness = anchor["witness"] as string;
   if (anchor["type"] === "rfc3161") {
-    return verifyRfc3161(anchor["receipt"] as Rfc3161Receipt, witness, witnesses);
+    return verifiedTimeRfc3161(anchor["receipt"] as Rfc3161Receipt, witness, witnesses);
   }
   if (anchor["type"] === "rekor") {
-    return verifyRekor(anchor["receipt"] as RekorReceipt, witness, witnesses);
+    return verifiedTimeRekor(anchor["receipt"] as RekorReceipt, witness, witnesses);
   }
-  return false;
+  return null;
 }
 
 /**

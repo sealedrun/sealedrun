@@ -12,7 +12,7 @@ from __future__ import annotations
 import base64
 import hashlib
 from dataclasses import dataclass
-from datetime import UTC
+from datetime import UTC, datetime
 from typing import Any
 
 from asn1crypto import cms, core, tsp
@@ -113,33 +113,39 @@ def verify(receipt: dict[str, Any], witness: str, trust: list[Witness]) -> bool:
     Returns False when no trust entry matches the witness, when the token fails any check, or
     when its time lies outside the entry's validity. Never raises on bad input.
     """
-    entries = select(trust, "rfc3161", witness)
-    if not entries:
-        return False
+    return verified_time(receipt, witness, trust) is not None
+
+
+def verified_time(receipt: dict[str, Any], witness: str, trust: list[Witness]) -> datetime | None:
+    """Return the time the authority signed, when the receipt verifies as in `verify`; else None."""
     try:
-        return any(_verify_with(receipt, entry) for entry in entries)
+        for entry in select(trust, "rfc3161", witness):
+            signed_at = _verify_with(receipt, entry)
+            if signed_at is not None:
+                return signed_at
     except (TsaVerificationError, ValueError, KeyError, TypeError, OverflowError):
-        return False
+        return None
+    return None
 
 
-def _verify_with(receipt: dict[str, Any], entry: Witness) -> bool:
+def _verify_with(receipt: dict[str, Any], entry: Witness) -> datetime | None:
     token = cms.ContentInfo.load(base64.b64decode(receipt["token"]), strict=True)
     info = _tst_info(token)
-    gen_time = info["gen_time"].native.astimezone(UTC)
+    gen_time: datetime = info["gen_time"].native.astimezone(UTC)
     if not entry.covers(gen_time):
-        return False
+        return None
     if "gen_time" in receipt and parse_instant(receipt["gen_time"]) != gen_time:
-        return False
+        return None
     if "policy" in receipt and info["policy"].native != receipt["policy"]:
-        return False
+        return None
     if info["message_imprint"]["hash_algorithm"]["algorithm"].native != "sha256":
-        return False
+        return None
     response = tsp.TimeStampResp({"status": {"status": "granted"}, "time_stamp_token": token}).dump(
         force=True
     )
     decoded = decode_timestamp_response(response)
     if PKIStatus(decoded.status) != PKIStatus.GRANTED:
-        return False
+        return None
     builder = VerifierBuilder().nonce(int(receipt["nonce"]))
     roots = [x509.load_pem_x509_certificate(pem.encode()) for pem in entry.roots]
     for root in roots:
@@ -147,7 +153,7 @@ def _verify_with(receipt: dict[str, Any], entry: Witness) -> bool:
     offered = [x509.load_pem_x509_certificate(pem.encode()) for pem in receipt.get("chain", [])]
     for certificate in _issued_under(roots, offered):
         builder = builder.add_intermediate_certificate(certificate)
-    return bool(builder.build().verify(decoded, imprint(receipt["digest"])))
+    return gen_time if builder.build().verify(decoded, imprint(receipt["digest"])) else None
 
 
 def _issued_under(

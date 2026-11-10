@@ -146,6 +146,7 @@ async def lifespan(app: FastAPI) -> Any:
         task.cancel()
         with suppress(asyncio.CancelledError):
             await task
+    await app.state.anchoring.close()
     await app.state.http.aclose()
     engine.dispose()
 

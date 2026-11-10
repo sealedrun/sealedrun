@@ -50,6 +50,12 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="fail on the first step that ran without the human approval its policy required",
     )
+    parser.add_argument(
+        "--max-approval-lag",
+        type=float,
+        metavar="SECONDS",
+        help="list every human approval that no verified anchor covers within this time",
+    )
     try:
         args = parser.parse_args(sys.argv[1:] if argv is None else argv)
     except SystemExit as error:
@@ -66,6 +72,7 @@ def main(argv: list[str] | None = None) -> int:
             principals or None,
             strict_scope=args.strict_scope,
             strict_approval=args.strict_approval,
+            max_approval_anchor_lag=args.max_approval_lag,
         )
     except VerificationError as error:
         print(f"FAIL {plain(str(error))}")
@@ -89,6 +96,12 @@ def main(argv: list[str] | None = None) -> int:
             print(f"    seq {finding.seq} {finding.check}: {plain(finding.reason)}")
         for seq in run.system_prompt_changes:
             print(f"    seq {seq} system prompt changed")
+        print(f"    records after the last verified anchor: {run.unanchored_records}")
+        for approval in run.approval_anchors:
+            if approval.lag_ms is None:
+                print(f"    seq {approval.seq} approval: no verified anchor covers it")
+            else:
+                print(f"    seq {approval.seq} approval: anchor lag {approval.lag_ms / 1000:.3f} s")
         if run.run_id in report.parents_unresolved:
             print("    parent run not in this bundle; verify both bundles together")
     return 0

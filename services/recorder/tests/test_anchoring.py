@@ -11,6 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sealedrun import read_bundle, verify_bundle
 from sealedrun.trust import Witness
+from sealedrun_recorder.db import RecordRow
 
 from .conftest import PROXY_TOKEN, FakeTsa, FakeUpstream, load_test_tsa
 
@@ -339,3 +340,226 @@ def test_identity_reports_anchor_status(
         export(client, client.get("/api/runs", headers=AUTH).json()[0]["run_id"])
         status = client.get("/api/identity", headers=AUTH).json()["anchors"]
         assert "tsa" in status["last_error"] and TSA in status["last_error"]["tsa"]["message"]
+
+
+APPROVAL = {
+    "kind": "human_approval",
+    "actor": {"type": "human", "id": "reviewer"},
+    "target": {"type": "human", "name": "reviewer"},
+    "outcome": "success",
+}
+TOOL_STEP = {"kind": "tool_call", "target": {"type": "tool", "name": "add"}, "outcome": "success"}
+
+
+def post_to_run(client: TestClient, run_id: str, step: dict[str, Any]) -> dict[str, Any]:
+    reply = client.post(f"/api/runs/{run_id}/steps", json=step, headers=AUTH)
+    assert reply.status_code == 201, reply.text
+    return dict(reply.json())
+
+
+def live_records(client: TestClient, run_id: str) -> list[dict[str, Any]]:
+    with client.app.state.live._sessions() as session:  # type: ignore[attr-defined]
+        rows = session.query(RecordRow).filter_by(run_id=run_id).order_by(RecordRow.seq)
+        return [row.document for row in rows]
+
+
+def wait_for_anchors(client: TestClient, run_id: str, count: int) -> dict[str, Any]:
+    deadline = time.monotonic() + 5
+    while True:
+        summary = dict(client.get(f"/api/runs/{run_id}", headers=AUTH).json())
+        if summary["anchors"] >= count or time.monotonic() > deadline:
+            return summary
+        time.sleep(0.02)
+
+
+def test_approval_is_anchored_at_once(
+    make_proxy: Any, upstream: FakeUpstream, authority: Any
+) -> None:
+    tsa = FakeTsa(authority)
+    mount(upstream, tsa)
+    client = make_proxy(CONFIG, anchors=["tsa"], anchor_tsa_url=TSA, anchor_interval_seconds=3600)
+    with client:
+        run_id = start_run(client)
+        approval = post_to_run(client, run_id, APPROVAL)
+        assert wait_for_anchors(client, run_id, 1)["anchors"] == 1
+        records = live_records(client, run_id)
+        assert [r["kind"] for r in records] == [
+            "run_start",
+            "tool_call",
+            "human_approval",
+            "anchor",
+        ]
+        anchor = records[3]["extensions"]["sealedrun.anchor"]
+        assert (anchor["anchored_seq"], anchor["anchored_hash"]) == (
+            approval["seq"],
+            approval["hash"],
+        )
+        report = verify_bundle(export(client, run_id), witnesses=trust_for(authority))
+        assert (report.runs[0].anchors, report.runs[0].anchors_witness_verified) == (1, 1)
+        assert tsa.requests == 1
+
+
+def test_approval_on_a_labelled_run_is_anchored(
+    make_proxy: Any, upstream: FakeUpstream, authority: Any
+) -> None:
+    tsa = FakeTsa(authority)
+    mount(upstream, tsa)
+    client = make_proxy(CONFIG, anchors=["tsa"], anchor_tsa_url=TSA, anchor_interval_seconds=3600)
+    with client:
+        reply = client.post(
+            "/api/steps", json=APPROVAL, headers={**AUTH, "X-SealedRun-Run": "review-1"}
+        )
+        assert reply.status_code == 201, reply.text
+        run_id = reply.json()["run_id"]
+        assert wait_for_anchors(client, run_id, 1)["anchors"] == 1
+        assert (
+            live_records(client, run_id)[-1]["extensions"]["sealedrun.anchor"]["anchored_seq"]
+            == reply.json()["seq"]
+        )
+
+
+def test_other_steps_wait_for_the_interval(
+    make_proxy: Any, upstream: FakeUpstream, authority: Any
+) -> None:
+    tsa = FakeTsa(authority)
+    mount(upstream, tsa)
+    client = make_proxy(CONFIG, anchors=["tsa"], anchor_tsa_url=TSA, anchor_interval_seconds=3600)
+    with client:
+        run_id = start_run(client)
+        post_to_run(client, run_id, TOOL_STEP)
+        time.sleep(0.3)
+        assert tsa.requests == 0
+        assert [r["kind"] for r in live_records(client, run_id)][-1] == "tool_call"
+
+
+def test_a_burst_of_approvals_shares_anchors(
+    make_proxy: Any, upstream: FakeUpstream, authority: Any
+) -> None:
+    tsa = FakeTsa(authority)
+    mount(upstream, tsa)
+    client = make_proxy(
+        CONFIG,
+        anchors=["tsa"],
+        anchor_tsa_url=TSA,
+        anchor_interval_seconds=3600,
+        anchor_event_gap_seconds=0.6,
+    )
+    with client:
+        run_id = start_run(client)
+        post_to_run(client, run_id, APPROVAL)
+        assert wait_for_anchors(client, run_id, 1)["anchors"] == 1
+        started = time.monotonic()
+        last = [post_to_run(client, run_id, APPROVAL) for _ in range(5)][-1]
+        assert wait_for_anchors(client, run_id, 2)["anchors"] == 2
+        assert time.monotonic() - started >= 0.4
+        time.sleep(0.3)
+        records = live_records(client, run_id)
+        assert tsa.requests == 2
+        assert [r["kind"] for r in records].count("anchor") == 2
+        assert records[-1]["extensions"]["sealedrun.anchor"]["anchored_seq"] == last["seq"]
+
+
+def test_approval_is_sealed_when_the_witness_is_down(
+    make_proxy: Any, upstream: FakeUpstream, authority: Any
+) -> None:
+    tsa = FakeTsa(authority, fail=100)
+    mount(upstream, tsa)
+    client = make_proxy(
+        CONFIG,
+        anchors=["tsa"],
+        anchor_tsa_url=TSA,
+        anchor_tsa_fallback_url="",
+        anchor_interval_seconds=3600,
+        anchor_event_gap_seconds=0,
+    )
+    with client:
+        run_id = start_run(client)
+        post_to_run(client, run_id, APPROVAL)
+        deadline = time.monotonic() + 5
+        while tsa.requests < 2 and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert tsa.requests == 2
+        post_to_run(client, run_id, TOOL_STEP)
+        assert [r["kind"] for r in live_records(client, run_id)] == [
+            "run_start",
+            "tool_call",
+            "human_approval",
+            "tool_call",
+        ]
+        status = client.get("/api/identity", headers=AUTH).json()["anchors"]
+        assert "tsa" in status["last_error"]
+
+
+def test_approval_without_anchoring_starts_nothing(make_proxy: Any) -> None:
+    client = make_proxy(CONFIG, anchors=[])
+    with client:
+        run_id = start_run(client)
+        post_to_run(client, run_id, APPROVAL)
+        assert client.app.state.anchoring._soon == {}
+        assert [r["kind"] for r in live_records(client, run_id)][-1] == "human_approval"
+
+
+def test_pending_anchor_is_cancelled_on_shutdown(
+    make_proxy: Any, upstream: FakeUpstream, authority: Any
+) -> None:
+    tsa = FakeTsa(authority)
+    mount(upstream, tsa)
+    client = make_proxy(
+        CONFIG,
+        anchors=["tsa"],
+        anchor_tsa_url=TSA,
+        anchor_interval_seconds=3600,
+        anchor_event_gap_seconds=600,
+    )
+    with client:
+        run_id = start_run(client)
+        post_to_run(client, run_id, APPROVAL)
+        assert wait_for_anchors(client, run_id, 1)["anchors"] == 1
+        post_to_run(client, run_id, APPROVAL)
+        anchoring = client.app.state.anchoring
+        assert list(anchoring._soon) == [run_id]
+    assert anchoring._soon == {}
+    assert tsa.requests == 1
+
+
+def test_event_gap_is_not_negative(tmp_path: Any) -> None:
+    from pydantic import ValidationError
+    from sealedrun_recorder.settings import Settings
+
+    assert Settings(data_dir=tmp_path).anchor_event_gap_seconds == 5.0
+    with pytest.raises(ValidationError):
+        Settings(data_dir=tmp_path, anchor_event_gap_seconds=-1)
+
+
+def test_record_sealed_during_the_witness_call_is_anchored_next(
+    make_proxy: Any, upstream: FakeUpstream, authority: Any
+) -> None:
+    tsa = FakeTsa(authority)
+    mount(upstream, tsa)
+    client = make_proxy(CONFIG, anchors=["tsa"], anchor_tsa_url=TSA, anchor_interval_seconds=3600)
+    with client:
+        live = client.app.state.live
+        run_id = start_run(client)
+        answer = tsa.timestamp
+
+        def late(request: httpx.Request) -> httpx.Response:
+            if tsa.requests == 0:
+                live.append(run_id, "tool_call", target={"type": "tool", "name": "late"})
+            return answer(request)
+
+        upstream.routes["/api/v1/timestamp"] = late
+        first = records_of(export(client, run_id), run_id)
+        assert [r["kind"] for r in first] == ["run_start", "tool_call", "tool_call", "anchor"]
+        assert first[3]["extensions"]["sealedrun.anchor"]["anchored_seq"] == 1
+        assert live.unanchored_head(run_id) == (3, first[3]["hash"])
+
+        second = export(client, run_id)
+        records = records_of(second, run_id)
+        assert [r["kind"] for r in records][-2:] == ["anchor", "anchor"]
+        assert records[4]["extensions"]["sealedrun.anchor"]["anchored_seq"] == 3
+        assert live.unanchored_head(run_id) is None
+        report = verify_bundle(second, witnesses=trust_for(authority))
+        assert (report.runs[0].anchors, report.runs[0].anchors_witness_verified) == (2, 2)
+
+        export(client, run_id)
+        assert tsa.requests == 2

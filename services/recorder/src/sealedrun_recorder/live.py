@@ -211,6 +211,30 @@ class LiveRuns:
                 raise LiveRunError("run head does not match the stored records")
             return last.seq, last.hash, last.kind
 
+    def unanchored_head(self, run_id: str) -> tuple[int, str] | None:
+        """Return `(seq, hash)` of the head when records sit after the last anchored one.
+
+        None when every record that is not itself an anchor is covered by a later anchor. A
+        record sealed while a witness was being asked lands before that anchor's record and is
+        not covered by it, so the last record being an anchor does not settle the question.
+        Raises LiveRunError when the run is unknown, imported or closed.
+        """
+        seq, head, kind = self.head(run_id)
+        if kind != "anchor":
+            return seq, head
+        with self._sessions() as session:
+            last = session.scalars(
+                select(RecordRow.seq)
+                .where(RecordRow.run_id == run_id, RecordRow.kind != "anchor")
+                .order_by(RecordRow.seq.desc())
+                .limit(1)
+            ).one()
+            later = session.scalars(
+                select(RecordRow.document).where(RecordRow.run_id == run_id, RecordRow.seq > last)
+            )
+            covered = max(doc["extensions"]["sealedrun.anchor"]["anchored_seq"] for doc in later)
+        return None if covered >= last else (seq, head)
+
     def open_runs(self) -> list[str]:
         """Return the ids of live runs that are not complete."""
         with self._sessions() as session:

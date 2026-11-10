@@ -146,3 +146,23 @@ def test_cli_lists_approval_findings_and_strict_flag(
     assert "seq 1 approval.missing: step required approval" in text
     assert main(["--strict-approval", str(path)]) == 1
     assert capsys.readouterr().out.startswith("FAIL approval.missing")
+
+
+def test_cli_reports_the_unanchored_tail_and_approval_lag(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main([str(BUNDLES / "valid.zip")]) == 0
+    out = capsys.readouterr().out
+    assert "    records after the last verified anchor: 2\n" in out
+    assert "    seq 5 approval: anchor lag 1018027.000 s\n" in out
+    assert "findings 0" in out
+
+    assert main([str(BUNDLES / "valid.zip"), "--max-approval-lag", "5"]) == 0
+    out = capsys.readouterr().out
+    assert "findings 1" in out
+    assert (
+        "    seq 5 anchor.approval_late: a witness saw this approval 1018027.000 s after it was "
+        "recorded, limit 5 s\n"
+    ) in out
+
+    assert main([str(BUNDLES / "valid.zip"), "--max-approval-lag", "x"]) == 2

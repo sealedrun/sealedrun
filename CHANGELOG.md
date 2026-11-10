@@ -5,6 +5,39 @@ follows Semantic Versioning once 1.0.0 is reached.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-10
+
+The records after the last anchor are no longer a blind spot: approvals are anchored at once and
+the verifier says how much of a run no witness has seen.
+
+### Added
+
+- Recorder: the chain head is anchored right after every `human_approval` record instead of at
+  the next interval (SPEC 8.2). Approvals closer together than
+  `SEALEDRUN_ANCHOR_EVENT_GAP_SECONDS` (default 5) share one anchor; a witness that cannot be
+  reached never holds the run back.
+- Verifiers (Python and TypeScript): `unanchored_records` / `unanchoredRecords`, the records
+  after the last witness-verified anchor, and `approval_anchors` / `approvalAnchors`, how long
+  after each human approval a witness saw a head that covers it.
+  `max_approval_anchor_lag` / `maxApprovalAnchorLag` and `--max-approval-lag` list approvals
+  covered late or not at all as findings `anchor.approval_late` and
+  `anchor.approval_unanchored`.
+- Inspector: a verified bundle says how many records come after the last verified anchor and
+  how soon a witness saw the human approvals; each approval step shows its own time.
+- `spec/vectors/anchors/coverage.json`: eleven runs with the coverage every verifier must
+  report.
+
+### Fixed
+
+- Recorder: a record sealed while a witness was being asked stayed without an anchor until the
+  next record arrived, because the anchor written after it made the head look anchored.
+
+### Changed
+
+- TRUST.md and README say plainly that the records after the last anchor can be rewritten by
+  whoever runs the recorder, that a time-stamp authority keeps no public record of its tokens,
+  and that the stdio wrapper shows what passed through it, not that nothing went around it.
+
 ## [0.8.1] - 2026-11-05
 
 Which MCP server answered: every MCP call carries the name and version the server reported about
