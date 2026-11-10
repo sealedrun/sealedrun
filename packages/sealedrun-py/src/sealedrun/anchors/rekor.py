@@ -12,6 +12,7 @@ import base64
 import hashlib
 import json
 import re
+from datetime import UTC, datetime
 from typing import Any
 
 from cryptography.exceptions import InvalidSignature
@@ -114,13 +115,18 @@ def verify(receipt: dict[str, Any], witness: str, trust: list[Witness]) -> bool:
     Returns False when no trust entry matches the log (by URL or `log_id`), or any check
     fails; never raises on bad input.
     """
-    entries = select(trust, "rekor", witness, receipt.get("log_id"))
-    if not entries:
-        return False
+    return verified_time(receipt, witness, trust) is not None
+
+
+def verified_time(receipt: dict[str, Any], witness: str, trust: list[Witness]) -> datetime | None:
+    """Return the time the log integrated the entry, when the receipt verifies; else None."""
     try:
-        return any(_verify_with(receipt, entry) for entry in entries)
+        entries = select(trust, "rekor", witness, receipt.get("log_id"))
+        if any(_verify_with(receipt, entry) for entry in entries):
+            return datetime.fromtimestamp(receipt["integrated_time"], UTC)
     except (KeyError, TypeError, ValueError, InvalidSignature, OverflowError, OSError):
-        return False
+        return None
+    return None
 
 
 def _verify_with(receipt: dict[str, Any], entry: Witness) -> bool:
@@ -156,8 +162,6 @@ def _verify_with(receipt: dict[str, Any], entry: Witness) -> bool:
     if not 0 < integrated < MAX_INTEGRATED_TIME:
         return False
     if integrated is not None:
-        from datetime import UTC, datetime
-
         if not entry.covers(datetime.fromtimestamp(integrated, UTC)):
             return False
         if set_ is None:

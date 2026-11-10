@@ -536,6 +536,26 @@ verifies), so the entry attests the record whose hash the head is.
 ### 8.2 Cadence
 
 Recorders SHOULD anchor at least every 10 minutes while a Run is active, and always at `run_end`.
+Records after the last anchor are not yet witnessed and can be replaced by whoever holds the
+Agent keys, so a recorder SHOULD also anchor right after a `human_approval` record instead of
+waiting for the interval. It MAY let approvals that follow each other within a few seconds share
+one anchor, and it MUST NOT hold a Run back when a witness cannot be reached.
+
+A record that is replaced later can only be covered by an anchor taken after the replacement,
+and a witness's time cannot be set back. A verifier therefore reports, per run:
+
+- `unanchored_records`: the records after the last one that a witness-verified anchor covers
+  (8.4), anchor records not counted. An anchor covers the record it names in `anchored_seq` and
+  every record before it.
+- for each `human_approval` record, the anchor lag: the witness time of the first
+  witness-verified anchor, in chain order, whose `anchored_seq` is at or above the record's
+  `seq`, minus the record's `occurred_at`, in whole milliseconds; or that no such anchor exists.
+  The witness time is `genTime` of an `rfc3161` token and `integrated_time` of a `rekor`
+  receipt. The lag may be negative when the clocks differ.
+
+Given a limit by the relying party, the verifier lists an approval without a covering anchor as
+the finding `anchor.approval_unanchored` and one whose lag is above the limit as
+`anchor.approval_late`. Neither fails verification. Vectors: `anchors/coverage.json`.
 
 ### 8.3 Manifest signatures
 

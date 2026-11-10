@@ -19,7 +19,9 @@ class Finding:
     acted where the Principal did not allow it to.
 
     Attributes:
-        check: `scope.target`, `scope.location`, `scope.label` or `scope.max_records`.
+        check: `scope.target`, `scope.location`, `scope.label` or `scope.max_records`; the
+            approval check (SPEC 6.6) and the anchor check (SPEC 8.2) report `approval.*` and
+            `anchor.*` in the same form.
         seq: Sequence number of the record.
         record_id: Its `record_id`.
         reason: Human-readable detail.

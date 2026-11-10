@@ -2,10 +2,12 @@
 
 One `Anchoring` per app: `loop` wakes every interval and anchors each open run whose head moved
 since its last anchor; `anchor_run` does the same for one run on demand, before an export or
-`run_end`. Each cycle writes one anchor record per configured witness: the time-stamp authority
-(with its fallback) and, when set, the Rekor log, both over the same head. A witness that fails
-never blocks a run: the failure is logged and the next cycle tries again. The anchor records go
-through `LiveRuns.append`, so they are signed and chained like any other record.
+`run_end`; `anchor_soon` does it in the background right after a record that should not wait for
+the interval, a `human_approval`. Each cycle writes one anchor record per configured witness:
+the time-stamp authority (with its fallback) and, when set, the Rekor log, both over the same
+head. A witness that fails never blocks a run: the failure is logged and the next cycle tries
+again. The anchor records go through `LiveRuns.append`, so they are signed and chained like any
+other record.
 """
 
 from __future__ import annotations
@@ -75,8 +77,12 @@ class Anchoring:
         self.status = AnchorStatus(self._anchors)
         self._interval = settings.anchor_interval_seconds
         self._timeout = settings.anchor_timeout_seconds
+        self._gap = settings.anchor_event_gap_seconds
         self._chains: dict[str, list[str]] = {}
         self._busy: dict[str, asyncio.Lock] = {}
+        self._wanted: set[str] = set()
+        self._soon: dict[str, asyncio.Task[None]] = {}
+        self._last_soon: dict[str, float] = {}
 
     @property
     def enabled(self) -> bool:
@@ -103,12 +109,54 @@ class Anchoring:
                 except Exception:
                     log.exception("anchor run=%s failed", run_id)
 
+    def anchor_soon(self, run_id: str) -> None:
+        """Anchor the head of `run_id` in the background, without waiting for the interval.
+
+        Returns at once. Calls for one run that arrive within `anchor_event_gap_seconds` after
+        its previous such anchor was written wait for the gap to pass and share one anchor, so a
+        burst of approvals costs the witness one request. A witness that fails is logged; the
+        interval anchors the head later.
+        """
+        if not self.enabled:
+            return
+        self._wanted.add(run_id)
+        if run_id not in self._soon:
+            self._soon[run_id] = asyncio.create_task(self._anchor_wanted(run_id))
+
+    async def _anchor_wanted(self, run_id: str) -> None:
+        clock = asyncio.get_running_loop().time
+        try:
+            while run_id in self._wanted:
+                last = self._last_soon.get(run_id)
+                if last is not None and (wait := last + self._gap - clock()) > 0:
+                    await asyncio.sleep(wait)
+                self._wanted.discard(run_id)
+                try:
+                    await self.anchor_run(run_id)
+                except Exception:
+                    log.exception("anchor run=%s failed", run_id)
+                finally:
+                    self._last_soon[run_id] = clock()
+        finally:
+            self._wanted.discard(run_id)
+            del self._soon[run_id]
+            horizon = clock() - self._gap
+            for other in [r for r, at in self._last_soon.items() if at < horizon]:
+                del self._last_soon[other]
+
+    async def close(self) -> None:
+        """Cancel the background anchors still waiting or running."""
+        tasks = list(self._soon.values())
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
     async def anchor_run(self, run_id: str) -> list[dict[str, Any]]:
         """Anchor the head of `run_id` unless it is already anchored or anchoring is off.
 
         Returns the anchor records written, in order (authority first, then the log); empty
-        when nothing was written: anchoring off, run not open, the last record already an
-        anchor, or every witness failed (logged).
+        when nothing was written: anchoring off, run not open, every record already covered
+        by an anchor, or every witness failed (logged).
         """
         if not self.enabled:
             return []
@@ -122,11 +170,12 @@ class Anchoring:
 
     async def _anchor_locked(self, run_id: str) -> list[dict[str, Any]]:
         try:
-            seq, head, kind = await run_in_threadpool(self._live.head, run_id)
+            target = await run_in_threadpool(self._live.unanchored_head, run_id)
         except LiveRunError:
             return []
-        if kind == "anchor":
+        if target is None:
             return []
+        seq, head = target
         written = []
         if self._urls:
             receipt, url = await self._timestamp_any(run_id, head)

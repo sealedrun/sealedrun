@@ -13,6 +13,9 @@ import {
   summarize,
   verifyLocally,
   witnessResults,
+  coverageOf,
+  coverageSummary,
+  formatLag,
   formatBytes,
   LARGE_EXPORT_BYTES,
   MAX_BROWSER_BUNDLE_BYTES,
@@ -280,5 +283,73 @@ describe("verifyLocally reports mandate and corroboration", () => {
     expect(run?.receiptsProxy).toBe(0);
     expect(run?.receiptsSelfReported).toBe(0);
     expect(result.report?.parentsUnresolved).toEqual([]);
+  });
+});
+
+describe("coverage", () => {
+  const at = (seq: number, kind: string, second: number): SealedRunRecord =>
+    ({
+      ...record(),
+      record_id: `r${seq}`,
+      seq,
+      kind,
+      occurred_at: `2026-09-28T00:00:${String(second).padStart(2, "0")}.000Z`,
+      ...(kind === "anchor"
+        ? { extensions: { "sealedrun.anchor": { anchored_seq: seq - 1 } } }
+        : {}),
+    }) as SealedRunRecord;
+  const time = (second: number) =>
+    Date.parse(`2026-09-28T00:00:${String(second).padStart(2, "0")}Z`);
+  const records = [
+    at(0, "run_start", 0),
+    at(1, "human_approval", 1),
+    at(2, "anchor", 2),
+    at(3, "human_approval", 3),
+    at(4, "anchor", 4),
+    at(5, "tool_call", 5),
+  ];
+
+  test("verified anchors cover the approvals before them and leave the tail", () => {
+    const witness = new Map([
+      [recordKey(records[2]!), { verified: true, time: time(3) }],
+      [recordKey(records[4]!), { verified: true, time: time(9) }],
+    ]);
+    const coverage = coverageOf(records, witness);
+    expect(coverage.unanchored).toBe(1);
+    expect([...coverage.approvals]).toEqual([
+      ["r1", 2000],
+      ["r3", 6000],
+    ]);
+    expect(coverageSummary(coverage)).toBe(
+      "1 record comes after the last verified anchor: no witness has seen it. " +
+        "A witness saw every human approval within 6.0 s of its recording.",
+    );
+  });
+
+  test("an unverified anchor covers nothing", () => {
+    const witness = new Map([
+      [recordKey(records[2]!), { verified: true, time: time(3) }],
+      [recordKey(records[4]!), { verified: false }],
+    ]);
+    const coverage = coverageOf(records, witness);
+    expect(coverage.unanchored).toBe(2);
+    expect(coverage.approvals.get("r3")).toBeNull();
+    expect(coverageSummary(coverage)).toBe(
+      "2 records come after the last verified anchor: no witness has seen them. " +
+        "1 of 2 human approvals is not covered by a verified anchor.",
+    );
+  });
+
+  test("a covered run without approvals says nothing", () => {
+    const run = [at(0, "run_start", 0), at(1, "anchor", 1)];
+    const witness = new Map([[recordKey(run[1]!), { verified: true, time: time(1) }]]);
+    expect(coverageSummary(coverageOf(run, witness))).toBe("");
+  });
+
+  test("lags are shown in the unit that fits", () => {
+    expect(formatLag(1234)).toBe("1.2 s");
+    expect(formatLag(240_000)).toBe("4 min");
+    expect(formatLag(3 * 3600_000)).toBe("3 h");
+    expect(formatLag(1_018_027_000)).toBe("12 days");
   });
 });

@@ -8,10 +8,10 @@ import { assertDelegation, assertManifest, assertRecord } from "./structure.js";
 import { checkHash, checkSignatures, DOMAIN_MANIFEST } from "./signing.js";
 import type { SealedRunRecord, Delegation, Manifest } from "./types.js";
 import {
+  applyWitnesses,
   checkParentLinks,
   type RunReport,
   verifyRun,
-  verifyWitnesses,
   type WitnessOptions,
 } from "./verify.js";
 
@@ -56,7 +56,8 @@ export interface VerifyBundleOptions {
 
 /**
  * {@link verifyBundle}, then the anchor receipts of every run against the witness trust list
- * (SPEC 8.4), filling `anchorsWitnessVerified` in each run report.
+ * (SPEC 8.4), filling `anchorsWitnessVerified`, `unanchoredRecords` and `approvalAnchors` in
+ * each run report.
  *
  * @throws VerificationError as {@link verifyBundle}, plus check `witness` under `strictWitness`.
  */
@@ -67,7 +68,7 @@ export async function verifyBundleAsync(
   const report = verifyBundle(bundle, options);
   for (const run of report.runs) {
     const records = bundle.runs.get(run.runId) ?? [];
-    run.anchorsWitnessVerified = await verifyWitnesses(records, options);
+    await applyWitnesses(run, records, options);
   }
   return report;
 }

@@ -56,15 +56,28 @@ export async function verifyRekor(
   witness: string,
   trust: Witness[],
 ): Promise<boolean> {
+  return (await verifiedTimeRekor(receipt, witness, trust)) !== null;
+}
+
+/**
+ * The time the log integrated the entry, when the receipt verifies as in {@link verifyRekor}.
+ *
+ * @returns Milliseconds since the Unix epoch, or null when the receipt does not verify.
+ */
+export async function verifiedTimeRekor(
+  receipt: RekorReceipt,
+  witness: string,
+  trust: Witness[],
+): Promise<number | null> {
   const entries = selectWitnesses(trust, "rekor", witness, receipt.log_id);
   for (const entry of entries) {
     try {
-      if (verifyWith(receipt, entry)) return true;
+      if (verifyWith(receipt, entry)) return (receipt.integrated_time as number) * 1000;
     } catch {
       continue;
     }
   }
-  return false;
+  return null;
 }
 
 function verifyWith(receipt: RekorReceipt, entry: Witness): boolean {

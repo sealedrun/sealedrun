@@ -1,4 +1,5 @@
 import {
+  anchorCoverage,
   type SealedRunRecord,
   type Bundle,
   type BundleReport,
@@ -7,7 +8,7 @@ import {
   shippedWitnesses,
   VerificationError,
   verifyBundleAsync,
-  verifyReceipt,
+  receiptTime,
   type Witness,
 } from "@sealedrun/core";
 
@@ -232,6 +233,8 @@ export function contextDifferences(a: RunContext, b: RunContext): string[] {
 /** What the offline witness check found for one anchor record. */
 export interface WitnessVerdict {
   verified: boolean;
+  /** The time the witness attests, in milliseconds since the Unix epoch, when verified. */
+  time?: number;
   /** The trust entry that verified the receipt: its endpoint and the root's subject. */
   witness?: string;
   subject?: string;
@@ -324,9 +327,78 @@ async function verdictFor(
   const logId = typeof receipt?.log_id === "string" ? receipt.log_id : undefined;
   const entries = selectWitnesses(trust, String(anchor["type"]), String(anchor["witness"]), logId);
   for (const entry of entries) {
-    if (await verifyReceipt(anchor, [entry])) {
-      return { verified: true, witness: entry.uri, subject: entry.subject };
+    const time = await receiptTime(anchor, [entry]);
+    if (time !== null) {
+      return { verified: true, time, witness: entry.uri, subject: entry.subject };
     }
   }
   return { verified: false };
+}
+
+/** What the witnesses have seen of one run, for display. */
+export interface Coverage {
+  /** Records after the last verified anchor, anchor records not counted. */
+  unanchored: number;
+  /** Per `human_approval` record id: the anchor lag in milliseconds, or null when not covered. */
+  approvals: Map<string, number | null>;
+}
+
+/**
+ * The part of one run that verified anchors cover (SPEC 8.2), from the verdicts of
+ * {@link witnessResults}.
+ */
+export function coverageOf(
+  records: SealedRunRecord[],
+  witness: Map<string, WitnessVerdict>,
+): Coverage {
+  const witnessed: [number, number][] = [];
+  for (const record of records) {
+    const verdict = record.kind === "anchor" ? witness.get(recordKey(record)) : undefined;
+    const anchor = record.extensions?.["sealedrun.anchor"] as { anchored_seq?: number } | undefined;
+    if (verdict?.time !== undefined && typeof anchor?.anchored_seq === "number") {
+      witnessed.push([anchor.anchored_seq, verdict.time]);
+    }
+  }
+  const coverage = anchorCoverage(records, witnessed);
+  return {
+    unanchored: coverage.unanchoredRecords,
+    approvals: new Map(coverage.approvalAnchors.map((a) => [a.recordId, a.lagMs])),
+  };
+}
+
+/** An anchor lag for display: `1.2 s`, `4 min`, `3 h` or `12 days`. */
+export function formatLag(lagMs: number): string {
+  const seconds = lagMs / 1000;
+  if (Math.abs(seconds) < 60) return `${seconds.toFixed(1)} s`;
+  if (Math.abs(seconds) < 3600) return `${Math.round(seconds / 60)} min`;
+  if (Math.abs(seconds) < 172_800) return `${Math.round(seconds / 3600)} h`;
+  return `${Math.round(seconds / 86_400)} days`;
+}
+
+/** One or two sentences on what no witness has seen yet and how soon approvals were covered. */
+export function coverageSummary(coverage: Coverage): string {
+  const parts: string[] = [];
+  if (coverage.unanchored > 0) {
+    parts.push(
+      coverage.unanchored === 1
+        ? "1 record comes after the last verified anchor: no witness has seen it."
+        : `${coverage.unanchored} records come after the last verified anchor: no witness has seen them.`,
+    );
+  }
+  const lags = [...coverage.approvals.values()];
+  const open = lags.filter((lag) => lag === null).length;
+  const covered = lags.filter((lag): lag is number => lag !== null);
+  if (open > 0) {
+    parts.push(
+      `${open} of ${lags.length} human approvals ${open === 1 ? "is" : "are"} not covered by a verified anchor.`,
+    );
+  } else if (covered.length > 0) {
+    const slowest = formatLag(Math.max(0, ...covered));
+    parts.push(
+      covered.length === 1
+        ? `A witness saw the human approval ${slowest} after it was recorded.`
+        : `A witness saw every human approval within ${slowest} of its recording.`,
+    );
+  }
+  return parts.join(" ");
 }

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from typing import Any
 
 from sealedrun.anchors import rekor, rfc3161
@@ -16,6 +17,25 @@ from sealedrun.scope import Finding, Scope, scope_within
 from sealedrun.signing import DOMAIN_RECORD, check_hash, check_signatures
 from sealedrun.timeutil import parse_timestamp
 from sealedrun.trust import Witness, load_witnesses
+
+
+@dataclass(frozen=True)
+class ApprovalAnchor:
+    """How soon a witness saw a chain head that covers one `human_approval` record.
+
+    Attributes:
+        seq: Sequence number of the `human_approval` record.
+        record_id: Its `record_id`.
+        lag_ms: Time of the first witness-verified anchor over this record or a later one, minus
+            the record's `occurred_at`, in milliseconds; None when no such anchor exists. A
+            record rewritten later can only be covered by a later anchor, so a long lag on an
+            approval is the trace such a rewrite leaves. A small negative value is normal:
+            `occurred_at` is the recorder's clock and authorities sign whole seconds.
+    """
+
+    seq: int
+    record_id: str
+    lag_ms: int | None
 
 
 @dataclass
@@ -37,6 +57,9 @@ class RunReport:
         receipts_self_reported: Receipts the caller supplied.
         system_prompt_changes: Seq of every `llm_call` whose `system_prompt_hash` differs from
             the previous `llm_call`'s (SPEC 10.1), including a hash appearing or disappearing.
+        unanchored_records: Records after the last one a witness-verified anchor covers, anchor
+            records not counted: the part of the run no witness has seen (SPEC 8.2).
+        approval_anchors: One entry per `human_approval` record, in seq order.
     """
 
     run_id: str
@@ -51,6 +74,8 @@ class RunReport:
     receipts_proxy: int = 0
     receipts_self_reported: int = 0
     system_prompt_changes: list[int] = field(default_factory=list)
+    unanchored_records: int = 0
+    approval_anchors: list[ApprovalAnchor] = field(default_factory=list)
 
 
 def verify_run(
@@ -63,6 +88,7 @@ def verify_run(
     strict_witness: bool = False,
     strict_scope: bool = False,
     strict_approval: bool = False,
+    max_approval_anchor_lag: float | None = None,
 ) -> RunReport:
     """Verify schema, chain, hashes, delegation and signatures of one run, in record order.
 
@@ -76,6 +102,9 @@ def verify_run(
     `strict_scope` turns the first one into a failure named after its check (`scope.target` and
     the like). A step that ran under `require_approval` without a matching `human_approval`
     before it (SPEC 6.6) is a finding too; `strict_approval` fails on the first `approval.*`.
+    With `max_approval_anchor_lag` (seconds), a `human_approval` that no witness-verified anchor
+    covers is the finding `anchor.approval_unanchored`, and one covered later than the limit is
+    `anchor.approval_late` (SPEC 8.2).
 
     Raises VerificationError at the first failed check.
     """
@@ -111,6 +140,7 @@ def verify_run(
     prompt_hash: str | None = None
     ended = False
     policy_set_hash: str | None = None
+    witnessed: list[tuple[int, datetime]] = []
 
     for index, record in enumerate(records):
         seq = first_seq + index
@@ -154,8 +184,12 @@ def verify_run(
         if record["kind"] == "anchor":
             _check_anchor(record, records, first_seq, run_id, seq)
             report.anchors += 1
-            if _witness_verified(record, witnesses):
+            seen_at = _witness_time(record, witnesses)
+            if seen_at is not None:
                 report.anchors_witness_verified += 1
+                witnessed.append(
+                    (record["extensions"]["sealedrun.anchor"]["anchored_seq"], seen_at)
+                )
             elif strict_witness:
                 raise VerificationError("witness", "anchor receipt not verified", run_id, seq)
         if record["kind"] == "run_end":
@@ -187,7 +221,58 @@ def verify_run(
         prev_hash = record["hash"]
 
     report.complete = ended
+    _report_coverage(report, records, witnessed, max_approval_anchor_lag)
     return report
+
+
+def _report_coverage(
+    report: RunReport,
+    records: list[dict[str, Any]],
+    witnessed: list[tuple[int, datetime]],
+    limit: float | None,
+) -> None:
+    """Fill `unanchored_records` and `approval_anchors`; add the `anchor.*` findings under `limit`.
+
+    `witnessed` holds `(anchored_seq, witness time)` of the witness-verified anchors in chain
+    order.
+    """
+    covered = max((seq for seq, _ in witnessed), default=report.first_seq - 1)
+    findings: list[Finding] = []
+    for record in records:
+        seq = record["seq"]
+        if record["kind"] != "anchor" and seq > covered:
+            report.unanchored_records += 1
+        if record["kind"] != "human_approval":
+            continue
+        seen_at = next((at for anchored, at in witnessed if anchored >= seq), None)
+        lag_ms = None
+        if seen_at is not None:
+            whole = seen_at.replace(microsecond=seen_at.microsecond // 1000 * 1000)
+            lag_ms = (whole - parse_timestamp(record["occurred_at"])) // timedelta(milliseconds=1)
+        report.approval_anchors.append(ApprovalAnchor(seq, record["record_id"], lag_ms))
+        if limit is None:
+            continue
+        if lag_ms is None:
+            findings.append(
+                Finding(
+                    "anchor.approval_unanchored",
+                    seq,
+                    record["record_id"],
+                    "no witness-verified anchor covers this approval",
+                )
+            )
+        elif lag_ms > limit * 1000:
+            findings.append(
+                Finding(
+                    "anchor.approval_late",
+                    seq,
+                    record["record_id"],
+                    f"a witness saw this approval {lag_ms / 1000:.3f} s after it was recorded, "
+                    f"limit {limit:g} s",
+                )
+            )
+    if findings:
+        report.findings = sorted(report.findings + findings, key=lambda finding: finding.seq)
 
 
 def parent_of(records: list[dict[str, Any]]) -> dict[str, str] | None:
@@ -371,14 +456,15 @@ def _check_anchor(
         )
 
 
-def _witness_verified(record: dict[str, Any], witnesses: list[Witness]) -> bool:
+def _witness_time(record: dict[str, Any], witnesses: list[Witness]) -> datetime | None:
     """Verify the anchor's receipt offline against the trust list (SPEC 8.4).
 
-    `rfc3161` and `rekor` receipts are verified; other types count as bound, not verified.
+    Returns the time the witness attests, or None when the receipt does not verify. `rfc3161`
+    and `rekor` receipts are verified; other types count as bound, not verified.
     """
     anchor = record["extensions"]["sealedrun.anchor"]
     if anchor["type"] == "rfc3161":
-        return rfc3161.verify(anchor["receipt"], anchor["witness"], witnesses)
+        return rfc3161.verified_time(anchor["receipt"], anchor["witness"], witnesses)
     if anchor["type"] == "rekor":
-        return rekor.verify(anchor["receipt"], anchor["witness"], witnesses)
-    return False
+        return rekor.verified_time(anchor["receipt"], anchor["witness"], witnesses)
+    return None

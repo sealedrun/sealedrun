@@ -314,6 +314,7 @@ def verify_bundle(
     strict_witness: bool = False,
     strict_scope: bool = False,
     strict_approval: bool = False,
+    max_approval_anchor_lag: float | None = None,
 ) -> BundleReport:
     """Verify a bundle per SPEC 13.2.
 
@@ -366,6 +367,7 @@ def verify_bundle(
             strict_witness=strict_witness,
             strict_scope=strict_scope,
             strict_approval=strict_approval,
+            max_approval_anchor_lag=max_approval_anchor_lag,
         )
         if report.record_count != entry["record_count"] or report.last_hash != entry["last_hash"]:
             raise VerificationError("manifest", "run entry does not match records", entry["run_id"])

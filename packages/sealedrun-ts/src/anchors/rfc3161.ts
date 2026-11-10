@@ -51,16 +51,35 @@ export async function verifyRfc3161(
   witness: string,
   trust: Witness[],
 ): Promise<boolean> {
-  const entries = selectWitnesses(trust, "rfc3161", witness);
-  if (entries.length === 0) return false;
-  for (const entry of entries) {
+  return (await verifiedTimeRfc3161(receipt, witness, trust)) !== null;
+}
+
+/**
+ * The time the authority signed, when the receipt verifies as in {@link verifyRfc3161}.
+ *
+ * @returns Milliseconds since the Unix epoch, or null when the receipt does not verify.
+ */
+export async function verifiedTimeRfc3161(
+  receipt: Rfc3161Receipt,
+  witness: string,
+  trust: Witness[],
+): Promise<number | null> {
+  for (const entry of selectWitnesses(trust, "rfc3161", witness)) {
     try {
-      if (await verifyWith(receipt, entry)) return true;
+      if (await verifyWith(receipt, entry)) return tstInfo(receipt).genTime.getTime();
     } catch {
       continue;
     }
   }
-  return false;
+  return null;
+}
+
+function tstInfo(receipt: Rfc3161Receipt): pkijs.TSTInfo {
+  const token = pkijs.ContentInfo.fromBER(base64Decode(receipt.token));
+  const signed = new pkijs.SignedData({ schema: token.content });
+  const content = signed.encapContentInfo.eContent;
+  if (!content) throw new TypeError("token has no content");
+  return pkijs.TSTInfo.fromBER(content.valueBlock.valueHexView.slice());
 }
 
 async function verifyWith(receipt: Rfc3161Receipt, entry: Witness): Promise<boolean> {

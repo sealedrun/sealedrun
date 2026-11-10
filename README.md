@@ -15,7 +15,9 @@ agent code never hold them, so an agent cannot write or rewrite its own record. 
 MCP wrapper only report steps to the recorder; they carry no key. [TRUST.md](TRUST.md) states the
 deployment this depends on.
 
-Status: early development. 0.8.1 records the name and version each MCP server reports about
+Status: early development. 0.9.0 narrows what can be rewritten unseen: the chain head is
+anchored right after every human approval, and the verifier reports the records no witness has
+seen yet and how soon each approval was covered. 0.8.1 records the name and version each MCP server reports about
 itself (`sealedrun.mcp.server_info`) and adds an AIUC-1 evidence map and a Langfuse example.
 0.8.0 answers two more auditor questions: whether a required human
 approval was actually given before the step (verifier findings `approval.*`) and which system
@@ -157,7 +159,7 @@ print(report.complete, report.labels_sent_to_cloud)
 ```bash
 pip install sealedrun              # Python library: write, read and verify records and bundles
 npm install @sealedrun/core        # TypeScript verifier, runs in Node.js and in the browser
-docker run --rm -p 127.0.0.1:8080:8080 ghcr.io/sealedrun/sealedrun:0.8.1   # recorder + Inspector
+docker run --rm -p 127.0.0.1:8080:8080 ghcr.io/sealedrun/sealedrun:0.9.0   # recorder + Inspector
 ```
 
 Releases are published from GitHub Actions through PyPI and npm trusted publishing; both registries
@@ -407,6 +409,11 @@ keeps at most 1024 open requests (older ones are recorded as truncated), relays 
 in pieces without recording it (warning), and gives a recorder post up to `--timeout` seconds in
 total before it gives up. POSIX only.
 
+The wrapper records what passes through it. It does not show that nothing went around it: an
+agent with a shell on the same host can start the server binary itself or reach the network
+directly, and neither leaves a record. That claim needs a deployment where the wrapper and the
+recorder are the only way out ([TRUST.md](TRUST.md), deployment requirement 1).
+
 ```bash
 claude mcp add --env SEALEDRUN_TOKEN=$SEALEDRUN_API_TOKEN --transport stdio fs -- \
   sealedrun-mcp-wrap --server fs --run my-task --agent claude-code/2.1.284 -- npx -y @modelcontextprotocol/server-filesystem .
@@ -586,9 +593,12 @@ recorded.
 
 A run's own keys prove that nothing changed after signing. They cannot prove _when_ a record
 existed, or that the operator did not rewrite the whole run and sign it again. Anchoring closes
-that gap: every ten minutes, and again on export, the recorder sends the current chain head to a
-witness the operator does not control and stores the witness's receipt as a signed `anchor`
-record in the chain (SPEC 8). Two witness types are supported and can run together:
+that gap: every ten minutes, right after a human approval, and again on export, the recorder
+sends the current chain head to a witness the operator does not control and stores the witness's
+receipt as a signed `anchor` record in the chain (SPEC 8). The interval is the trust window, not only a tuning knob: records
+written after the last anchor can still be rewritten and signed again by whoever runs the
+recorder, and the next anchor would witness the rewritten head. Two witness types are supported
+and can run together:
 
 - `rfc3161`: a time-stamp authority signs the head with the current time. The token is
   verifiable offline against the authority's root certificate and carries the time.
@@ -607,6 +617,7 @@ SEALEDRUN_ANCHOR_TSA_URL=https://timestamp.sigstore.dev/api/v1/timestamp   # def
 SEALEDRUN_ANCHOR_TSA_FALLBACK_URL=http://timestamp.digicert.com            # default; tried when the first fails
 SEALEDRUN_ANCHOR_REKOR_URL=https://rekor.sigstore.dev                        # default; public transparency log
 SEALEDRUN_ANCHOR_INTERVAL_SECONDS=600                                        # default
+SEALEDRUN_ANCHOR_EVENT_GAP_SECONDS=5                                         # default; approvals closer than this share one anchor
 ```
 
 | Anchor  | Who runs it           | What it proves                                 | Needs                    |
@@ -619,7 +630,8 @@ holding it is not the one that could rewrite the run. `GET /api/identity` report
 (configured, last success and last failure per anchor), and the Inspector shows it.
 
 What an anchor does not prove: a time-stamp says the head existed no later than the signed
-time, not that it is the only head the operator ever had; a log entry without independent
+time, not that it is the only head the operator ever had, and the authority keeps no public
+record of its tokens, so one that was thrown away leaves no trace; a log entry without independent
 witnesses could in theory be shown differently to different readers (a split view). Two
 independent anchors over the same head, a time-stamp and a public log, are the mitigation
 this release offers; a relying party that needs more re-queries the witness itself.
@@ -634,7 +646,17 @@ Verifiers check the receipts offline. `verify_run` / `verify_bundle` (Python) an
 report `anchors` (receipts bound to the chain) and `anchors_witness_verified` (receipts that
 verified against a witness in the trust list); the Inspector shows the witness, the witness
 time and the verdict per anchor. A verified anchor means: this chain head existed no later than
-the witness time. `python -m sealedrun run.zip` prints the same summary. A relying party that
+the witness time. `python -m sealedrun run.zip` prints the same summary.
+
+The report also says how much of the run no witness has seen: `unanchored_records` /
+`unanchoredRecords` counts the records after the last verified anchor, and `approval_anchors` /
+`approvalAnchors` gives, for every human approval, how long after it was recorded a witness saw
+a head that covers it. A record rewritten later can only be covered by a later anchor, so a long
+lag on an approval is the trace a rewrite leaves. Pass `max_approval_anchor_lag` /
+`maxApprovalAnchorLag` (seconds; `--max-approval-lag` on the command line) to have every
+approval that is not covered within that time listed as a finding (`anchor.approval_late`,
+`anchor.approval_unanchored`). With the recorder's defaults an approval is covered within a few
+seconds. A relying party that
 wants the strongest statement also re-queries the witness: for Rekor, search the public log by
 the head hash (`POST https://rekor.sigstore.dev/api/v1/index/retrieve {"hash":"sha256:<head>"}`
 or the Inspector's link to the entry); for a time-stamp, the token itself is the statement.

@@ -11,7 +11,10 @@ import {
   capText,
   contextDifferences,
   decodePayload,
+  coverageOf,
+  coverageSummary,
   describeTarget,
+  formatLag,
   isSelfReported,
   recordKey,
   type RunContext,
@@ -111,6 +114,7 @@ export function RunFeed({
   const verified = witness
     ? records.filter((r) => r.kind === "anchor" && witness.get(recordKey(r))?.verified).length
     : undefined;
+  const coverage = witness ? coverageOf(records, witness) : undefined;
   const facts: [number, string, string?][] = [
     [summary.steps, "steps recorded"],
     [summary.cloudCalls, "left the host", summary.cloudCalls > 0 ? "text-warn" : undefined],
@@ -134,6 +138,7 @@ export function RunFeed({
           </>
         )}
         {summary.anchors > 0 && witnessSummary(summary.anchors, verified)}
+        {coverage && ` ${coverageSummary(coverage)}`}
       </p>
       {context && <ContextCard context={context} previous={previous ?? null} />}
       <StepFilterBar
@@ -159,6 +164,7 @@ export function RunFeed({
             payloads={payloads}
             onDownload={onDownload}
             witness={witness?.get(recordKey(record))}
+            anchorLag={coverage?.approvals.get(record.record_id)}
             gate={gateOf(record, records)}
             parentSeq={records.find((r) => r.record_id === record.parent_record_id)?.seq ?? null}
             promptChanged={promptChanges.has(record.seq)}
@@ -412,6 +418,7 @@ function Step({
   payloads,
   onDownload,
   witness,
+  anchorLag,
   gate,
   parentSeq,
   promptChanged,
@@ -425,6 +432,8 @@ function Step({
   payloads?: Map<string, Uint8Array> | undefined;
   onDownload?: OnDownload;
   witness?: WitnessVerdict | undefined;
+  /** For a human approval of a verified bundle: its anchor lag in ms, null when not covered. */
+  anchorLag?: number | null | undefined;
   /** The gate reported on this decision call, when one is in the run. */
   gate?: GateView | null;
   /** Sequence number of the record's `parent_record_id`, when it is in the run. */
@@ -506,6 +515,7 @@ function Step({
             payloads={payloads}
             onDownload={onDownload}
             witness={witness}
+            anchorLag={anchorLag}
             gate={gate ?? null}
             parentSeq={parentSeq ?? null}
             onJump={onJump}
@@ -536,6 +546,7 @@ function Detail({
   payloads,
   onDownload,
   witness,
+  anchorLag,
   gate,
   parentSeq,
   onJump,
@@ -544,6 +555,7 @@ function Detail({
   payloads?: Map<string, Uint8Array> | undefined;
   onDownload?: OnDownload;
   witness?: WitnessVerdict | undefined;
+  anchorLag?: number | null | undefined;
   gate: GateView | null;
   parentSeq: number | null;
   onJump?: ((seq: number) => void) | undefined;
@@ -572,6 +584,17 @@ function Detail({
     [
       "Human decision",
       approval && `${approval.decision}${approval.note ? `: ${approval.note}` : ""}`,
+      false,
+    ],
+    [
+      "Seen by a witness",
+      anchorLag === undefined
+        ? undefined
+        : anchorLag === null
+          ? "not yet: no verified anchor covers this approval"
+          : anchorLag < 1000
+            ? "less than a second after it was recorded"
+            : `${formatLag(anchorLag)} after it was recorded`,
       false,
     ],
     ["Hash", record.hash, true],

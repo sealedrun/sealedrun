@@ -400,6 +400,7 @@ async def post_step(request: Request) -> Response | dict[str, Any]:
         raise HTTPException(400, str(error)) from error
     if listing is not None:
         _remember_list(request, str(record["run_id"]), listing)
+    _anchor_approval(request, record)
     return record
 
 
@@ -433,7 +434,14 @@ async def post_run_step(
         raise HTTPException(409, str(error)) from error
     if listing is not None:
         _remember_list(request, run_id, listing)
+    _anchor_approval(request, record)
     return record
+
+
+def _anchor_approval(request: Request, record: dict[str, Any]) -> None:
+    """Have the head anchored right after a `human_approval`, not at the next interval."""
+    if record["kind"] == "human_approval":
+        request.app.state.anchoring.anchor_soon(str(record["run_id"]))
 
 
 def _list_changed(request: Request, run_id: str, listing: dict[str, Any]) -> bool:
