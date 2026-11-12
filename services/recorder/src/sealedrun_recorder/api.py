@@ -5,17 +5,25 @@ from __future__ import annotations
 import hmac
 import re
 from collections.abc import Iterator
-from typing import Annotated, Any, Literal
+from typing import IO, Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, UploadFile
+from pydantic import AwareDatetime
 from sealedrun import VerificationError
+from sealedrun.timeutil import format_timestamp
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import JSONResponse, StreamingResponse
 
 from sealedrun_recorder.db import BundleRow, PayloadRow, RecordRow, RunRow
-from sealedrun_recorder.export import ExportError, build_bundle, payload_bytes
+from sealedrun_recorder.export import (
+    MAX_RUNS,
+    ExportError,
+    build_bundle,
+    payload_bytes,
+    runs_in_window,
+)
 from sealedrun_recorder.importer import import_bundle
 from sealedrun_recorder.limits import BodyTooLargeError, read_body
 from sealedrun_recorder.live import InvalidRecordError, LiveRunError
@@ -330,14 +338,75 @@ async def export_run(
         archive = build_bundle(
             session,
             request.app.state.live.identity,
-            run_id,
+            [run_id],
             payloads_omitted=payloads == "omit",
         )
     except ExportError as error:
         raise HTTPException(error.status, str(error)) from error
+    suffix = "-records" if payloads == "omit" else ""
+    return _archive_response(archive, f"sealedrun-{_safe_name(run_id)}{suffix}.zip")
+
+
+Instant = Annotated[AwareDatetime, Query()]
+Label = Annotated[str | None, Query(pattern=RUN_LABEL.pattern)]
+Note = Annotated[str | None, Query(min_length=1, max_length=256, pattern=r"^[^\x00-\x1f\x7f]+$")]
+
+
+@router.post("/export")
+async def export_window(
+    request: Request,
+    session: SessionDep,
+    since: Instant,
+    until: Instant,
+    label: Label = None,
+    note: Note = None,
+    payloads: Literal["include", "omit"] = "include",
+) -> Response:
+    """Export every run recorded here with a record in `[since, until)` as one signed bundle.
+
+    Runs are exported whole, open ones as they stand, so each chain verifies on its own; the
+    manifest's `query` block states the window, the `label` and the `note` (SPEC 13.1). `since`
+    and `until` are ISO 8601 instants with a time zone. With `label` only runs opened under
+    that run label are taken. `note` is free text from the caller, signed as given, for example
+    an incident number and who asked. When anchoring is on, each open run's head is anchored
+    first (SPEC 8.2). Imported runs are never part of the archive: their original bundle is the
+    record. Responds 404 when no run matches, 413 when more match than a bundle holds, 409
+    when they do not share a hash algorithm and 422 for an empty window.
+    """
+    window = {"since": format_timestamp(since), "until": format_timestamp(until)}
+    if window["since"] >= window["until"]:
+        raise HTTPException(422, "since must be before until")
+    if label is not None:
+        window["label"] = label
+    if note is not None:
+        window["note"] = note
+    run_ids = runs_in_window(session, window["since"], window["until"], label)
+    if not run_ids:
+        raise HTTPException(404, "no run recorded here has a record in that window")
+    if len(run_ids) <= MAX_RUNS:
+        for run_id in request.app.state.live.open_runs():
+            if run_id in run_ids:
+                await request.app.state.anchoring.anchor_run(run_id)
+    session.expire_all()
+    try:
+        archive = build_bundle(
+            session,
+            request.app.state.live.identity,
+            run_ids,
+            payloads_omitted=payloads == "omit",
+            query=window,
+        )
+    except ExportError as error:
+        raise HTTPException(error.status, str(error)) from error
+    stamp = f"{window['since']}-{window['until']}".replace(":", "").replace(".000Z", "Z")
+    suffix = "-records" if payloads == "omit" else ""
+    return _archive_response(archive, f"sealedrun-window-{_safe_name(stamp)}{suffix}.zip")
+
+
+def _archive_response(archive: IO[bytes], filename: str) -> StreamingResponse:
+    """Stream a bundle archive as a download and close it when the body has been sent."""
     size = archive.seek(0, 2)
     archive.seek(0)
-    suffix = "-records" if payloads == "omit" else ""
 
     def chunks() -> Iterator[bytes]:
         try:
@@ -350,9 +419,7 @@ async def export_run(
         chunks(),
         media_type="application/zip",
         headers={
-            "Content-Disposition": (
-                f'attachment; filename="sealedrun-{_safe_name(run_id)}{suffix}.zip"'
-            ),
+            "Content-Disposition": f'attachment; filename="{filename}"',
             "Content-Length": str(size),
             "X-Content-Type-Options": "nosniff",
         },

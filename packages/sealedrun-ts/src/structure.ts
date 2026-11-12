@@ -299,4 +299,33 @@ export function assertManifest(value: unknown): asserts value is Manifest {
   if (manifest.principal_signatures !== undefined) {
     check(manifest, { principal_signatures: "stringMap" }, "manifest");
   }
+  if (manifest.query !== undefined) assertQuery(manifest.query);
+}
+
+const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+const QUERY_TEXT: Record<string, number> = { label: 128, note: 256 };
+
+/** Checks the manifest `query` block as spec/schema/bundle.json does, unknown fields included. */
+function assertQuery(value: unknown): void {
+  if (!isObject(value)) throw new VerificationError("schema", "manifest.query is not an object");
+  for (const field of ["since", "until"]) {
+    const stamp = value[field];
+    if (typeof stamp !== "string" || !TIMESTAMP.test(stamp)) {
+      throw new VerificationError("schema", `manifest.query: field ${field} is not a timestamp`);
+    }
+  }
+  for (const [field, text] of Object.entries(value)) {
+    if (field === "since" || field === "until") continue;
+    const limit = QUERY_TEXT[field];
+    if (limit === undefined) {
+      throw new VerificationError("schema", `manifest.query: unknown field ${field}`);
+    }
+    const length = typeof text === "string" ? [...text].length : 0;
+    if (length < 1 || length > limit) {
+      throw new VerificationError(
+        "schema",
+        `manifest.query: field ${field} is not a string of 1 to ${limit} characters`,
+      );
+    }
+  }
 }

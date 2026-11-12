@@ -943,6 +943,7 @@ anchors/<record_id>.json     optional raw witness receipts
 | `runs`         | object[]  | `{ run_id, hash_alg, record_count, first_hash, last_hash, complete }`                  |
 | `files`        | object    | Map of every file path in the archive (except `manifest.json`) to its base64url digest |
 | `payloads`     | enum      | O. `included` (default when absent) or `omitted`: the exporter left every body out     |
+| `query`        | object    | O. How the exporter selected the runs: `{ since, until, label?, note? }`, see below    |
 | `hash_alg`     | enum      | Algorithm for `hash` and `files`                                                       |
 | `hash`         | hex       |                                                                                        |
 | `signatures`   | object    | Exporter's Agent signatures; MAY include `principal_signatures`                        |
@@ -961,6 +962,19 @@ records keep their `payload` hashes and sizes, so nothing can be forged, only wi
 MUST skip the body checks of SPEC 13.2 for such a bundle, MUST refuse a bundle that says
 `omitted` yet carries a `payloads/` entry, and MUST report the omission to the relying party.
 A bundle without the field, or with `included`, fails when a body a record names is absent.
+
+`query` is the exporter's signed statement of what it was asked for: every run it recorded
+itself with at least one record whose `occurred_at` lies in `[since, until)` (both timestamps
+in the section 3 form, `until` exclusive), limited to runs opened under the run label `label`
+(10.3) when that field is present. `note` is free text of at most 256 characters from whoever
+asked for the export, for example an incident number; `label` is at most 128 characters. Runs
+selected by a query are exported whole, so a run that crosses an edge of the window carries
+records outside it. A verifier MUST fail with check `query` when `since` is not before `until`,
+when a run of the bundle has no record inside the window, or when `label` is present and a run
+that starts in the bundle (`first_seq` 0) carries another `run_label` or none. It MUST report
+the query and, for each run, the number of records outside the window. The block proves what
+the exporter claimed to select; it cannot prove that the exporter held no other run in that
+window (see TRUST.md).
 
 `complete` is true when the run contains a `run_end` record. A bundle MAY contain a slice of a
 run; then `first_hash` is the `prev_hash` of the first included record so the slice can be joined
@@ -993,7 +1007,8 @@ the bundle.
    8.4 when the witness is in the trust list; optionally re-query the witness.
 6. Report: `ok`, or the first failing run, seq and check. The report MUST carry the manifest
    `principal_id`, the exporter `agent_id`, whether the Principal was matched against a trust
-   anchor, and the scope and approval findings of every run (6.5, 6.6). A user interface MUST NOT present a bundle as verified without qualification when the
+   anchor, the manifest `query` with the records of each run outside its window when the
+   bundle has one (13.1), and the scope and approval findings of every run (6.5, 6.6). A user interface MUST NOT present a bundle as verified without qualification when the
    Principal was not authenticated.
 
 ## 14. Test vectors
@@ -1054,8 +1069,20 @@ implementations can prove conformance:
   verifier MUST accept it and report `payloads_omitted`.
 - `bundle/payloads-omitted.zip` (verifies, bodies not checked) and
   `payloads-omitted-with-bodies.zip` (refused: a body is present although the manifest says omitted).
+- `bundle/window.zip` and `window-label.zip`: three and two runs exported by a time window, the
+  second also by run label and with a note. A verifier MUST accept them and report the `query`
+  and the `outside_window` count of each run given in `expected.json`.
+  `window-wrong-label.zip` (a run without the queried label), `window-run-outside.zip` (a run
+  with no record inside the window) and `window-inverted.zip` (`since` after `until`) MUST fail
+  with check `query`. Generator: `packages/sealedrun-py/tests/make_window_bundles.py`.
 - `bundle/valid.zip`, `tampered-payload.zip`, `tampered-record.zip`, `poisoned-payload-name.zip`,
   `overlapping-entries.zip`, `too-many-delegations.zip`, `no-payloads.zip` with `expected.json`.
+
+- `report/`: `cases.json` names four bundles and the trusted Principals to verify each with;
+  `<name>.json` is the evidence report an implementation that offers one produces from the
+  verification result, and `<name>.txt` its text form. The report is a convenience for the
+  relying party and adds no check of its own. Generator:
+  `packages/sealedrun-py/tests/make_report_vectors.py`.
 
 Hashes are reproducible byte-for-byte. Signatures are verifiable but not necessarily
 reproducible: ML-DSA implementations may use the hedged (randomised) signing variant of

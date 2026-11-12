@@ -9,6 +9,8 @@ the browser; it is what the web inspector uses to verify a bundle without any se
 - Offline witness verification of anchor receipts: RFC 3161 tokens (on `pkijs`, WebCrypto) and
   Sigstore Rekor v1 entries (on `@noble/curves`) against the shipped trust list, through
   `verifyRunAsync` / `verifyBundleAsync`
+- One-page evidence report of a verified bundle as data and as text (`evidenceReport`,
+  `renderReport`), identical to the Python output
 - Passes every vector in `spec/vectors/`
 
 Signing keys never enter this package; it verifies only.

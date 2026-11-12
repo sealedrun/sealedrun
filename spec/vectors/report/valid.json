@@ -1,0 +1,66 @@
+{
+  "anchors": {
+    "count": 1,
+    "first": {
+      "at": "2026-09-16T12:00:07.000Z",
+      "type": "rfc3161",
+      "witness": "https://timestamp.sigstore.dev/api/v1/timestamp"
+    },
+    "last": {
+      "at": "2026-09-16T12:00:07.000Z",
+      "type": "rfc3161",
+      "witness": "https://timestamp.sigstore.dev/api/v1/timestamp"
+    },
+    "unanchored_records": 2,
+    "witness_verified": 1
+  },
+  "approvals": [
+    {
+      "actor": "jane.doe@example.com",
+      "anchor_lag_ms": 1018027000,
+      "at": "2026-09-16T12:00:06.000Z",
+      "decision": null,
+      "run_id": "0192b3c4-5d6e-7f80-9a1b-0000000000a0",
+      "seq": 5
+    }
+  ],
+  "bundle": {
+    "bundle_id": "0192b3c4-5d6e-7f80-9a1b-0000000000b0",
+    "created_at": "2026-09-16T13:00:00.000Z",
+    "exporter_agent_id": "H342ugmg0Ea-GvTpUDeqxqFKsgeirlcywX047EFubuU",
+    "payloads": "included",
+    "principal_countersigned": true,
+    "principal_id": "qJtRVbgIsIjNNo6VuDr6nQ50Wj3rwEAAuR2e385pby8",
+    "principal_trusted": true,
+    "software": "sealedrun-vectors/0.1.0"
+  },
+  "coverage": {
+    "first_record_at": "2026-09-16T12:00:01.000Z",
+    "last_record_at": "2026-09-16T12:00:09.000Z",
+    "records": 9,
+    "records_outside_window": null,
+    "runs": 1,
+    "runs_complete": 1
+  },
+  "file_sha256": "692ee905d78d97af4cdf6f90326e9fd8af7a519438a042cb47b820598ebaa84d",
+  "findings": [],
+  "limits": "This report restates what the verifier checked in the bundle. It does not show that the recorder saw every action of the agent, that no run was left out of the export, or that a recorded step was right to take. A principal that is not confirmed means the bundle is consistent, not that it comes from the party you expect. See https://github.com/sealedrun/sealedrun/blob/main/TRUST.md",
+  "query": null,
+  "report_version": 1,
+  "result": "passed",
+  "runs": [
+    {
+      "anchors": 1,
+      "complete": true,
+      "first_record_at": "2026-09-16T12:00:01.000Z",
+      "label": null,
+      "last_record_at": "2026-09-16T12:00:09.000Z",
+      "outside_window": null,
+      "parent_unresolved": false,
+      "records": 9,
+      "run_id": "0192b3c4-5d6e-7f80-9a1b-0000000000a0",
+      "unanchored_records": 2,
+      "witness_verified": 1
+    }
+  ]
+}

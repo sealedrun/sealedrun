@@ -62,6 +62,18 @@ export type Delegation = Sealed & {
   not_after: string;
 };
 
+/** The `query` block of a manifest: a time window and, optionally, one run label. */
+export interface ManifestQuery {
+  /** First instant of the window, SPEC 3 timestamp. */
+  since: string;
+  /** End of the window, exclusive. */
+  until: string;
+  /** Only runs opened under this run label were exported. */
+  label?: string;
+  /** Free text from whoever asked for the export. */
+  note?: string;
+}
+
 /**
  * The signed table of contents of a bundle (SPEC 13.1).
  *
@@ -88,5 +100,7 @@ export type Manifest = Sealed & {
   files: Record<string, string>;
   /** `omitted`: the exporter left every payload body out on purpose; absent means included. */
   payloads?: "included" | "omitted";
+  /** How the exporter selected the runs (SPEC 13.1); its signed statement, not proof. */
+  query?: ManifestQuery;
   principal_signatures?: Record<string, string>;
 };

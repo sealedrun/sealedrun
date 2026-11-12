@@ -125,5 +125,48 @@
     "trusted_principals": [
       "qJtRVbgIsIjNNo6VuDr6nQ50Wj3rwEAAuR2e385pby8"
     ]
+  },
+  "window-inverted.zip": {
+    "check": "query",
+    "ok": false
+  },
+  "window-label.zip": {
+    "complete": true,
+    "ok": true,
+    "outside_window": {
+      "0192b3c4-5d6e-7f80-9a1b-0000000000e1": 2,
+      "0192b3c4-5d6e-7f80-9a1b-0000000000e2": 2
+    },
+    "query": {
+      "label": "billing-agent",
+      "note": "incident 2026-09-16, exported by on-call",
+      "since": "2026-09-16T12:00:03.000Z",
+      "until": "2026-09-16T12:10:02.000Z"
+    },
+    "records": 3,
+    "runs": 2
+  },
+  "window-run-outside.zip": {
+    "check": "query",
+    "ok": false
+  },
+  "window-wrong-label.zip": {
+    "check": "query",
+    "ok": false
+  },
+  "window.zip": {
+    "complete": true,
+    "ok": true,
+    "outside_window": {
+      "0192b3c4-5d6e-7f80-9a1b-0000000000e1": 2,
+      "0192b3c4-5d6e-7f80-9a1b-0000000000e2": 2,
+      "0192b3c4-5d6e-7f80-9a1b-0000000000e3": 2
+    },
+    "query": {
+      "since": "2026-09-16T12:00:03.000Z",
+      "until": "2026-09-16T12:10:02.000Z"
+    },
+    "records": 3,
+    "runs": 3
   }
 }

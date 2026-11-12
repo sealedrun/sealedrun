@@ -61,6 +61,11 @@ class BundleReport:
             (`payloads: "omitted"` in the manifest); the bodies were not checked.
         parents_unresolved: Runs whose `run_start` names a parent run that is not in this
             bundle (SPEC 6.4); verify that bundle together with this one to close the link.
+        query: The manifest's `query` block (SPEC 13.1): the time window and run label the
+            exporter says it selected the runs by. None for a bundle exported without one.
+        outside_window: Per run id, the records whose `occurred_at` lies outside the window of
+            `query`; runs are exported whole, so these are context, not a fault. Empty
+            without `query`.
     """
 
     bundle_id: str
@@ -70,6 +75,8 @@ class BundleReport:
     principal_trusted: bool
     payloads_omitted: bool = False
     parents_unresolved: list[str] = field(default_factory=list)
+    query: dict[str, str] | None = None
+    outside_window: dict[str, int] = field(default_factory=dict)
 
 
 def _jsonl(records: list[dict[str, Any]]) -> bytes:
@@ -92,6 +99,7 @@ def write_bundle(
     bundle_id: str | None = None,
     created_at: str | None = None,
     payloads_omitted: bool = False,
+    query: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Write a bundle archive to `out` and return its sealed manifest.
 
@@ -100,7 +108,9 @@ def write_bundle(
     once, hashed and written straight into the archive, so a run of gigabytes needs memory for
     one body at a time; `out` must be seekable and the manifest is the last entry. With
     `payloads_omitted` the manifest states that no body was written on purpose (SPEC 13.1) and
-    `payloads` must be empty. Raises ValueError if a payload key is not the digest of its body,
+    `payloads` must be empty. `query` is written as the manifest's `query` block (SPEC 13.1)
+    and is the caller's statement of how the runs were selected; it is not checked here.
+    Raises ValueError if a payload key is not the digest of its body,
     if bodies are given together with `payloads_omitted`, or if the delegations name more than
     one principal.
     """
@@ -159,6 +169,8 @@ def write_bundle(
         }
         if payloads_omitted:
             manifest["payloads"] = "omitted"
+        if query is not None:
+            manifest["query"] = dict(query)
         manifest = seal(manifest, DOMAIN_MANIFEST, exporter)
         if principal is not None:
             manifest = countersign(manifest, DOMAIN_MANIFEST, principal)
@@ -383,6 +395,7 @@ def verify_bundle(
     _check_record_ids(bundle)
     _check_anchor_files(bundle)
     unresolved = check_parent_links(bundle.runs, bundle.delegations)
+    query = manifest.get("query")
     return BundleReport(
         manifest["bundle_id"],
         reports,
@@ -391,7 +404,36 @@ def verify_bundle(
         trusted_principals is not None,
         payloads_omitted=omitted,
         parents_unresolved=unresolved,
+        query=query,
+        outside_window=_check_query(bundle, query) if query is not None else {},
     )
+
+
+def _check_query(bundle: Bundle, query: dict[str, str]) -> dict[str, int]:
+    """Check the runs against the manifest `query` and count records outside its window.
+
+    SPEC 13.1: `since` precedes `until`, every run has a record inside `[since, until)`, and a
+    run that starts in the bundle carries the queried label. Timestamps are in the SPEC 3
+    form, so they compare as text.
+    """
+    since, until = query["since"], query["until"]
+    if since >= until:
+        raise VerificationError("query", "query window is empty: since is not before until")
+    outside = {}
+    for entry in bundle.manifest["runs"]:
+        run_id = entry["run_id"]
+        records = bundle.runs[run_id]
+        inside = sum(1 for r in records if since <= r["occurred_at"] < until)
+        if inside == 0:
+            raise VerificationError("query", "run has no record inside the query window", run_id)
+        first = records[0]
+        if "label" in query and first["seq"] == 0:
+            proxy = first.get("extensions", {}).get("sealedrun.proxy")
+            label = proxy.get("run_label") if isinstance(proxy, dict) else None
+            if label != query["label"]:
+                raise VerificationError("query", "run label differs from the query label", run_id)
+        outside[run_id] = len(records) - inside
+    return outside
 
 
 def _check_record_ids(bundle: Bundle) -> None:

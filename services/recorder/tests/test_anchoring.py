@@ -3,13 +3,14 @@ import io
 import json
 import time
 import zipfile
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
 from sealedrun import read_bundle, verify_bundle
+from sealedrun.timeutil import format_timestamp
 from sealedrun.trust import Witness
 from sealedrun_recorder.db import RecordRow
 
@@ -349,6 +350,37 @@ APPROVAL = {
     "outcome": "success",
 }
 TOOL_STEP = {"kind": "tool_call", "target": {"type": "tool", "name": "add"}, "outcome": "success"}
+
+
+def test_window_export_anchors_open_runs_first(
+    make_proxy: Any, upstream: FakeUpstream, authority: Any
+) -> None:
+    tsa = FakeTsa(authority)
+    mount(upstream, tsa)
+    client = make_proxy(CONFIG, anchors=["tsa"], anchor_tsa_url=TSA, anchor_interval_seconds=3600)
+    with client:
+        closed = start_run(client)
+        client.app.state.live.end(closed)
+        opened = start_run(client)
+        now = datetime.now(UTC)
+        window = {
+            "since": format_timestamp(now - timedelta(hours=1)),
+            "until": format_timestamp(now + timedelta(hours=1)),
+        }
+        reply = client.post("/api/export", params=window, headers=AUTH)
+        assert reply.status_code == 200, reply.text
+        bundle = read_bundle(io.BytesIO(reply.content))
+        assert [r["kind"] for r in bundle.runs[opened]] == ["run_start", "tool_call", "anchor"]
+        assert bundle.runs[closed][-1]["kind"] == "run_end"
+        assert tsa.requests == 1
+        report = verify_bundle(bundle, witnesses=trust_for(authority))
+        tail = {run.run_id: run.unanchored_records for run in report.runs}
+        assert tail[opened] == 0
+        with zipfile.ZipFile(io.BytesIO(reply.content)) as archive:
+            assert len([n for n in archive.namelist() if n.startswith("anchors/")]) == 1
+        again = client.post("/api/export", params=window, headers=AUTH)
+        assert again.status_code == 200
+        assert tsa.requests == 1
 
 
 def post_to_run(client: TestClient, run_id: str, step: dict[str, Any]) -> dict[str, Any]:

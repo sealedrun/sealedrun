@@ -1,9 +1,13 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { zipSync } from "fflate";
 import { describe, expect, test } from "vitest";
 
 import {
   assertDelegation,
   assertExtensions,
+  assertManifest,
   assertRecord,
   readBundle,
   VerificationError,
@@ -36,6 +40,20 @@ describe("structural validation", () => {
     for (const name of ["constructor", "toString", "__proto__"])
       expect(isHashAlg(name)).toBe(false);
     expect(isHashAlg("sha-256")).toBe(true);
+  });
+  test("manifest query block is checked as the schema checks it", () => {
+    const path = join(import.meta.dirname, "../../../spec/vectors/bundle/window-label.zip");
+    const { manifest } = readBundle(new Uint8Array(readFileSync(path)));
+    const withQuery = (query: unknown) => () => assertManifest({ ...manifest, query });
+    const window = { since: "2026-09-16T12:00:02.000Z", until: "2026-09-16T12:00:04.000Z" };
+    expect(withQuery(window)).not.toThrow();
+    expect(withQuery({ ...window, label: "a", note: "é".repeat(256) })).not.toThrow();
+    expect(withQuery("all")).toThrow(/^schema: manifest.query is not an object/);
+    expect(withQuery({ since: window.since })).toThrow(/field until is not a timestamp/);
+    expect(withQuery({ ...window, since: "2026-09-16" })).toThrow(/field since/);
+    expect(withQuery({ ...window, label: "" })).toThrow(/field label/);
+    expect(withQuery({ ...window, note: "x".repeat(257) })).toThrow(/field note/);
+    expect(withQuery({ ...window, agent: "extra" })).toThrow(/unknown field agent/);
   });
   test("non-object documents are rejected", () => {
     expect(() => assertRecord(null)).toThrow(/not an object/);

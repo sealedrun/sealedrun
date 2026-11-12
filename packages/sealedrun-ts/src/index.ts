@@ -1,5 +1,5 @@
 /** Version of this package, not of the specification. */
-export const VERSION = "0.9.0";
+export const VERSION = "0.10.0";
 
 export { canonicalize, canonicalBytes, type Json } from "./canonical.js";
 export { b64urlDecode, b64urlEncode, hexDecode, hexEncode } from "./encoding.js";
@@ -47,8 +47,26 @@ export {
   scopeFindings,
   scopeWithin,
 } from "./scope.js";
+export {
+  type EvidenceReport,
+  type FailureReport,
+  type ReportAnchor,
+  type ReportRun,
+  REPORT_VERSION,
+  evidenceReport,
+  failureReport,
+  fileSha256,
+  renderReport,
+} from "./report.js";
 export { assertDelegation, assertExtensions, assertManifest, assertRecord } from "./structure.js";
-export type { SealedRunRecord, Delegation, Manifest, Payload, Target } from "./types.js";
+export type {
+  SealedRunRecord,
+  Delegation,
+  Manifest,
+  ManifestQuery,
+  Payload,
+  Target,
+} from "./types.js";
 export {
   anchorCoverage,
   applyWitnesses,

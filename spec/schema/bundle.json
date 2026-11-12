@@ -79,6 +79,18 @@
       "enum": ["included", "omitted"],
       "description": "omitted: the exporter left every payload body out on purpose; verifiers skip body checks and report it. Absent means included."
     },
+    "query": {
+      "type": "object",
+      "description": "How the exporter selected the runs: every run it recorded with a record in [since, until), limited to one run label when label is set. The exporter's signed statement, not proof of completeness.",
+      "additionalProperties": false,
+      "required": ["since", "until"],
+      "properties": {
+        "since": { "$ref": "common.json#/$defs/timestamp" },
+        "until": { "$ref": "common.json#/$defs/timestamp" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "note": { "type": "string", "minLength": 1, "maxLength": 256 }
+      }
+    },
     "hash_alg": { "$ref": "common.json#/$defs/hashAlg" },
     "hash": { "$ref": "common.json#/$defs/digestHex" },
     "signatures": { "$ref": "common.json#/$defs/signatures" },

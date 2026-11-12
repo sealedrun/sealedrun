@@ -55,6 +55,20 @@ export function Verdict({ verification }: { verification: LocalVerification }) {
               {verification.fileName}{" "}
               <span className="text-ink-soft">{(verification.sizeBytes / 1024).toFixed(1)} KB</span>
             </dd>
+            {report?.query && (
+              <>
+                <dt className="text-ink-soft">Exported window</dt>
+                <dd data-testid="query-window">
+                  {report.query.since} to {report.query.until}
+                  {report.query.label && `, run label ${report.query.label}`}
+                  {report.query.note && (
+                    <span className="block text-ink-soft [overflow-wrap:anywhere]">
+                      Exporter&apos;s note: {report.query.note}
+                    </span>
+                  )}
+                </dd>
+              </>
+            )}
             {report && (
               <>
                 <dt className="text-ink-soft">Signed by (principal)</dt>
@@ -126,6 +140,41 @@ function Mandate({ report }: { report: BundleReport }) {
         </p>
       )}
     </div>
+  );
+}
+
+/**
+ * The one-page evidence report as text, with a button that copies it. The text is the one the
+ * command line prints, so what is pasted into a claim or a notice can be reproduced there.
+ */
+export function ReportText({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    void navigator.clipboard?.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  };
+  return (
+    <section data-testid="report">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <p className="max-w-[60ch] text-sm text-ink-soft">
+          One page for a claim file or an incident notice. The command line prints the same text:{" "}
+          <span className="font-mono">python -m sealedrun --report</span>.
+        </p>
+        <button type="button" className="btn" onClick={copy}>
+          {copied ? (
+            <Check aria-hidden className="size-4" />
+          ) : (
+            <Copy aria-hidden className="size-4" />
+          )}
+          {copied ? "Copied" : "Copy as text"}
+        </button>
+      </div>
+      <pre className="max-w-full overflow-x-auto rounded-lg border border-line p-4 font-mono text-xs leading-relaxed">
+        {text}
+      </pre>
+    </section>
   );
 }
 
