@@ -167,6 +167,8 @@ def test_bundle_vectors(name: str) -> None:
         assert report.runs[0].complete == case["complete"]
         assert report.payloads_omitted == case.get("payloads_omitted", False)
         assert report.parents_unresolved == case.get("parents_unresolved", [])
+        assert report.query == case.get("query")
+        assert report.outside_window == case.get("outside_window", {})
         return
     with pytest.raises(VerificationError) as info:
         verify_bundle(read_bundle(data), trusted)

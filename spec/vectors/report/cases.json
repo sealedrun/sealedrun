@@ -1,0 +1,24 @@
+[
+  {
+    "bundle": "../bundle/valid.zip",
+    "name": "valid",
+    "trusted_principals": [
+      "qJtRVbgIsIjNNo6VuDr6nQ50Wj3rwEAAuR2e385pby8"
+    ]
+  },
+  {
+    "bundle": "../bundle/window-label.zip",
+    "name": "window-label"
+  },
+  {
+    "bundle": "../bundle/payloads-omitted.zip",
+    "name": "payloads-omitted"
+  },
+  {
+    "bundle": "incident.zip",
+    "name": "incident",
+    "trusted_principals": [
+      "RL4kl7Eo-pUoUstDQsoKqvchhSBdrnPsotWz7lxUAig"
+    ]
+  }
+]

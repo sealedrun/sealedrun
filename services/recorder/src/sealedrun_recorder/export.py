@@ -1,9 +1,9 @@
-"""Export a live run from its database rows as a bundle archive."""
+"""Export live runs from their database rows as a bundle archive."""
 
 from __future__ import annotations
 
 import tempfile
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from typing import Any, BinaryIO, cast
 
 from sealedrun import write_bundle
@@ -26,10 +26,11 @@ class ExportError(Exception):
 
 
 SPOOL_BYTES = 64 * 1024 * 1024
+MAX_RUNS = 1024
 
 
 class _StoredPayloads(Mapping[str, bytes]):
-    """Payload bodies of one run read from the database one at a time, in digest order."""
+    """Payload bodies of the exported runs read from the database one at a time, in digest order."""
 
     def __init__(self, session: Session, digests: list[str]):
         self._session = session
@@ -50,13 +51,35 @@ class _StoredPayloads(Mapping[str, bytes]):
         return len(self._digests)
 
 
+def runs_in_window(session: Session, since: str, until: str, label: str | None) -> list[str]:
+    """Return the ids of live runs with a record in `[since, until)`, earliest start first.
+
+    `since` and `until` are SPEC 3 timestamps, which compare as text. With `label` only runs
+    opened under that run label are returned. Imported runs are never returned: their original
+    bundle is the record.
+    """
+    inside = select(RecordRow.run_id).where(
+        RecordRow.occurred_at >= since, RecordRow.occurred_at < until
+    )
+    where = [RunRow.source == "live", RunRow.run_id.in_(inside)]
+    if label is not None:
+        where.append(RunRow.run_label == label)
+    query = select(RunRow.run_id).where(*where).order_by(RunRow.started_at, RunRow.run_id)
+    return list(session.scalars(query))
+
+
 def build_bundle(
-    session: Session, identity: Identity, run_id: str, *, payloads_omitted: bool = False
+    session: Session,
+    identity: Identity,
+    run_ids: Sequence[str],
+    *,
+    payloads_omitted: bool = False,
+    query: Mapping[str, str] | None = None,
 ) -> tempfile.SpooledTemporaryFile[bytes]:
-    """Return a seekable file holding the bundle archive of live run `run_id`, at offset 0.
+    """Return a seekable file holding one bundle archive of the live runs, at offset 0.
 
     The archive is spooled to disk past `SPOOL_BYTES`, and each payload body is read from the
-    database only while it is being written, so a run of gigabytes does not need that much
+    database only while it is being written, so runs of gigabytes do not need that much
     memory. The caller closes the file.
 
     The recorder's agent key is the exporter and its principal key countersigns. An open run
@@ -64,55 +87,76 @@ def build_bundle(
     their original bundle is the record. A payload body a record names but the database no
     longer holds is an error, never a silent gap. With `payloads_omitted` no body is read or
     written and the manifest says so (SPEC 13.1): the archive of a long session shrinks from
-    gigabytes to the records alone.
+    gigabytes to the records alone. `query` becomes the manifest's `query` block.
 
     Raises:
-        ExportError: 404 when the run is unknown, 409 when it was imported, 500 when a payload
-            body or the run's delegation is missing.
+        ExportError: 404 when a run is unknown, 409 when one was imported or the runs do not
+            share a hash algorithm, 413 past `MAX_RUNS` runs, 500 when a payload body or a
+            run's delegation is missing.
 
     """
-    run = session.get(RunRow, run_id)
-    if run is None:
-        raise ExportError(404, "run not found")
-    if run.source != "live":
-        raise ExportError(409, "imported run: download its original bundle instead")
-    records = [
-        row.document
-        for row in session.scalars(
-            select(RecordRow).where(RecordRow.run_id == run_id).order_by(RecordRow.seq)
+    if len(run_ids) > MAX_RUNS:
+        raise ExportError(
+            413, f"{len(run_ids)} runs match and a bundle holds at most {MAX_RUNS}: narrow it"
         )
-    ]
-    delegation = _delegation_of(session, records[0])
-    digests: list[str] = []
-    for record in records:
-        ref = record.get("payload") or {}
-        if payloads_omitted or ref.get("storage") != "bundle":
-            continue
-        for side in ("request", "response"):
-            digest = ref.get(f"{side}_hash")
-            if digest is None or digest in digests:
+    runs: list[list[dict[str, Any]]] = []
+    delegations: dict[str, dict[str, Any]] = {}
+    digests: dict[str, None] = {}
+    anchors: dict[str, dict[str, Any]] = {}
+    algs: set[str] = set()
+    for run_id in run_ids:
+        run = session.get(RunRow, run_id)
+        if run is None:
+            raise ExportError(404, "run not found")
+        if run.source != "live":
+            raise ExportError(409, "imported run: download its original bundle instead")
+        algs.add(run.hash_alg)
+        records = [
+            row.document
+            for row in session.scalars(
+                select(RecordRow).where(RecordRow.run_id == run_id).order_by(RecordRow.seq)
+            )
+        ]
+        runs.append(records)
+        delegation = _delegation_of(session, records[0])
+        delegations[delegation["delegation_id"]] = delegation
+        for record in records:
+            if record["kind"] == "anchor":
+                anchors[record["record_id"]] = record["extensions"]["sealedrun.anchor"]["receipt"]
+            ref = record.get("payload") or {}
+            if payloads_omitted or ref.get("storage") != "bundle":
                 continue
-            stored = session.scalar(select(PayloadRow.digest).where(PayloadRow.digest == digest))
-            if stored is None:
-                raise ExportError(500, f"payload body missing from the database: {digest}")
-            digests.append(digest)
-    anchors = {
-        r["record_id"]: r["extensions"]["sealedrun.anchor"]["receipt"]
-        for r in records
-        if r["kind"] == "anchor"
-    }
+            for side in ("request", "response"):
+                digest = ref.get(f"{side}_hash")
+                if digest is not None:
+                    digests[digest] = None
+    if len(algs) > 1:
+        raise ExportError(
+            409, f"runs use different hash algorithms ({', '.join(sorted(algs))}): narrow it"
+        )
+    stored: set[str] = set()
+    names = list(digests)
+    for start in range(0, len(names), 500):
+        chunk = names[start : start + 500]
+        stored.update(
+            session.scalars(select(PayloadRow.digest).where(PayloadRow.digest.in_(chunk)))
+        )
+    for digest in names:
+        if digest not in stored:
+            raise ExportError(500, f"payload body missing from the database: {digest}")
     out = tempfile.SpooledTemporaryFile(max_size=SPOOL_BYTES)
     write_bundle(
         cast(BinaryIO, out),
         exporter=identity.agent,
         software=SOFTWARE,
-        delegations=[delegation],
-        runs=[records],
-        payloads=_StoredPayloads(session, digests),
+        delegations=list(delegations.values()),
+        runs=runs,
+        payloads=_StoredPayloads(session, names),
         anchors=anchors,
         principal=identity.principal,
-        hash_alg=run.hash_alg,
+        hash_alg=algs.pop(),
         payloads_omitted=payloads_omitted,
+        query=query,
     )
     out.seek(0)
     return out

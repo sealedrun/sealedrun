@@ -6,7 +6,7 @@ import { VerificationError } from "./errors.js";
 import { type HashAlg, isHashAlg, payloadDigest } from "./hashing.js";
 import { assertDelegation, assertManifest, assertRecord } from "./structure.js";
 import { checkHash, checkSignatures, DOMAIN_MANIFEST } from "./signing.js";
-import type { SealedRunRecord, Delegation, Manifest } from "./types.js";
+import type { SealedRunRecord, Delegation, Manifest, ManifestQuery } from "./types.js";
 import {
   applyWitnesses,
   checkParentLinks,
@@ -42,6 +42,13 @@ export interface BundleReport {
   payloadsOmitted: boolean;
   /** Runs whose `run_start` names a parent run that is not in this bundle (SPEC 6.4). */
   parentsUnresolved: string[];
+  /** The manifest `query` block (SPEC 13.1); absent for a bundle exported without one. */
+  query?: ManifestQuery;
+  /**
+   * Per run id, the records whose `occurred_at` lies outside the window of `query`. Runs are
+   * exported whole, so these are context, not a fault. Empty without `query`.
+   */
+  outsideWindow: Record<string, number>;
 }
 
 /** Optional inputs of {@link verifyBundle}. */
@@ -331,7 +338,48 @@ export function verifyBundle(bundle: Bundle, options: VerifyBundleOptions = {}):
     principalTrusted: trusted !== undefined,
     payloadsOmitted: omitted,
     parentsUnresolved,
+    ...(manifest.query ? { query: manifest.query } : {}),
+    outsideWindow: manifest.query ? checkQuery(bundle, manifest.query) : {},
   };
+}
+
+/**
+ * Checks the runs against the manifest `query` and counts the records outside its window
+ * (SPEC 13.1). Timestamps are in the SPEC 3 form, so they compare as text.
+ *
+ * @throws VerificationError with check `query`.
+ */
+function checkQuery(bundle: Bundle, query: ManifestQuery): Record<string, number> {
+  if (query.since >= query.until) {
+    throw new VerificationError("query", "query window is empty: since is not before until");
+  }
+  const outside: Record<string, number> = {};
+  for (const entry of bundle.manifest.runs) {
+    const records = bundle.runs.get(entry.run_id) ?? [];
+    const inside = records.filter(
+      (r) => query.since <= r.occurred_at && r.occurred_at < query.until,
+    ).length;
+    if (inside === 0) {
+      throw new VerificationError(
+        "query",
+        "run has no record inside the query window",
+        entry.run_id,
+      );
+    }
+    const first = records[0];
+    if (query.label !== undefined && first?.seq === 0) {
+      const label = first.extensions?.["sealedrun.proxy"]?.run_label;
+      if (label !== query.label) {
+        throw new VerificationError(
+          "query",
+          "run label differs from the query label",
+          entry.run_id,
+        );
+      }
+    }
+    outside[entry.run_id] = records.length - inside;
+  }
+  return outside;
 }
 
 /** Requires that no `record_id` repeats across the runs of the bundle (SPEC 13.2 step 3). */

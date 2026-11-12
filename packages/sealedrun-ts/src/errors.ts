@@ -6,6 +6,9 @@
  * for programmatic handling. `runId` and `seq` locate the record when the failure belongs to one.
  */
 export class VerificationError extends Error {
+  /** The detail without the check and location prefix of `message`. */
+  public readonly reason: string;
+
   /**
    * @param check - Name of the failed step.
    * @param message - Human-readable detail.
@@ -20,5 +23,6 @@ export class VerificationError extends Error {
   ) {
     super(`${check}:${runId ? ` run=${runId} seq=${seq}` : ""} ${message}`);
     this.name = "VerificationError";
+    this.reason = message;
   }
 }

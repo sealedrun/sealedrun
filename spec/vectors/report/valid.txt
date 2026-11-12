@@ -1,0 +1,47 @@
+SealedRun evidence report
+=========================
+
+Verification
+  Result:               PASSED: every hash, signature and chain link in the bundle was checked
+  Principal:            qJtRVbgIsIjNNo6VuDr6nQ50Wj3rwEAAuR2e385pby8
+  Principal identity:   confirmed: it is one of the principals the verifier was given
+  Manifest signed by:   exporter key and principal key
+  Payload bodies:       included and checked against the records
+
+Bundle
+  File SHA-256:         692ee905d78d97af4cdf6f90326e9fd8af7a519438a042cb47b820598ebaa84d
+  Bundle id:            0192b3c4-5d6e-7f80-9a1b-0000000000b0
+  Created:              2026-09-16T13:00:00.000Z
+  Exported by:          sealedrun-vectors/0.1.0, agent H342ugmg0Ea-GvTpUDeqxqFKsgeirlcywX047EFubuU
+
+What the exporter was asked for
+  No query: the bundle was not exported by a time window.
+
+What the bundle covers
+  Runs:                 1 (1 ended, 0 open)
+  Records:              9
+  First record:         2026-09-16T12:00:01.000Z
+  Last record:          2026-09-16T12:00:09.000Z
+
+Anchors (what an outside witness saw)
+  Anchor records:       1
+  Witness verified:     1 of 1
+  First anchor:         2026-09-16T12:00:07.000Z (rfc3161, https://timestamp.sigstore.dev/api/v1/timestamp)
+  Last anchor:          2026-09-16T12:00:07.000Z (rfc3161, https://timestamp.sigstore.dev/api/v1/timestamp)
+  Not anchored:         2 records after the last verified anchor
+
+Human approvals: 1
+  run 0192b3c4-5d6e-7f80-9a1b-0000000000a0 seq 5 at 2026-09-16T12:00:06.000Z: decision not stated by jane.doe@example.com; a witness saw it 1018027.000 s later
+
+Findings: 0
+
+Runs
+  0192b3c4-5d6e-7f80-9a1b-0000000000a0 label none: 9 records, 2026-09-16T12:00:01.000Z to 2026-09-16T12:00:09.000Z, ended
+
+Limits
+  This report restates what the verifier checked in the bundle. It does not
+  show that the recorder saw every action of the agent, that no run was left
+  out of the export, or that a recorded step was right to take. A principal
+  that is not confirmed means the bundle is consistent, not that it comes from
+  the party you expect. See
+  https://github.com/sealedrun/sealedrun/blob/main/TRUST.md

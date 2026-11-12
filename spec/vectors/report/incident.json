@@ -1,0 +1,97 @@
+{
+  "anchors": {
+    "count": 1,
+    "first": {
+      "at": "2026-09-16T12:00:05.000Z",
+      "type": "other",
+      "witness": "https://witness.example"
+    },
+    "last": {
+      "at": "2026-09-16T12:00:05.000Z",
+      "type": "other",
+      "witness": "https://witness.example"
+    },
+    "unanchored_records": 10,
+    "witness_verified": 0
+  },
+  "approvals": [
+    {
+      "actor": "jane.doe@example.com",
+      "anchor_lag_ms": null,
+      "at": "2026-09-16T12:00:03.000Z",
+      "decision": "granted",
+      "run_id": "0192b3c4-5d6e-7f80-9a1b-0000000000f1",
+      "seq": 2
+    }
+  ],
+  "bundle": {
+    "bundle_id": "0192b3c4-5d6e-7f80-9a1b-0000000000b2",
+    "created_at": "2026-09-16T13:00:00.000Z",
+    "exporter_agent_id": "NPr0SAMv-L7Pdgv2GhNDNqi-UPsfW-Ntd4K4j1C8CKw",
+    "payloads": "included",
+    "principal_countersigned": true,
+    "principal_id": "RL4kl7Eo-pUoUstDQsoKqvchhSBdrnPsotWz7lxUAig",
+    "principal_trusted": true,
+    "software": "sealedrun-vectors/0.1.0"
+  },
+  "coverage": {
+    "first_record_at": "2026-09-16T12:00:01.000Z",
+    "last_record_at": "2026-09-16T12:10:03.000Z",
+    "records": 11,
+    "records_outside_window": 3,
+    "runs": 2,
+    "runs_complete": 1
+  },
+  "file_sha256": "95cf5edc2f879b1343ff870455d161586040eca0ed4eb801bbd06a9755ab24e2",
+  "findings": [
+    {
+      "check": "scope.target",
+      "reason": "target shell/exec is not in allowed_targets",
+      "run_id": "0192b3c4-5d6e-7f80-9a1b-0000000000f1",
+      "seq": 5
+    },
+    {
+      "check": "approval.missing",
+      "reason": "step required approval but no human_approval for its request precedes it",
+      "run_id": "0192b3c4-5d6e-7f80-9a1b-0000000000f1",
+      "seq": 6
+    }
+  ],
+  "limits": "This report restates what the verifier checked in the bundle. It does not show that the recorder saw every action of the agent, that no run was left out of the export, or that a recorded step was right to take. A principal that is not confirmed means the bundle is consistent, not that it comes from the party you expect. See https://github.com/sealedrun/sealedrun/blob/main/TRUST.md",
+  "query": {
+    "label": "billing-agent",
+    "note": "INC-42, exported by on-call after the 98000 transfer",
+    "since": "2026-09-16T12:00:04.000Z",
+    "until": "2026-09-16T12:20:00.000Z"
+  },
+  "report_version": 1,
+  "result": "passed",
+  "runs": [
+    {
+      "anchors": 1,
+      "complete": true,
+      "first_record_at": "2026-09-16T12:00:01.000Z",
+      "label": "billing-agent",
+      "last_record_at": "2026-09-16T12:00:08.000Z",
+      "outside_window": 3,
+      "parent_unresolved": false,
+      "records": 8,
+      "run_id": "0192b3c4-5d6e-7f80-9a1b-0000000000f1",
+      "unanchored_records": 7,
+      "witness_verified": 0
+    },
+    {
+      "anchors": 0,
+      "complete": false,
+      "first_record_at": "2026-09-16T12:10:01.000Z",
+      "label": "billing-agent",
+      "last_record_at": "2026-09-16T12:10:03.000Z",
+      "outside_window": 0,
+      "parent_unresolved": false,
+      "records": 3,
+      "run_id": "0192b3c4-5d6e-7f80-9a1b-0000000000f2",
+      "unanchored_records": 3,
+      "witness_verified": 0
+    }
+  ]
+}

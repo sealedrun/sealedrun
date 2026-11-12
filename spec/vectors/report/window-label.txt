@@ -1,0 +1,50 @@
+SealedRun evidence report
+=========================
+
+Verification
+  Result:               PASSED: every hash, signature and chain link in the bundle was checked
+  Principal:            RL4kl7Eo-pUoUstDQsoKqvchhSBdrnPsotWz7lxUAig
+  Principal identity:   NOT CONFIRMED: the verifier was given no trusted principal to compare with
+  Manifest signed by:   exporter key and principal key
+  Payload bodies:       included and checked against the records
+
+Bundle
+  File SHA-256:         543d37eeae3c87217ae1a687320c8c65f0632845c6a9e5e1241792a97eb09a53
+  Bundle id:            0192b3c4-5d6e-7f80-9a1b-0000000000b1
+  Created:              2026-09-16T13:00:00.000Z
+  Exported by:          sealedrun-vectors/0.1.0, agent NPr0SAMv-L7Pdgv2GhNDNqi-UPsfW-Ntd4K4j1C8CKw
+
+What the exporter was asked for
+  Window:               2026-09-16T12:00:03.000Z to 2026-09-16T12:10:02.000Z (end not included)
+  Run label:            billing-agent
+  Exporter's note:      incident 2026-09-16, exported by on-call
+
+What the bundle covers
+  Runs:                 2 (1 ended, 1 open)
+  Records:              6
+  First record:         2026-09-16T12:00:01.000Z
+  Last record:          2026-09-16T12:10:03.000Z
+  Outside the window:   4 records
+
+Anchors (what an outside witness saw)
+  Anchor records:       0
+  Witness verified:     0 of 0
+  First anchor:         none
+  Last anchor:          none
+  Not anchored:         6 records after the last verified anchor
+
+Human approvals: 0
+
+Findings: 0
+
+Runs
+  0192b3c4-5d6e-7f80-9a1b-0000000000e1 label billing-agent: 3 records, 2026-09-16T12:00:01.000Z to 2026-09-16T12:00:03.000Z, ended
+  0192b3c4-5d6e-7f80-9a1b-0000000000e2 label billing-agent: 3 records, 2026-09-16T12:10:01.000Z to 2026-09-16T12:10:03.000Z, open
+
+Limits
+  This report restates what the verifier checked in the bundle. It does not
+  show that the recorder saw every action of the agent, that no run was left
+  out of the export, or that a recorded step was right to take. A principal
+  that is not confirmed means the bundle is consistent, not that it comes from
+  the party you expect. See
+  https://github.com/sealedrun/sealedrun/blob/main/TRUST.md

@@ -15,7 +15,10 @@ agent code never hold them, so an agent cannot write or rewrite its own record. 
 MCP wrapper only report steps to the recorder; they carry no key. [TRUST.md](TRUST.md) states the
 deployment this depends on.
 
-Status: early development. 0.9.0 narrows what can be rewritten unseen: the chain head is
+Status: early development. 0.10.0 is for the day of an incident: one request exports every run
+in a time window as a single bundle, `python -m sealedrun --report` prints a one-page evidence
+report (also a tab in the Inspector), and [docs/INCIDENT-RESPONSE.md](docs/INCIDENT-RESPONSE.md)
+gives the four steps with their commands. 0.9.0 narrows what can be rewritten unseen: the chain head is
 anchored right after every human approval, and the verifier reports the records no witness has
 seen yet and how soon each approval was covered. 0.8.1 records the name and version each MCP server reports about
 itself (`sealedrun.mcp.server_info`) and adds an AIUC-1 evidence map and a Langfuse example.
@@ -159,7 +162,7 @@ print(report.complete, report.labels_sent_to_cloud)
 ```bash
 pip install sealedrun              # Python library: write, read and verify records and bundles
 npm install @sealedrun/core        # TypeScript verifier, runs in Node.js and in the browser
-docker run --rm -p 127.0.0.1:8080:8080 ghcr.io/sealedrun/sealedrun:0.9.0   # recorder + Inspector
+docker run --rm -p 127.0.0.1:8080:8080 ghcr.io/sealedrun/sealedrun:0.10.0   # recorder + Inspector
 ```
 
 Releases are published from GitHub Actions through PyPI and npm trusted publishing; both registries
@@ -225,6 +228,28 @@ OPENAI_BASE_URL=http://127.0.0.1:8080/v1 OPENAI_API_KEY=change-me python agent.p
 curl -s -H "Authorization: Bearer change-me" http://127.0.0.1:8080/api/runs | jq '.[0].run_id'
 curl -s -X POST -H "Authorization: Bearer change-me" \
   "http://127.0.0.1:8080/api/runs/<run_id>/export?end=true" -o run.zip     # end=true closes the run first
+```
+
+To hand over everything an agent did in a period, export by time window instead of run by
+run. The archive holds every run with a record in the window, whole, and its signed manifest
+states the window, the run label and your note, so the reader sees what was asked for:
+
+```bash
+curl -s -X POST -H "Authorization: Bearer change-me" -o evidence.zip \
+  "http://127.0.0.1:8080/api/export?since=2026-11-11T06:00:00Z&until=2026-11-11T12:00:00Z&label=billing-agent&note=INC-42"
+uv run python -m sealedrun evidence.zip      # prints the window and, per run, the records outside it
+```
+
+`label` and `note` are optional; `payloads=omit` leaves the bodies out as for a single run.
+
+For a reader who is not an engineer, print the one-page report of a bundle: the verification
+result, what was asked for, the period and the number of runs and records, what an outside
+witness saw, every human approval with who gave it, the findings, and the SHA-256 of the file.
+`--json` gives the same as data; `@sealedrun/core` builds the identical text
+(`evidenceReport`, `renderReport`).
+
+```bash
+uv run python -m sealedrun --report evidence.zip <trusted principal id> > report.txt
 ```
 
 The upstreams file is read once at start; edit it, then restart the recorder. A call the proxy
@@ -732,6 +757,9 @@ semantic conventions (export mapping), EU AI Act Articles 12, 19 and 26 (logging
 
 Compliance: [docs/aiuc-1.md](docs/aiuc-1.md) lists which part of a bundle is evidence for which
 AIUC-1 control, and how to raise alerts, feed a SIEM and upload to Vanta with the tools you run.
+[docs/INCIDENT-RESPONSE.md](docs/INCIDENT-RESPONSE.md) is the order of work when an agent or its
+host is compromised: cut it off, export the period, verify elsewhere, write the one-page report
+(with the DORA and NIS2 notice periods it is usually needed for).
 
 ## License
 

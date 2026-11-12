@@ -1,5 +1,8 @@
 import {
   anchorCoverage,
+  evidenceReport,
+  failureReport,
+  renderReport,
   type SealedRunRecord,
   type Bundle,
   type BundleReport,
@@ -22,6 +25,14 @@ export interface LocalVerification {
   bundle: Bundle | null;
   report: BundleReport | null;
   failure: { check: string; runId?: string; seq?: number; message: string } | null;
+  /** The one-page evidence report as text, the same text `python -m sealedrun --report` prints. */
+  reportText: string;
+}
+
+/** SHA-256 of the file in hex, computed by WebCrypto so a large file does not freeze the tab. */
+async function fileDigest(data: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", data as Uint8Array<ArrayBuffer>);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 /** Splits the trusted-principals text field into ids. Whitespace and commas both separate. */
@@ -43,19 +54,25 @@ export async function verifyLocally(
   trustedPrincipals: string[] = [],
 ): Promise<LocalVerification> {
   let bundle: Bundle | null = null;
+  const sha256 = await fileDigest(data);
   try {
     bundle = readBundle(data);
     const report = await verifyBundleAsync(
       bundle,
       trustedPrincipals.length > 0 ? { trustedPrincipals } : {},
     );
-    return { fileName, sizeBytes: data.length, bundle, report, failure: null };
+    const reportText = renderReport(evidenceReport(bundle, report, sha256));
+    return { fileName, sizeBytes: data.length, bundle, report, failure: null, reportText };
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const failed =
+      error instanceof VerificationError ? error : new VerificationError("malformed", message);
     const failure =
       error instanceof VerificationError
         ? { check: error.check, message: error.message, runId: error.runId, seq: error.seq }
-        : { check: "malformed", message: error instanceof Error ? error.message : String(error) };
-    return { fileName, sizeBytes: data.length, bundle, report: null, failure };
+        : { check: "malformed", message };
+    const reportText = renderReport(failureReport(failed, sha256));
+    return { fileName, sizeBytes: data.length, bundle, report: null, failure, reportText };
   }
 }
 

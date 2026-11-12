@@ -1,0 +1,67 @@
+{
+  "anchors": {
+    "count": 0,
+    "first": null,
+    "last": null,
+    "unanchored_records": 6,
+    "witness_verified": 0
+  },
+  "approvals": [],
+  "bundle": {
+    "bundle_id": "0192b3c4-5d6e-7f80-9a1b-0000000000b1",
+    "created_at": "2026-09-16T13:00:00.000Z",
+    "exporter_agent_id": "NPr0SAMv-L7Pdgv2GhNDNqi-UPsfW-Ntd4K4j1C8CKw",
+    "payloads": "included",
+    "principal_countersigned": true,
+    "principal_id": "RL4kl7Eo-pUoUstDQsoKqvchhSBdrnPsotWz7lxUAig",
+    "principal_trusted": false,
+    "software": "sealedrun-vectors/0.1.0"
+  },
+  "coverage": {
+    "first_record_at": "2026-09-16T12:00:01.000Z",
+    "last_record_at": "2026-09-16T12:10:03.000Z",
+    "records": 6,
+    "records_outside_window": 4,
+    "runs": 2,
+    "runs_complete": 1
+  },
+  "file_sha256": "543d37eeae3c87217ae1a687320c8c65f0632845c6a9e5e1241792a97eb09a53",
+  "findings": [],
+  "limits": "This report restates what the verifier checked in the bundle. It does not show that the recorder saw every action of the agent, that no run was left out of the export, or that a recorded step was right to take. A principal that is not confirmed means the bundle is consistent, not that it comes from the party you expect. See https://github.com/sealedrun/sealedrun/blob/main/TRUST.md",
+  "query": {
+    "label": "billing-agent",
+    "note": "incident 2026-09-16, exported by on-call",
+    "since": "2026-09-16T12:00:03.000Z",
+    "until": "2026-09-16T12:10:02.000Z"
+  },
+  "report_version": 1,
+  "result": "passed",
+  "runs": [
+    {
+      "anchors": 0,
+      "complete": true,
+      "first_record_at": "2026-09-16T12:00:01.000Z",
+      "label": "billing-agent",
+      "last_record_at": "2026-09-16T12:00:03.000Z",
+      "outside_window": 2,
+      "parent_unresolved": false,
+      "records": 3,
+      "run_id": "0192b3c4-5d6e-7f80-9a1b-0000000000e1",
+      "unanchored_records": 3,
+      "witness_verified": 0
+    },
+    {
+      "anchors": 0,
+      "complete": false,
+      "first_record_at": "2026-09-16T12:10:01.000Z",
+      "label": "billing-agent",
+      "last_record_at": "2026-09-16T12:10:03.000Z",
+      "outside_window": 2,
+      "parent_unresolved": false,
+      "records": 3,
+      "run_id": "0192b3c4-5d6e-7f80-9a1b-0000000000e2",
+      "unanchored_records": 3,
+      "witness_verified": 0
+    }
+  ]
+}

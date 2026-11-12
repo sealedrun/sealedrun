@@ -42,7 +42,7 @@ import { ErrorBoundary } from "@/components/error-boundary";
 import { RunFeed } from "./run-feed";
 import { RunList } from "./run-list";
 import { ThemeToggle } from "./theme-toggle";
-import { Verdict } from "./verdict";
+import { ReportText, Verdict } from "./verdict";
 
 /** The two tabs: a bundle file checked in the browser, or runs stored in the recorder. */
 type View = "bundle" | "recorder";
@@ -84,6 +84,7 @@ export function Inspector() {
   const setView = useCallback((tab: View) => setQuery({ tab }), [setQuery]);
   const [local, setLocal] = useState<LocalVerification | null>(null);
   const [localRun, setLocalRun] = useState<string | null>(null);
+  const [bundleTab, setBundleTab] = useState<"steps" | "report">("steps");
   const [witness, setWitness] = useState<Map<string, WitnessVerdict> | null>(null);
   const [lastFile, setLastFile] = useState<File | null>(null);
   const [recorder, setRecorder] = useState<Recorder>({ state: "loading" });
@@ -348,14 +349,23 @@ export function Inspector() {
                   )}
                 </div>
               </div>
-              {local.bundle && local.bundle.runs.size > 1 && (
+              <nav className="flex gap-1 border-b border-line" aria-label="Bundle view">
+                <Tab active={bundleTab === "steps"} onClick={() => setBundleTab("steps")}>
+                  Steps
+                </Tab>
+                <Tab active={bundleTab === "report"} onClick={() => setBundleTab("report")}>
+                  Report
+                </Tab>
+              </nav>
+              {bundleTab === "report" && <ReportText text={local.reportText} />}
+              {bundleTab === "steps" && local.bundle && local.bundle.runs.size > 1 && (
                 <RunPicker
                   runs={[...local.bundle.runs.keys()]}
                   selected={localRun}
                   onSelect={setLocalRun}
                 />
               )}
-              {localRecords.length > 0 && (
+              {bundleTab === "steps" && localRecords.length > 0 && (
                 <section>
                   <h2 className="mb-4 text-xl font-semibold tracking-tight">What the agent did</h2>
                   <ErrorBoundary title="The steps could not be shown">

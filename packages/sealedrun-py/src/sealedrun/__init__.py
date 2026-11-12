@@ -12,6 +12,7 @@ from sealedrun.errors import SealedRunError, VerificationError
 from sealedrun.hashing import b64url_decode, b64url_encode, object_hash, payload_digest, zero_hash
 from sealedrun.keys import PROFILES, KeySet, PrivateKeySet
 from sealedrun.records import RunWriter, payload_ref
+from sealedrun.report import evidence_report, failure_report, file_sha256, render_report
 from sealedrun.scope import Finding, Scope, scope_within
 from sealedrun.verify import (
     ApprovalAnchor,
@@ -21,7 +22,7 @@ from sealedrun.verify import (
     verify_run,
 )
 
-__version__ = "0.9.0"
+__version__ = "0.10.0"
 
 __all__ = [
     "PROFILES",
@@ -45,12 +46,16 @@ __all__ = [
     "check_parent_links",
     "covers",
     "create_delegation",
+    "evidence_report",
+    "failure_report",
+    "file_sha256",
     "object_hash",
     "parent_of",
     "payload_digest",
     "payload_ref",
     "read_bundle",
     "receipt_for",
+    "render_report",
     "scope_within",
     "verify_bundle",
     "verify_delegation",

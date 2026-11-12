@@ -353,3 +353,39 @@ describe("coverage", () => {
     expect(formatLag(1_018_027_000)).toBe("12 days");
   });
 });
+
+describe("evidence report text", () => {
+  const vectors = join(import.meta.dirname, "../../../../spec/vectors");
+  const file = (...path: string[]) => new Uint8Array(readFileSync(join(vectors, ...path)));
+
+  test("is the text the command line prints for the same bundle", async () => {
+    const cases = JSON.parse(readFileSync(join(vectors, "report", "cases.json"), "utf8")) as {
+      name: string;
+      bundle: string;
+      trusted_principals?: string[];
+    }[];
+    for (const c of cases) {
+      const result = await verifyLocally(
+        c.name,
+        file("report", c.bundle),
+        c.trusted_principals ?? [],
+      );
+      expect(result.reportText).toBe(
+        readFileSync(join(vectors, "report", `${c.name}.txt`), "utf8"),
+      );
+    }
+  });
+
+  test("names the failed check for a bundle that does not verify", async () => {
+    const result = await verifyLocally("x.zip", file("bundle", "tampered-record.zip"));
+    expect(result.report).toBeNull();
+    expect(result.reportText).toContain("FAILED at check bundle");
+    expect(result.reportText).toContain("File SHA-256");
+  });
+
+  test("names a file that is not a bundle as failed too", async () => {
+    const result = await verifyLocally("x.zip", new Uint8Array([1, 2, 3]));
+    expect(result.failure?.check).toBeDefined();
+    expect(result.reportText).toContain("FAILED at check");
+  });
+});

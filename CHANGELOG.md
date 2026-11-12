@@ -5,6 +5,43 @@ follows Semantic Versioning once 1.0.0 is reached.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-11
+
+Evidence for an incident: one request exports everything an agent did in a time window, and
+one command turns the archive into a page a lawyer or an insurer can read.
+
+### Added
+
+- Recorder: `POST /api/export?since=…&until=…` exports every run with a record in a time
+  window as one bundle, optionally limited to one run label (`label`) and with a free-text
+  `note`. Runs are exported whole and open runs are anchored first.
+- Manifest: optional `query` block `{since, until, label?, note?}` (SPEC 13.1), signed with the
+  manifest. Verifiers (Python and TypeScript) report it with the records of each run outside
+  the window, and fail with check `query` when a run does not match it. Verifiers before this
+  version refuse a bundle that carries the block; bundles without it are unchanged.
+- `python -m sealedrun --report bundle.zip` prints a one-page evidence report (`--json` for
+  data): result, the query, period, runs and records, anchors and what no witness has seen,
+  human approvals with their actor, findings, manifest signers and the SHA-256 of the file.
+  A bundle that fails gives the failing check and repeats nothing from the bundle. Python:
+  `evidence_report`, `failure_report`, `render_report`, `file_sha256`; TypeScript:
+  `evidenceReport`, `failureReport`, `renderReport`, `fileSha256`, with identical text.
+- Inspector: a "Report" tab shows that report for the opened bundle with "Copy as text", and
+  the verdict names the exported window, run label and note of a bundle exported by window.
+- `VerificationError.reason`: the message without the check and location prefix (both
+  languages).
+- `spec/vectors/report/`: four bundles with the report data and text every implementation
+  must produce.
+- `docs/INCIDENT-RESPONSE.md`: what to do when an agent or its host is compromised, four steps
+  with their commands, the DORA and NIS2 notice periods, and what the archive does not prove.
+- `spec/vectors/bundle/window*.zip`: five bundles exported by window, two valid and three that
+  must fail.
+
+### Fixed
+
+- `docker-compose.yml` passed empty anchor URLs when they were not set in `.env`, so the
+  recorder refused to start with anchoring on (the default). The compose file now carries
+  the same defaults as the recorder and passes `SEALEDRUN_ANCHORS` through.
+
 ## [0.9.0] - 2026-11-10
 
 The records after the last anchor are no longer a blind spot: approvals are anchored at once and

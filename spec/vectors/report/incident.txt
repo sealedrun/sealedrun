@@ -1,0 +1,53 @@
+SealedRun evidence report
+=========================
+
+Verification
+  Result:               PASSED: every hash, signature and chain link in the bundle was checked
+  Principal:            RL4kl7Eo-pUoUstDQsoKqvchhSBdrnPsotWz7lxUAig
+  Principal identity:   confirmed: it is one of the principals the verifier was given
+  Manifest signed by:   exporter key and principal key
+  Payload bodies:       included and checked against the records
+
+Bundle
+  File SHA-256:         95cf5edc2f879b1343ff870455d161586040eca0ed4eb801bbd06a9755ab24e2
+  Bundle id:            0192b3c4-5d6e-7f80-9a1b-0000000000b2
+  Created:              2026-09-16T13:00:00.000Z
+  Exported by:          sealedrun-vectors/0.1.0, agent NPr0SAMv-L7Pdgv2GhNDNqi-UPsfW-Ntd4K4j1C8CKw
+
+What the exporter was asked for
+  Window:               2026-09-16T12:00:04.000Z to 2026-09-16T12:20:00.000Z (end not included)
+  Run label:            billing-agent
+  Exporter's note:      INC-42, exported by on-call after the 98000 transfer
+
+What the bundle covers
+  Runs:                 2 (1 ended, 1 open)
+  Records:              11
+  First record:         2026-09-16T12:00:01.000Z
+  Last record:          2026-09-16T12:10:03.000Z
+  Outside the window:   3 records
+
+Anchors (what an outside witness saw)
+  Anchor records:       1
+  Witness verified:     0 of 1
+  First anchor:         2026-09-16T12:00:05.000Z (other, https://witness.example)
+  Last anchor:          2026-09-16T12:00:05.000Z (other, https://witness.example)
+  Not anchored:         10 records after the last verified anchor
+
+Human approvals: 1
+  run 0192b3c4-5d6e-7f80-9a1b-0000000000f1 seq 2 at 2026-09-16T12:00:03.000Z: granted by jane.doe@example.com; no verified anchor covers it
+
+Findings: 2
+  run 0192b3c4-5d6e-7f80-9a1b-0000000000f1 seq 5 scope.target: target shell/exec is not in allowed_targets
+  run 0192b3c4-5d6e-7f80-9a1b-0000000000f1 seq 6 approval.missing: step required approval but no human_approval for its request precedes it
+
+Runs
+  0192b3c4-5d6e-7f80-9a1b-0000000000f1 label billing-agent: 8 records, 2026-09-16T12:00:01.000Z to 2026-09-16T12:00:08.000Z, ended
+  0192b3c4-5d6e-7f80-9a1b-0000000000f2 label billing-agent: 3 records, 2026-09-16T12:10:01.000Z to 2026-09-16T12:10:03.000Z, open
+
+Limits
+  This report restates what the verifier checked in the bundle. It does not
+  show that the recorder saw every action of the agent, that no run was left
+  out of the export, or that a recorded step was right to take. A principal
+  that is not confirmed means the bundle is consistent, not that it comes from
+  the party you expect. See
+  https://github.com/sealedrun/sealedrun/blob/main/TRUST.md
