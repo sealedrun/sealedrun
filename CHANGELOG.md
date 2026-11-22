@@ -5,6 +5,10 @@ follows Semantic Versioning once 1.0.0 is reached.
 
 ## [Unreleased]
 
+### Changed
+
+- Dependencies: FastAPI 0.165 (floor `>=0.162.2`), SQLAlchemy 2.1.9, pydantic-settings 2.16.3, ruff 0.17.6, types-jsonschema 4.26.0.20261006; Next.js 16.4.6, React and React DOM 19.3.1, eslint-config-next 16.4.6, eslint-plugin-jsdoc 65.5.2, Prettier 3.10.1; base images node:22-alpine, python:3.12-slim-bookworm and postgres:17-alpine at current digests; GitHub Actions setup-uv 10.3.3, pnpm/action-setup 6.1.1, docker/login-action 4.8.0, gh-action-pypi-publish 1.14.3. Closes Dependabot #80-#92, #98, #99, #101, #102.
+
 ## [0.10.0] - 2026-11-11
 
 Evidence for an incident: one request exports everything an agent did in a time window, and
